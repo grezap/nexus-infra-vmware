@@ -1,0 +1,13 @@
+---
+# nexus-gateway — Ansible playbook (local, run by Packer ansible-local provisioner)
+- name: Configure nexus-gateway
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+
+  vars:
+    target_user: "{{ target_user | default('nexusadmin') }}"
+
+  roles:
+    - nexus_gateway

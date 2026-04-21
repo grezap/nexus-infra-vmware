@@ -1,0 +1,84 @@
+name: packer-validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  packer:
+    name: Packer validate (${{ matrix.template }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        template:
+          - nexus-gateway
+          # Other templates are stubs until Phase 0.B.2+; enable here when filled in.
+          # - deb13
+          # - ubuntu24
+          # - ws2025-core
+          # - ws2025-desktop
+          # - win11ent
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-packer@v3
+        with:
+          version: "1.11.2"
+
+      - name: packer init
+        working-directory: packer/${{ matrix.template }}
+        run: packer init .
+
+      - name: packer fmt -check
+        working-directory: packer/${{ matrix.template }}
+        run: packer fmt -check -recursive .
+
+      - name: packer validate
+        working-directory: packer/${{ matrix.template }}
+        # -syntax-only skips credential / network probe — CI has no VMware host
+        run: packer validate -syntax-only .
+
+  terraform:
+    name: Terraform fmt + validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+      - name: terraform fmt -check
+        run: terraform -chdir=terraform/gateway fmt -check -recursive
+      - name: terraform init (no backend)
+        run: terraform -chdir=terraform/gateway init -backend=false
+      - name: terraform validate
+        run: terraform -chdir=terraform/gateway validate
+
+  ansible-lint:
+    name: ansible-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ansible-lint ansible
+      - run: ansible-lint packer/nexus-gateway/ansible/
+
+  shell-lint:
+    name: ShellCheck + PSScriptAnalyzer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: ./scripts
+          severity: warning
+          ignore_names: '*.ps1'

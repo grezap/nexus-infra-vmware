@@ -1,0 +1,45 @@
+# Packer
+packer_cache/
+output-*/
+*.vmx.lck
+*.vmdk.lck
+*.vmem
+*.vmss
+*.nvram
+*.log
+crash.log
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+terraform.tfstate.*.backup
+*.tfvars
+!example.tfvars
+
+# Ansible
+*.retry
+.vault_pass
+
+# Secrets
+*.pem
+*.key
+!files/**/*.pub
+.env
+.env.local
+
+# VM artifacts (built images)
+artifacts/
+*.iso
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
