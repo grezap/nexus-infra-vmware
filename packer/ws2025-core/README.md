@@ -17,3 +17,25 @@ Automated install via `Autounattend.xml` delivered on a secondary floppy/ISO. Po
 Ansible role: `windows_base`. Shared with `ws2025-desktop` and `win11ent` via `packer/_shared/ansible/roles/windows_base/`.
 
 Exit gate: fresh clone can be domain-joined to `nexus.local` and pulls its node_exporter scrape into Prometheus.
+
+## Licensing — `product_source` contract
+
+See [`docs/licensing.md`](../../docs/licensing.md) and
+[ADR-0144](https://github.com/grezap/nexus-platform-plan/blob/main/docs/adr/ADR-0144-windows-licensing.md)
+for the canonical story. Summary for this template:
+
+| Variable | Default | `msdn` | `evaluation` |
+|---|---|---|---|
+| `product_source` | `"evaluation"` | — | — |
+| `edition` (derived) | — | `ServerStandard` | `ServerStandardEval` |
+| `product_key` (derived) | — | Vault `nexus/windows/product-keys/ws2025-core` → `key` (or bootstrap JSON pre-Phase-0.D) | `""` |
+
+Build:
+
+```bash
+packer build packer/ws2025-core                          # public / cloner
+packer build -var product_source=msdn packer/ws2025-core # owner with MSDN + Vault
+```
+
+**Never commit `Autounattend.xml`** — only `Autounattend.xml.tpl`. The
+rendered form contains `<ProductKey>` inline and is gitignored at every path.

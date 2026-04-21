@@ -6,6 +6,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-04-22 — "Windows licensing canon + secret-leak defenses"
+
+Implements the nexus-infra-vmware side of
+[nexus-platform-plan v0.1.3](https://github.com/grezap/nexus-platform-plan/releases/tag/v0.1.3)
+and [ADR-0144](https://github.com/grezap/nexus-platform-plan/blob/main/docs/adr/ADR-0144-windows-licensing.md).
+
+### Added
+
+- `docs/licensing.md` — implementation-side licensing doc: `product_source`
+  variable contract (`msdn` | `evaluation`), Vault layout at
+  `nexus/windows/product-keys/{ws2025-core,ws2025-desktop,win11ent}`,
+  pre-Phase-0.D bootstrap via NTFS-ACL'd `%USERPROFILE%\.nexus\secrets\windows-keys.json`,
+  5-layer defense-in-depth, operational playbook.
+- `.gitleaks.toml` — custom `microsoft-product-key` rule matching the
+  5x5 alphanumeric Windows key format, with placeholder/`.tpl`/docs allow-list.
+- `scripts/check-no-product-key.ps1` — pwsh pre-commit + CI guard that fails
+  on any Microsoft product-key pattern outside allow-listed paths.
+- `.github/workflows/packer-validate.yml` — two new jobs: `gitleaks` (full
+  history scan on PRs) and `product-key-guard` (pwsh scan of every tracked
+  file against the MSFT key regex).
+- Per-template `## Licensing — product_source contract` sections in
+  `packer/ws2025-core/README.md`, `packer/ws2025-desktop/README.md`,
+  `packer/win11ent/README.md` documenting default/`msdn`/`evaluation`
+  behaviour, derived `edition`, and Vault paths.
+
+### Changed
+
+- `.gitignore` — hardened for key-bearing artifacts: `**/Autounattend.xml`
+  blocked at every path (except `*.tpl`), `*.pkrvars.hcl` blocked
+  (except `example.pkrvars.hcl`), plus `windows-keys.json`, `.nexus/`,
+  `secrets/`.
+
+### Canon references
+
+- [ADR-0144 — Windows licensing posture](https://github.com/grezap/nexus-platform-plan/blob/main/docs/adr/ADR-0144-windows-licensing.md)
+- [nexus-platform-plan docs/infra/licensing.md](https://github.com/grezap/nexus-platform-plan/blob/main/docs/infra/licensing.md)
+
+### Deferred
+
+- Full Packer template bodies for `ws2025-core`, `ws2025-desktop`, `win11ent`
+  (the licensing wiring specified in this release will be realized when
+  those templates are written in Phase 0.B.4–0.B.6).
+- Vault policy + AppRole for `packer-builder` (Phase 0.D).
+
 ## [0.1.0] — 2026-04-21 — "Phase 0.B scaffold + nexus-gateway build path"
 
 Initial commit. Implements the scaffold for NexusPlatform infrastructure-as-code on VMware Workstation Pro and the full build/deploy path for **VM #0 `nexus-gateway`** (lab edge router).

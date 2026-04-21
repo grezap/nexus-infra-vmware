@@ -82,3 +82,28 @@ jobs:
           scandir: ./scripts
           severity: warning
           ignore_names: '*.ps1'
+
+  gitleaks:
+    name: gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so gitleaks can scan all commits on PRs
+      - name: gitleaks detect
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_CONFIG: ${{ github.workspace }}/.gitleaks.toml
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          GITLEAKS_ENABLE_SUMMARY: "true"
+
+  product-key-guard:
+    name: product-key pattern guard (pwsh)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan every tracked file
+        shell: pwsh
+        run: |
+          $tracked = git ls-files
+          & ./scripts/check-no-product-key.ps1 -Paths $tracked
