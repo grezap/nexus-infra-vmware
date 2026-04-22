@@ -43,7 +43,7 @@ nexus-cli infrastructure ping-gateway
 # Expected: nexus-gateway alive at 192.168.70.1; egress reachable via 1.1.1.1
 ```
 
-Full walkthrough: [`docs/nexus-gateway.md`](./docs/nexus-gateway.md).
+Full walkthrough: [`docs/nexus-gateway.md`](./docs/nexus-gateway.md). Cross-cutting operator commands: [`docs/handbook.md`](./docs/handbook.md).
 
 ## Repo layout
 
@@ -67,7 +67,9 @@ terraform/
 
 docs/
   architecture.md            Design decisions + diagrams
-  nexus-gateway.md           Gateway deep-dive + runbook
+  nexus-gateway.md           Gateway deep-dive + runbook (per-VM)
+  handbook.md                Operator handbook (cross-cutting command reference)
+  licensing.md               Windows licensing canon
 
 scripts/                     Host helpers (invoked from Makefile)
 

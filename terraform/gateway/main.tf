@@ -4,9 +4,21 @@
  * Instantiates the Packer-built nexus-gateway template as the VM #0 of the
  * NexusPlatform fleet. Three NICs mapped to: bridged, VMnet11, VMnet10.
  *
- * Provider: elsudano/vmware-desktop (VMware Workstation/Fusion REST API).
- * Fallback: if the REST daemon isn't running on the host, use vmrun via
- * null_resource. See README.md § "vmrun fallback".
+ * Lifecycle driver: `vmrun` CLI (ships with VMware Workstation).
+ *
+ * Historical note: Phase 0.B.1 originally tried the elsudano/vmworkstation
+ * Terraform provider (v2.0.1). It has two blocker bugs against vmrest 17.6.x:
+ *   1. `vmworkstation_virtual_machine` ignores the `path` attribute — it
+ *      always clones into `%USERPROFILE%\Documents\Virtual Machines\<name>`,
+ *      then returns that path, which fails Terraform's post-apply consistency
+ *      check when you asked for a different destination.
+ *   2. The SDK's clone-then-reconstruct-NIC sequence sends `vmnet8` alongside
+ *      `connectionType=nat`, which vmrest rejects as "Redundant parameter"
+ *      (upstream issue elsudano/terraform-provider-vmworkstation#28).
+ * Rather than pin an older/buggier v1.x provider, we drive vmrun directly via
+ * `null_resource` — gives us full control of the destination path and avoids
+ * the vmrest PUT bugs entirely. vmrest is still running so future `nexus-cli`
+ * introspection can query VM state by path.
  *
  * Usage:
  *   terraform init
@@ -16,10 +28,6 @@
 terraform {
   required_version = ">= 1.9.0"
   required_providers {
-    vmworkstation = {
-      source  = "elsudano/vmworkstation"
-      version = ">= 2.0.0"
-    }
     null = {
       source  = "hashicorp/null"
       version = ">= 3.2.0"
@@ -31,85 +39,97 @@ terraform {
   }
 }
 
-provider "vmworkstation" {
-  # Schema notes for elsudano/vmworkstation v2.0+ (breaking changes from v1.x):
-  #   * inputs: username + endpoint (was: user + url)
-  #   * debug:  string "NONE"|"INFO"|"ERROR"|"DEBUG" (was: bool)
-  #   * resource type: vmworkstation_virtual_machine (was: vmworkstation_vm).
-  #     NB: the v2.0.1 provider example file says `vmworkstation_resource_vm`
-  #     — that's a doc bug. Authoritative name from provider source:
-  #       resource_vm.go  →  resp.TypeName = req.ProviderTypeName + "_virtual_machine"
-  # Kept the Terraform variable names unchanged for continuity with
-  # example.tfvars contracts.
-  username = var.vmware_workstation_user
-  password = var.vmware_workstation_password
-  endpoint = var.vmware_workstation_api_url
-  https    = false
-  debug    = "NONE"
+locals {
+  vmrun         = "C:/Program Files (x86)/VMware/VMware Workstation/vmrun.exe"
+  template_vmx  = var.template_vmx_path
+  target_vmx    = "${var.vm_output_dir}/nexus-gateway.vmx"
+  scripts_dir   = abspath("${path.module}/../../scripts")
 }
 
-# ─── The VM itself ────────────────────────────────────────────────────────
-resource "vmworkstation_virtual_machine" "nexus_gateway" {
-  sourceid     = var.template_id
-  denomination = "nexus-gateway"
-  description  = "NexusPlatform lab edge router — VM #0. nftables NAT · dnsmasq DHCP+DNS · chrony NTP."
-  # v2.0+ expects a full .vmx file path, not a directory.
-  path       = "${var.vm_output_dir}/nexus-gateway.vmx"
-  processors = 1
-  memory     = 512
-  state      = "off" # start powered off; the null_resource.power_on step brings it up after NIC mapping
-}
-
-# ─── NIC configuration — vmrun/vmx-edit fallback ──────────────────────────
-# The vmworkstation provider does not expose per-NIC network type/MAC as of
-# v1.2.0, so we drive NIC mapping + MAC pinning via vmrun + vmx edits.
-# This is idempotent: the null_resource triggers on template_id OR vm id change.
-
-resource "null_resource" "configure_nics" {
+# ─── Clone the Packer-built template → running VM instance ────────────────
+resource "null_resource" "clone_vm" {
   triggers = {
-    vm_id       = vmworkstation_virtual_machine.nexus_gateway.id
-    template_id = var.template_id
-    mac_nic0    = var.mac_nic0
-    mac_nic1    = var.mac_nic1
-    mac_nic2    = var.mac_nic2
+    template_vmx = local.template_vmx
+    target_vmx   = local.target_vmx
+    vmrun        = local.vmrun # mirrored into triggers so destroy-time provisioners can see it
   }
 
   provisioner "local-exec" {
     when        = create
     interpreter = ["pwsh", "-NoProfile", "-Command"]
     command     = <<-PWSH
-      $vmx = Join-Path '${var.vm_output_dir}' 'nexus-gateway.vmx'
-      if (-not (Test-Path $vmx)) { throw "VMX not found at $vmx — Terraform apply did not produce it." }
-      & '${abspath(path.module)}/../../scripts/configure-gateway-nics.ps1' `
-          -VmxPath $vmx `
-          -MacNic0 '${var.mac_nic0}' `
-          -MacNic1 '${var.mac_nic1}' `
-          -MacNic2 '${var.mac_nic2}'
+      $src = '${local.template_vmx}'
+      $dst = '${local.target_vmx}'
+      if (-not (Test-Path $src)) { throw "Template VMX not found: $src" }
+      if (Test-Path $dst)        { throw "Destination already exists: $dst — rm it or taint this resource." }
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dst) | Out-Null
+      & '${local.vmrun}' clone $src $dst full -cloneName=nexus-gateway
+      if ($LASTEXITCODE -ne 0) { throw "vmrun clone failed with exit code $LASTEXITCODE" }
+      if (-not (Test-Path $dst)) { throw "vmrun reported success but $dst was not created." }
+      Write-Host "Cloned template → $dst"
     PWSH
   }
 
   provisioner "local-exec" {
     when        = destroy
     interpreter = ["pwsh", "-NoProfile", "-Command"]
-    command     = "Write-Host 'Skipping NIC unconfig on destroy — VMX is deleted by vmworkstation_vm.'"
+    command     = <<-PWSH
+      $dst   = '${self.triggers.target_vmx}'
+      $vmrun = '${self.triggers.vmrun}'
+      if (Test-Path $dst) {
+        # Stop first if running, then delete the .vmx + parent dir
+        & $vmrun stop $dst hard 2>$null
+        & $vmrun deleteVM $dst 2>$null
+        Remove-Item -Recurse -Force (Split-Path -Parent $dst) -ErrorAction SilentlyContinue
+      }
+    PWSH
   }
-
-  depends_on = [vmworkstation_virtual_machine.nexus_gateway]
 }
 
-# ─── Power on after NICs are configured ───────────────────────────────────
-resource "null_resource" "power_on" {
+# ─── NIC configuration ────────────────────────────────────────────────────
+# The template ships with one host-only NIC (build-time artifact). This step
+# strips it and writes the three real NICs with pinned MACs on
+# bridged / VMnet11 / VMnet10.
+resource "null_resource" "configure_nics" {
   triggers = {
-    vm_id = vmworkstation_virtual_machine.nexus_gateway.id
+    target_vmx = local.target_vmx
+    mac_nic0   = var.mac_nic0
+    mac_nic1   = var.mac_nic1
+    mac_nic2   = var.mac_nic2
   }
 
   provisioner "local-exec" {
     when        = create
     interpreter = ["pwsh", "-NoProfile", "-Command"]
     command     = <<-PWSH
-      $vmx = Join-Path '${var.vm_output_dir}' 'nexus-gateway.vmx'
-      & 'C:\Program Files (x86)\VMware\VMware Workstation\vmrun.exe' start $vmx nogui
+      & '${local.scripts_dir}/configure-gateway-nics.ps1' `
+          -VmxPath '${local.target_vmx}' `
+          -MacNic0 '${var.mac_nic0}' `
+          -MacNic1 '${var.mac_nic1}' `
+          -MacNic2 '${var.mac_nic2}'
     PWSH
+  }
+
+  depends_on = [null_resource.clone_vm]
+}
+
+# ─── Power on ─────────────────────────────────────────────────────────────
+resource "null_resource" "power_on" {
+  triggers = {
+    target_vmx = local.target_vmx
+    vmrun      = local.vmrun
+  }
+
+  provisioner "local-exec" {
+    when        = create
+    interpreter = ["pwsh", "-NoProfile", "-Command"]
+    command     = "& '${local.vmrun}' start '${local.target_vmx}' nogui"
+  }
+
+  provisioner "local-exec" {
+    when        = destroy
+    interpreter = ["pwsh", "-NoProfile", "-Command"]
+    command     = "& '${self.triggers.vmrun}' stop '${self.triggers.target_vmx}' hard 2>$null; exit 0"
   }
 
   depends_on = [null_resource.configure_nics]

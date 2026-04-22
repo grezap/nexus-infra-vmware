@@ -60,35 +60,34 @@ Firewall rules enforce: VMnet10 never reaches the internet; only VMnet11 is masq
 
 Prerequisites:
 - Packer 1.11+, Terraform 1.9+ on the Windows host
-- VMware Workstation Pro running
+- VMware Workstation Pro 17.6+ installed (the `vmrun.exe` CLI ships with it — no separate daemon needed)
 - Phase 0.A complete (VMnet10 + VMnet11 created, host adapters bound)
 
 ```powershell
-# 1. Build the Packer template (~5 min — downloads Debian 13 netinst ISO + runs preseed + Ansible)
-cd F:\_CODING_\...\nexus-infra-vmware
+# 1. Build the Packer template (~7 min — downloads Debian 13 netinst ISO, preseed, Ansible)
+cd "F:\_CODING_\…\nexus-infra-vmware"
 make gateway
+# Template lands at: H:\VMS\NexusPlatform\_templates\nexus-gateway\nexus-gateway.vmx
 
-# 2. Enable VMware Workstation REST API daemon (one-time)
-& 'C:\Program Files (x86)\VMware\VMware Workstation\vmrest.exe' -C
-# Set credentials when prompted. Then run in a separate window:
-& 'C:\Program Files (x86)\VMware\VMware Workstation\vmrest.exe'
+# 2. Deploy the running instance (clones template → rewrites NICs → powers on)
+make gateway-apply
+# Instance lands at: H:\VMS\NexusPlatform\00-edge\nexus-gateway\nexus-gateway.vmx
 
-# 3. Copy the example tfvars and fill in template_id + creds
-cd terraform/gateway
-Copy-Item example.tfvars terraform.tfvars
-notepad terraform.tfvars
-
-# 4. Apply
-terraform init
-terraform apply
-
-# 5. Verify
+# 3. Verify
 Test-NetConnection 192.168.70.1 -Port 53
-Test-NetConnection 192.168.70.1 -Port 9100
+Test-NetConnection 192.168.70.1 -Port 22
 nslookup one.one.one.one 192.168.70.1
 ```
 
-Expected result: `192.168.70.1` responds on DNS/53 and node_exporter/9100; `nslookup` resolves `1.1.1.1`.
+Expected result: 53 and 22 return `TcpTestSucceeded : True`; `nslookup` resolves `1.1.1.1` via the gateway.
+
+**No `terraform.tfvars` needed** — defaults in `terraform/gateway/variables.tf` (template path, MACs, output dir) are correct for host `10.0.70.101`. Only override if paths/MACs change.
+
+**To see the VM in Workstation's sidebar** (optional — purely cosmetic, Terraform doesn't care):
+
+> File → Open… → `H:\VMS\NexusPlatform\00-edge\nexus-gateway\nexus-gateway.vmx`
+
+Workstation's library is a per-user inventory (`%APPDATA%\VMware\inventory.vmls`) separate from the filesystem. `vmrun start` powers VMs on but doesn't register them in that inventory.
 
 ## Verification checklist
 
@@ -142,7 +141,7 @@ curl -I https://cdimage.debian.org | head -1
 - **Single point of failure.** If nexus-gateway is down, the lab loses internet. Acceptable for a portfolio lab; Tier-1 HA rework in ADR-0142.
 - **No WireGuard / remote access.** External access to the lab is via the Windows host itself. Phase 0.E adds a bastion pattern on VMnet11.
 - **SSH key rotation** is deferred to Phase 0.D (requires Vault to be up — chicken-and-egg resolved by build-time password).
-- **MAC pinning by script** (vmx edit) rather than via the Terraform provider. Pattern will move into the reusable `terraform/modules/vm/` module once the provider gains full NIC support.
+- **No Terraform provider for Workstation.** The module drives `vmrun.exe` through `null_resource` + `local-exec`. See "Known issues" below.
 
 ## Rebuild procedure
 
@@ -158,3 +157,46 @@ make gateway-apply    # redeploy
 ```
 
 Total recovery time: ~6 minutes on NVMe.
+
+## Known issues & design decisions
+
+### Why no `elsudano/vmworkstation` Terraform provider
+
+Phase 0.B.1 originally tried `elsudano/vmworkstation` v2.0.1. Three blocker bugs against `vmrest` 17.6.x:
+
+1. **`path` attribute is ignored.** Provider always clones into `%USERPROFILE%\Documents\Virtual Machines\<name>\` then reports that path back, which fails Terraform's post-apply consistency check when you asked for a different destination.
+2. **Redundant NIC parameter** ([elsudano/terraform-provider-vmworkstation#28](https://github.com/elsudano/terraform-provider-vmworkstation/issues/28)): SDK's clone-then-reconstruct-NIC sequence sends `vmnet8` alongside `connectionType=nat`, which `vmrest` rejects.
+3. **SDK panic** when the template `.vmx` has zero ethernet entries — `CreateVM` unconditionally dereferences `NICS[0]`.
+
+Resolution: drive `vmrun.exe` (the CLI bundled with Workstation) directly from Terraform `null_resource` + `local-exec`. Gives us full control of the clone destination, avoids `vmrest` PUT bugs entirely, and matches how the Packer build already interacts with Workstation. `vmrest.exe` is **not** required at any point — the CLI is sufficient.
+
+### NIC renaming must match by MAC, not PCI path
+
+The Ansible role deploys three `systemd` `.link` files under `/etc/systemd/network/` that rename `ensXXX` → `nic0/nic1/nic2` at boot. Early versions matched by `Path=pci-0000:02:01.0` etc., which broke in practice: Workstation's clone-then-add-NIC flow assigns `pciSlotNumber` values (typically 160/192/224) that produce different `Path=` strings than the original template's single-NIC layout.
+
+Fix (current): `[Match] MACAddress=…` keyed on the MACs pinned by `scripts/configure-gateway-nics.ps1` before first boot. MACs come from `terraform/gateway/variables.tf` defaults and are duplicated into the Ansible role (`tasks/main.yml`). **If you override MACs in `terraform.tfvars`, rebuild the Packer template with matching `-var mac_nicN=…` arguments** or the rename won't fire and dnsmasq won't bind.
+
+### dnsmasq build-time gotcha
+
+`files/dnsmasq.conf` uses `interface=nic1` `bind-interfaces`. At Packer build time nic1 doesn't exist (only the single NAT NIC), so the role **enables but does not start** dnsmasq. It comes up on the first post-clone boot when the real NIC topology is in place. The handler also uses `state: stopped` rather than `restarted` for the same reason.
+
+### Troubleshooting: ping 192.168.70.1 fails after `terraform apply`
+
+Give it 20–30s for Debian cold boot. If still failing, open the VM in Workstation GUI (see "Build + deploy" step 3 note) and check from the console:
+
+```bash
+ip -br link                                                       # nic0/nic1/nic2, not ensXXX
+ip -br addr                                                       # 192.168.70.1/24 on nic1
+systemctl status systemd-networkd dnsmasq nftables chrony
+journalctl -u systemd-networkd --no-pager | tail -30
+sudo nft list ruleset | head -40
+```
+
+Common failure modes:
+
+| Symptom | Likely cause |
+|---|---|
+| `ensXXX` not renamed | `.link` MAC match failed — check `.vmx` MACs vs `/etc/systemd/network/1[012]-nicN.link` |
+| nic1/nic2 renamed but DOWN | `.network` file missing or wrong `Name=` match — compare with `tasks/main.yml` |
+| DNS (:53) closed, SSH (:22) open | dnsmasq bind failure — check `journalctl -u dnsmasq` for "interface not found" |
+| Host routing via wrong adapter | `Get-NetIPAddress -InterfaceAlias 'VMware Network Adapter VMnet11'` — should be `192.168.70.254` |

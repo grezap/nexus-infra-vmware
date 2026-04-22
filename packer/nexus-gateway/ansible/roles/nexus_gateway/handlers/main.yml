@@ -1,8 +1,12 @@
 ---
+# dnsmasq.conf binds to nic1/nic2 which only exist AFTER systemd-networkd
+# applies the .link renames at boot. At Packer-build time the NICs are still
+# ens32/ens33/ens34, so restart would fail. Stop it instead — systemd will
+# start it on first real boot because it's enabled.
 - name: Restart dnsmasq
   ansible.builtin.systemd:
     name: dnsmasq
-    state: restarted
+    state: stopped
 
 - name: Restart chrony
   ansible.builtin.systemd:

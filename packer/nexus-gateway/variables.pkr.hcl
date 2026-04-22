@@ -35,7 +35,12 @@ variable "cpus" {
 
 variable "memory_mb" {
   type    = number
-  default = 512
+  # Build-time only. Debian 13's installer needs ≥ 780 MB to run the full
+  # preseed-capable installer; at 512 MB it falls into "low memory mode" which
+  # disables preseed.cfg fetching and forces interactive English prompts →
+  # Packer hangs waiting for SSH forever. Runtime VM is shrunk back to 512 MB
+  # by terraform/gateway/main.tf at instantiation time.
+  default = 1024
 }
 
 variable "disk_gb" {
@@ -57,7 +62,7 @@ variable "ssh_password" {
 
 variable "boot_wait" {
   type    = string
-  default = "5s"
+  default = "15s"
 }
 
 variable "ssh_timeout" {

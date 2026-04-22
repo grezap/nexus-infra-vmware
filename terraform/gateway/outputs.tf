@@ -1,10 +1,5 @@
-output "vm_id" {
-  description = "VMware Workstation VM ID of nexus-gateway."
-  value       = vmworkstation_virtual_machine.nexus_gateway.id
-}
-
 output "vm_path" {
-  description = "Filesystem path of the VMX."
+  description = "Filesystem path of the running VM's .vmx."
   value       = "${var.vm_output_dir}/nexus-gateway.vmx"
 }
 

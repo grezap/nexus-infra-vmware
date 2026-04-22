@@ -1,30 +1,11 @@
-variable "vmware_workstation_api_url" {
-  description = "VMware Workstation REST API endpoint. Defaults to localhost:8697."
+variable "template_vmx_path" {
+  description = "Absolute path to the Packer-built nexus-gateway template .vmx file."
   type        = string
-  default     = "http://127.0.0.1:8697/api"
-}
-
-variable "vmware_workstation_user" {
-  description = "VMware REST API username. Read from env VMWS_USER if unset."
-  type        = string
-  default     = ""
-  sensitive   = true
-}
-
-variable "vmware_workstation_password" {
-  description = "VMware REST API password. Read from env VMWS_PASSWORD if unset."
-  type        = string
-  default     = ""
-  sensitive   = true
-}
-
-variable "template_id" {
-  description = "Sourceid of the Packer-built nexus-gateway template (vmworkstation provider ID)."
-  type        = string
+  default     = "H:/VMS/NexusPlatform/_templates/nexus-gateway/nexus-gateway.vmx"
 }
 
 variable "vm_output_dir" {
-  description = "Directory where the running VM instance is placed."
+  description = "Directory where the running VM instance is placed (will be created by vmrun clone)."
   type        = string
   default     = "H:/VMS/NexusPlatform/00-edge/nexus-gateway"
 }

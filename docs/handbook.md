@@ -1,0 +1,281 @@
+# NexusPlatform operator handbook
+
+A command-reference cheat sheet for rebuilding the lab from cold metal. Per-VM design docs live alongside this file (e.g. [nexus-gateway.md](nexus-gateway.md)); this handbook is the **cross-cutting ops manual** — host prep, day-to-day commands, common-failure triage.
+
+All commands assume **PowerShell 7+ (`pwsh`)** on the Windows host unless noted otherwise. Repo root: `F:\_CODING_\Repos\Local Development And Test\Portfolio_Project_Ideas\workspace\nexus-infra-vmware`.
+
+---
+
+## 0. One-time host prep
+
+Do these once, in order, before building any VM.
+
+### 0.1 Install toolchain
+
+```powershell
+winget install -e --id HashiCorp.Packer
+winget install -e --id HashiCorp.Terraform
+# VMware Workstation Pro 17.6+ installed separately (requires Broadcom account)
+```
+
+Verify:
+
+```powershell
+packer version      # expect >= 1.11
+terraform version   # expect >= 1.9
+& 'C:\Program Files (x86)\VMware\VMware Workstation\vmrun.exe' -T ws list
+```
+
+### 0.2 Create VMnet10 + VMnet11 (Phase 0.A — host-only networks)
+
+Use Workstation's **Virtual Network Editor** (Edit → Virtual Network Editor → Change Settings — elevation required):
+
+| Name     | Type      | Subnet             | DHCP | Host adapter IP   |
+|----------|-----------|--------------------|------|-------------------|
+| VMnet10  | Host-only | `192.168.10.0/24`  | OFF  | `192.168.10.254`  |
+| VMnet11  | Host-only | `192.168.70.0/24`  | OFF  | `192.168.70.254`  |
+
+Verify host adapters exist:
+
+```powershell
+Get-NetAdapter -Name 'VMware Network Adapter VMnet1*'
+Get-NetIPAddress -InterfaceAlias 'VMware Network Adapter VMnet11'  # should be 192.168.70.254
+Get-NetIPAddress -InterfaceAlias 'VMware Network Adapter VMnet10'  # should be 192.168.10.254
+```
+
+### 0.3 Clone the repo + init
+
+```powershell
+cd "F:\_CODING_\Repos\Local Development And Test\Portfolio_Project_Ideas\workspace"
+git clone git@github.com:grezap/nexus-infra-vmware.git
+cd nexus-infra-vmware
+make init   # runs packer init + terraform init for gateway
+```
+
+---
+
+## 1. Phase 0.B.1 — nexus-gateway (VM #0)
+
+Full deep-dive: [`docs/nexus-gateway.md`](nexus-gateway.md).
+
+```powershell
+cd "F:\_CODING_\Repos\Local Development And Test\Portfolio_Project_Ideas\workspace\nexus-infra-vmware"
+
+# Build the template (~7 min)
+make gateway
+
+# Deploy the running instance (~7 sec)
+make gateway-apply
+
+# Sanity check
+Test-NetConnection 192.168.70.1 -Port 53
+Test-NetConnection 192.168.70.1 -Port 22
+nslookup one.one.one.one 192.168.70.1
+
+# Tear down (destroys instance, template survives)
+make gateway-destroy
+```
+
+**If the destination path already exists** before `make gateway`, wipe it first so Packer doesn't conflate runs:
+
+```powershell
+Remove-Item -Recurse -Force H:\VMS\NexusPlatform\_templates\nexus-gateway -ErrorAction SilentlyContinue
+```
+
+**If Terraform state got corrupted** (e.g. half-destroyed):
+
+```powershell
+cd terraform\gateway
+Remove-Item -Recurse -Force .terraform, .terraform.lock.hcl, terraform.tfstate*
+terraform init
+terraform apply -auto-approve
+```
+
+---
+
+## 2. Working with the running gateway
+
+### 2.1 SSH in
+
+```powershell
+ssh nexusadmin@192.168.70.1
+# Prefer key auth — nexusadmin.pub is baked into the template's authorized_keys.
+# Build-time password is set via packer/nexus-gateway/variables.pkr.hcl `ssh_password`
+# default; rotated / removed in Phase 0.D when Vault comes up.
+```
+
+### 2.2 Add the VM to Workstation's GUI sidebar (cosmetic)
+
+```
+File → Open… → H:\VMS\NexusPlatform\00-edge\nexus-gateway\nexus-gateway.vmx
+```
+
+Workstation's library is a separate per-user inventory (`%APPDATA%\VMware\inventory.vmls`). `vmrun start` powers VMs on but does **not** register them in the library — adding them is optional.
+
+### 2.3 Check what's running via `vmrun`
+
+```powershell
+$vmrun = 'C:\Program Files (x86)\VMware\VMware Workstation\vmrun.exe'
+& $vmrun list                                      # all running VMs (paths)
+& $vmrun -T ws getGuestIPAddress <path-to-.vmx>    # reported guest IP (if tools installed)
+& $vmrun -T ws stop   <path-to-.vmx> hard          # force power-off
+& $vmrun -T ws start  <path-to-.vmx> nogui         # power on headless
+& $vmrun -T ws reset  <path-to-.vmx> hard          # hard reboot
+```
+
+### 2.4 In-guest service inspection
+
+```bash
+systemctl status systemd-networkd dnsmasq nftables chrony prometheus-node-exporter
+journalctl -u dnsmasq        -n 50 --no-pager
+journalctl -u systemd-networkd -n 50 --no-pager
+sudo nft list ruleset
+ip -br link && ip -br addr
+chronyc sources -v
+```
+
+---
+
+## 3. Common host-side commands
+
+### 3.1 Git
+
+```powershell
+git status
+git log --oneline -20
+git diff -- packer terraform
+```
+
+### 3.2 Terraform hygiene
+
+```powershell
+cd terraform\gateway
+terraform fmt -recursive        # rewrite-in-place
+terraform fmt -check -recursive # CI-style check (no writes)
+terraform validate
+terraform plan                  # preview without applying
+terraform show                  # current state, human-readable
+terraform state list            # resources under management
+```
+
+### 3.3 Packer hygiene
+
+```powershell
+cd packer\nexus-gateway
+packer fmt -recursive .
+packer validate .
+packer inspect .                # show vars + builders + provisioners
+```
+
+### 3.4 Firewall / routing from host
+
+```powershell
+# Which interface will the host use to reach 192.168.70.1?
+Find-NetRoute -RemoteIPAddress 192.168.70.1
+
+# Port probe with explicit source interface
+Test-NetConnection 192.168.70.1 -Port 53  # expect SourceAddress = 192.168.70.254
+
+# Clear ARP cache if an old MAC is stuck
+Get-NetNeighbor -AddressFamily IPv4 | Where-Object IPAddress -match '^192\.168\.70\.' | Remove-NetNeighbor -Confirm:$false
+```
+
+---
+
+## 4. Troubleshooting recipes
+
+### 4.1 "Ping to 192.168.70.1 failed" right after `terraform apply`
+
+Debian cold boot takes 20–30s. Wait, retry. If still failing after 60s, open the VM in the Workstation GUI and check:
+
+```bash
+ip -br link          # nic0/nic1/nic2 — NOT ensXXX
+systemctl status systemd-networkd
+```
+
+If interfaces still show as `ensXXX`, the `.link` MAC match failed — see [`docs/nexus-gateway.md`](nexus-gateway.md#nic-renaming-must-match-by-mac-not-pci-path).
+
+### 4.2 `terraform apply` error: "Destination already exists"
+
+A previous run left artifacts. Either:
+
+```powershell
+terraform destroy -auto-approve                                           # preferred
+# or, if state is out of sync with reality:
+Remove-Item -Recurse -Force H:\VMS\NexusPlatform\00-edge\nexus-gateway
+```
+
+### 4.3 `packer build` hangs on "Waiting for SSH"
+
+Likely culprits:
+- **Memory < 1 GB** → Debian installer drops into "Low memory mode" and stalls. `variables.pkr.hcl` pins `memory_mb = 1024` for this reason.
+- **Preseed URL unreachable** → check that no Windows Firewall rule is blocking Packer's ephemeral HTTP server (port range declared in `boot_command`).
+- **Wrong boot_wait** → bump `boot_wait` in `variables.pkr.hcl`.
+
+Open the VNC endpoint printed in Packer's output (`vnc://127.0.0.1:59XX`) with TightVNC/RealVNC to see the live console.
+
+### 4.4 VMware Workstation "This virtual machine appears to be in use"
+
+A previous `vmrun` session didn't clean up the lock. Safe if you're sure nothing else has it open:
+
+```powershell
+Remove-Item H:\VMS\NexusPlatform\00-edge\nexus-gateway\*.lck -Recurse -Force
+```
+
+### 4.5 `git commit` fails with "hook failed"
+
+Don't use `--no-verify`. Read the hook output, fix the underlying issue (usually a `terraform fmt` or trailing-whitespace miss), re-stage, re-commit.
+
+---
+
+## 5. Directory map
+
+```
+nexus-infra-vmware/
+├── Makefile                    # top-level targets: make gateway, make gateway-apply, …
+├── docs/
+│   ├── architecture.md         # whole-fleet design
+│   ├── licensing.md            # Windows licensing canon
+│   ├── nexus-gateway.md        # per-VM runbook (Phase 0.B.1)
+│   └── handbook.md             # this file
+├── packer/
+│   └── nexus-gateway/
+│       ├── nexus-gateway.pkr.hcl
+│       ├── variables.pkr.hcl
+│       ├── http/preseed.cfg
+│       ├── files/              # nftables.conf, dnsmasq.conf, chrony.conf
+│       └── ansible/
+│           └── roles/nexus_gateway/
+│               ├── tasks/main.yml
+│               ├── handlers/main.yml
+│               └── files/nexusadmin.pub
+├── scripts/
+│   ├── configure-gateway-nics.ps1   # post-clone .vmx NIC rewriter
+│   └── check-no-product-key.ps1
+└── terraform/
+    └── gateway/
+        ├── main.tf             # null_resource + vmrun local-exec
+        ├── variables.tf
+        ├── outputs.tf
+        └── terraform.tfvars    # gitignored
+```
+
+Template VMs live at `H:\VMS\NexusPlatform\_templates\<name>\<name>.vmx`.
+Running instances at `H:\VMS\NexusPlatform\<tier>\<name>\<name>.vmx` (tier = `00-edge`, `10-core`, `20-apps`, …).
+
+---
+
+## 6. What's next
+
+| Phase | Task | Doc |
+|-------|------|-----|
+| 0.B.1 | ✅ nexus-gateway | [nexus-gateway.md](nexus-gateway.md) |
+| 0.B.2 | Debian 13 base template | *(pending)* |
+| 0.B.3 | Ubuntu 24.04 LTS base template | *(pending)* |
+| 0.B.4 | Windows Server 2025 Core template | *(pending)* |
+| 0.B.5 | Windows Server 2025 Desktop template | *(pending)* |
+| 0.B.6 | Windows 11 Enterprise template | *(pending)* |
+| 0.C   | Core services tier (`10-core/`) | *(pending)* |
+| 0.D   | Vault + SSH key rotation | *(pending)* |
+
+Keep this file in sync as phases land — each new VM gets a per-VM doc under `docs/` and a section added here under §1.

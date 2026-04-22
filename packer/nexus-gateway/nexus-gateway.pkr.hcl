@@ -47,6 +47,12 @@ source "vmware-iso" "nexus-gateway" {
   # template and Terraform adds the extra adapters per instantiation.
   network_adapter_type = "vmxnet3"
   network              = "nat"       # build-time: use VMware NAT for apt fetch
+  # NB: we keep `network = "nat"` for the BUILD (gets internet for apt/ansible),
+  # but the elsudano/vmworkstation v2.0.1 SDK panics cloning a NAT-typed NIC
+  # (maps connectionType=nat → vmnet8 internally, then vmrest rejects sending
+  # both). After build, strip ethernet0.* and replace with a custom-type NIC
+  # on vmnet1 so the provider's clone-then-recreate dance works. See
+  # README.md § "Known issues" and scripts/normalize-template-nic.ps1.
 
   # Firmware / hardware revision
   version              = "20"        # WS 17+ hw version
@@ -77,11 +83,21 @@ source "vmware-iso" "nexus-gateway" {
   shutdown_command = "echo '${var.ssh_password}' | sudo -S -E shutdown -P now"
   shutdown_timeout = "5m"
 
-  # Headless build — no console window pops up
+  # Headless build — no console window pops up.
   headless = true
 
   # Leave the VM as a template (do not compact — Terraform linked-clones will handle it)
   skip_compaction = false
+
+  # Strip all ethernet*.* lines from the finished .vmx. Rationale:
+  # elsudano/vmworkstation v2.0.1 + vmrest 17.6.x hit a regression (issue #28
+  # in the provider repo) where cloning a template whose .vmx contains any
+  # ethernetN.connectionType = "nat|bridged|..." lines fails with
+  #   StatusCode:400 Code:121 "Redundant parameter: vmnet8 for this operation"
+  # Terraform's null_resource.configure_nics rewrites all three NICs post-clone
+  # anyway (see scripts/configure-gateway-nics.ps1), so we lose nothing by
+  # starting from zero ethernet entries.
+  vmx_remove_ethernet_interfaces = true
 
   # Metadata for the resulting .vmx
   vmx_data = {
@@ -114,9 +130,9 @@ build {
     inline = [
       "echo 'Waiting for systemd to settle...'",
       "sudo systemctl is-system-running --wait || true",
-      "echo 'Installing Ansible prerequisites (python3 + sudo-nopasswd for build user)...'",
+      "echo 'Installing Ansible + prerequisites (ansible-local provisioner runs ansible-playbook on-box)...'",
       "sudo apt-get update -qq",
-      "sudo apt-get install -y -qq python3 python3-apt sudo"
+      "sudo apt-get install -y -qq python3 python3-apt sudo ansible"
     ]
   }
 
