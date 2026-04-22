@@ -224,6 +224,33 @@
       APT::Periodic::Update-Package-Lists "1";
       APT::Periodic::Unattended-Upgrade "1";
 
+# ─── Owner public key (optional) ─────────────────────────────────────────
+# If packer/nexus-gateway/ansible/roles/nexus_gateway/files/nexusadmin.pub
+# exists at build time, deploy it to authorized_keys so the owner can SSH
+# in from day one. Absent file is not an error — Phase 0.D Vault-managed
+# SSH CA takes over later.
+- name: Check for owner's SSH public key (optional)
+  ansible.builtin.stat:
+    path: "{{ role_path }}/files/nexusadmin.pub"
+  register: nexusadmin_pub
+
+- name: Ensure ~/.ssh exists for {{ target_user }}
+  ansible.builtin.file:
+    path: "/home/{{ target_user }}/.ssh"
+    state: directory
+    owner: "{{ target_user }}"
+    group: "{{ target_user }}"
+    mode: "0700"
+  when: nexusadmin_pub.stat.exists
+
+- name: Install owner's public key into authorized_keys
+  ansible.posix.authorized_key:
+    user: "{{ target_user }}"
+    key: "{{ lookup('ansible.builtin.file', role_path + '/files/nexusadmin.pub') }}"
+    state: present
+    exclusive: false
+  when: nexusadmin_pub.stat.exists
+
 # ─── SSH hardening ───────────────────────────────────────────────────────
 # Keep password auth enabled during Packer build (so Packer can log in).
 # Phase 0.D's Terraform/Ansible run swaps to key-only + disables password.

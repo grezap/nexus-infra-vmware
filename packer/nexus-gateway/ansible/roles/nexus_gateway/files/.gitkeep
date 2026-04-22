@@ -1,0 +1,2 @@
+# Drop your ed25519 public key here as 'nexusadmin.pub' — it will be
+# baked into /home/nexusadmin/.ssh/authorized_keys by Packer build.
