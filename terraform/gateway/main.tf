@@ -32,11 +32,14 @@ terraform {
 }
 
 provider "vmworkstation" {
-  user       = var.vmware_workstation_user
-  password   = var.vmware_workstation_password
-  url        = var.vmware_workstation_api_url
-  https      = false
-  debug      = false
+  # Schema note: the elsudano/vmworkstation provider renamed its inputs between
+  # early and 1.2+ releases — it now takes `username` + `endpoint` (not `user`
+  # + `url`). Kept the Terraform variable names unchanged for continuity.
+  username = var.vmware_workstation_user
+  password = var.vmware_workstation_password
+  endpoint = var.vmware_workstation_api_url
+  https    = false
+  debug    = false
 }
 
 # ─── The VM itself ────────────────────────────────────────────────────────
