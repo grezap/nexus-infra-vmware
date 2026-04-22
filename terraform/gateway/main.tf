@@ -35,7 +35,10 @@ provider "vmworkstation" {
   # Schema notes for elsudano/vmworkstation v2.0+ (breaking changes from v1.x):
   #   * inputs: username + endpoint (was: user + url)
   #   * debug:  string "NONE"|"INFO"|"ERROR"|"DEBUG" (was: bool)
-  #   * resource type: vmworkstation_resource_vm (was: vmworkstation_vm)
+  #   * resource type: vmworkstation_virtual_machine (was: vmworkstation_vm).
+  #     NB: the v2.0.1 provider example file says `vmworkstation_resource_vm`
+  #     — that's a doc bug. Authoritative name from provider source:
+  #       resource_vm.go  →  resp.TypeName = req.ProviderTypeName + "_virtual_machine"
   # Kept the Terraform variable names unchanged for continuity with
   # example.tfvars contracts.
   username = var.vmware_workstation_user
@@ -46,7 +49,7 @@ provider "vmworkstation" {
 }
 
 # ─── The VM itself ────────────────────────────────────────────────────────
-resource "vmworkstation_resource_vm" "nexus_gateway" {
+resource "vmworkstation_virtual_machine" "nexus_gateway" {
   sourceid     = var.template_id
   denomination = "nexus-gateway"
   description  = "NexusPlatform lab edge router — VM #0. nftables NAT · dnsmasq DHCP+DNS · chrony NTP."
@@ -64,7 +67,7 @@ resource "vmworkstation_resource_vm" "nexus_gateway" {
 
 resource "null_resource" "configure_nics" {
   triggers = {
-    vm_id       = vmworkstation_resource_vm.nexus_gateway.id
+    vm_id       = vmworkstation_virtual_machine.nexus_gateway.id
     template_id = var.template_id
     mac_nic0    = var.mac_nic0
     mac_nic1    = var.mac_nic1
@@ -91,13 +94,13 @@ resource "null_resource" "configure_nics" {
     command     = "Write-Host 'Skipping NIC unconfig on destroy — VMX is deleted by vmworkstation_vm.'"
   }
 
-  depends_on = [vmworkstation_resource_vm.nexus_gateway]
+  depends_on = [vmworkstation_virtual_machine.nexus_gateway]
 }
 
 # ─── Power on after NICs are configured ───────────────────────────────────
 resource "null_resource" "power_on" {
   triggers = {
-    vm_id = vmworkstation_resource_vm.nexus_gateway.id
+    vm_id = vmworkstation_virtual_machine.nexus_gateway.id
   }
 
   provisioner "local-exec" {
