@@ -34,7 +34,7 @@ variable "cpus" {
 }
 
 variable "memory_mb" {
-  type    = number
+  type = number
   # Build-time only. Debian 13's installer needs ≥ 780 MB to run the full
   # preseed-capable installer; at 512 MB it falls into "low memory mode" which
   # disables preseed.cfg fetching and forces interactive English prompts →

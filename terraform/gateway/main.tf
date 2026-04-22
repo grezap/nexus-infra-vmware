@@ -40,10 +40,10 @@ terraform {
 }
 
 locals {
-  vmrun         = "C:/Program Files (x86)/VMware/VMware Workstation/vmrun.exe"
-  template_vmx  = var.template_vmx_path
-  target_vmx    = "${var.vm_output_dir}/nexus-gateway.vmx"
-  scripts_dir   = abspath("${path.module}/../../scripts")
+  vmrun        = "C:/Program Files (x86)/VMware/VMware Workstation/vmrun.exe"
+  template_vmx = var.template_vmx_path
+  target_vmx   = "${var.vm_output_dir}/nexus-gateway.vmx"
+  scripts_dir  = abspath("${path.module}/../../scripts")
 }
 
 # ─── Clone the Packer-built template → running VM instance ────────────────

@@ -33,20 +33,20 @@ source "vmware-iso" "nexus-gateway" {
   output_directory = var.output_directory
 
   # ISO
-  iso_url          = var.iso_url
-  iso_checksum     = var.iso_checksum
+  iso_url      = var.iso_url
+  iso_checksum = var.iso_checksum
 
   # Hardware
-  guest_os_type    = "debian12-64"   # Workstation catalog lags; 12-64 is compatible with Debian 13
-  cpus             = var.cpus
-  memory           = var.memory_mb
-  disk_size        = var.disk_gb * 1024
-  disk_type_id     = 0               # growable single-file VMDK
+  guest_os_type = "debian12-64" # Workstation catalog lags; 12-64 is compatible with Debian 13
+  cpus          = var.cpus
+  memory        = var.memory_mb
+  disk_size     = var.disk_gb * 1024
+  disk_type_id  = 0 # growable single-file VMDK
 
   # Three NICs — mapped by Terraform later; Packer builds the single-NIC
   # template and Terraform adds the extra adapters per instantiation.
   network_adapter_type = "vmxnet3"
-  network              = "nat"       # build-time: use VMware NAT for apt fetch
+  network              = "nat" # build-time: use VMware NAT for apt fetch
   # NB: we keep `network = "nat"` for the BUILD (gets internet for apt/ansible),
   # but the elsudano/vmworkstation v2.0.1 SDK panics cloning a NAT-typed NIC
   # (maps connectionType=nat → vmnet8 internally, then vmrest rejects sending
@@ -55,12 +55,12 @@ source "vmware-iso" "nexus-gateway" {
   # README.md § "Known issues" and scripts/normalize-template-nic.ps1.
 
   # Firmware / hardware revision
-  version              = "20"        # WS 17+ hw version
+  version = "20" # WS 17+ hw version
   # Keep BIOS rather than EFI for simpler preseed on Debian 13.
 
   # Preseed delivered via Packer's HTTP server
-  http_directory  = "http"
-  boot_wait       = var.boot_wait
+  http_directory = "http"
+  boot_wait      = var.boot_wait
   boot_command = [
     "<esc><wait>",
     "auto ",
@@ -73,10 +73,10 @@ source "vmware-iso" "nexus-gateway" {
   ]
 
   # SSH — Packer waits until the installed system comes up and accepts SSH
-  communicator    = "ssh"
-  ssh_username    = var.ssh_username
-  ssh_password    = var.ssh_password
-  ssh_timeout     = var.ssh_timeout
+  communicator           = "ssh"
+  ssh_username           = var.ssh_username
+  ssh_password           = var.ssh_password
+  ssh_timeout            = var.ssh_timeout
   ssh_handshake_attempts = 200
 
   # Graceful shutdown so the template is clean
@@ -101,7 +101,7 @@ source "vmware-iso" "nexus-gateway" {
 
   # Metadata for the resulting .vmx
   vmx_data = {
-    "annotation"          = "nexus-gateway template (Phase 0.B.1) — built by Packer"
+    "annotation"           = "nexus-gateway template (Phase 0.B.1) — built by Packer"
     "tools.upgrade.policy" = "useGlobal"
   }
 }

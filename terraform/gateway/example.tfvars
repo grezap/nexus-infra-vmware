@@ -1,24 +1,21 @@
 # terraform/gateway/example.tfvars
-# Copy to terraform.tfvars (gitignored) and fill in.
+#
+# Copy to terraform.tfvars (gitignored) and edit ONLY if defaults in
+# variables.tf are wrong for your host. For host 10.0.70.101 the defaults
+# are already correct — you do not need a terraform.tfvars at all.
 
-# VMware Workstation REST API credentials.
-# Enable the daemon with:
-#   & "C:\Program Files (x86)\VMware\VMware Workstation\vmrest.exe" -C
-# Then set credentials, and run:
-#   & "C:\Program Files (x86)\VMware\VMware Workstation\vmrest.exe"
-vmware_workstation_user     = "nexusadmin"
-vmware_workstation_password = "change-me"
-vmware_workstation_api_url  = "http://127.0.0.1:8697/api"
+# Absolute path to the Packer-built template .vmx. Must exist before apply.
+# template_vmx_path = "H:/VMS/NexusPlatform/_templates/nexus-gateway/nexus-gateway.vmx"
 
-# Packer-built template ID — visible in `vmrest` GET /vms or via the API.
-# Example: 11CED111F0FF1CA11111
-template_id = "REPLACE_WITH_TEMPLATE_ID"
+# Where the running VM clone will be placed. Directory will be created.
+# vm_output_dir = "H:/VMS/NexusPlatform/00-edge/nexus-gateway"
 
-# Where to place the running VM
-vm_output_dir = "H:/VMS/NexusPlatform/00-edge/nexus-gateway"
-
-# MACs are pinned for stable systemd NIC naming. 00:50:56 is VMware's OUI;
-# fourth byte must be 0x00-0x3F for user-assignable static MACs.
-mac_nic0 = "00:50:56:3F:00:10"  # bridged
-mac_nic1 = "00:50:56:3F:00:11"  # VMnet11
-mac_nic2 = "00:50:56:3F:00:12"  # VMnet10
+# Pinned MACs for stable systemd interface naming.
+# - 00:50:56 is VMware's OUI.
+# - Fourth byte must be 0x00-0x3F for user-assignable statics.
+# - If you change these, rebuild the Packer template with matching
+#   `packer build -var mac_nicN=...` (the Ansible role bakes them into
+#   /etc/systemd/network/1N-nicN.link for MAC-based NIC renaming).
+# mac_nic0 = "00:50:56:3F:00:10" # bridged  — physical LAN egress
+# mac_nic1 = "00:50:56:3F:00:11" # VMnet11  — 192.168.70.1 lab gateway
+# mac_nic2 = "00:50:56:3F:00:12" # VMnet10  — 192.168.10.1 backplane
