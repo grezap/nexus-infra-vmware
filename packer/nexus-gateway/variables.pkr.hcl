@@ -12,16 +12,20 @@ variable "output_directory" {
 
 variable "iso_url" {
   type        = string
-  default     = "https://cdimage.debian.org/debian-cd/13.0.0/amd64/iso-cd/debian-13.0.0-amd64-netinst.iso"
-  description = "Debian 13 netinst ISO URL. Pinned for reproducibility."
+  default     = "https://cdimage.debian.org/debian-cd/13.4.0/amd64/iso-cd/debian-13.4.0-amd64-netinst.iso"
+  description = "Debian 13 netinst ISO URL. Pinned to current stable point release."
 }
 
 variable "iso_checksum" {
-  type        = string
-  # Pinned sha256 of debian-13.0.0-amd64-netinst.iso. Update only when iso_url changes.
-  # Fetch via: curl -sL https://cdimage.debian.org/debian-cd/13.0.0/amd64/iso-cd/SHA256SUMS | grep netinst
-  default     = "file:https://cdimage.debian.org/debian-cd/13.0.0/amd64/iso-cd/SHA256SUMS"
-  description = "ISO checksum (hash, or 'file:' URL to SHA256SUMS, or 'none')."
+  type = string
+  # Pinned sha256 of debian-13.4.0-amd64-netinst.iso (authoritative source:
+  # cdimage.debian.org/debian-cd/13.4.0/amd64/iso-cd/SHA256SUMS, 2026-04).
+  # Update only when iso_url changes. Verify via:
+  #   curl -sL https://cdimage.debian.org/debian-cd/13.4.0/amd64/iso-cd/SHA256SUMS | grep netinst
+  # A literal hash is preferred over 'file:https://.../SHA256SUMS' because
+  # Debian archives old point releases, which would 404 the SHA file.
+  default     = "sha256:0b813535dd76f2ea96eff908c65e8521512c92a0631fd41c95756ffd7d4896dc"
+  description = "ISO checksum (literal sha256 hash)."
 }
 
 variable "cpus" {
