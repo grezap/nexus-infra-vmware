@@ -18,7 +18,7 @@ terraform {
   required_providers {
     vmworkstation = {
       source  = "elsudano/vmworkstation"
-      version = ">= 1.2.0"
+      version = ">= 2.0.0"
     }
     null = {
       source  = "hashicorp/null"
@@ -32,25 +32,29 @@ terraform {
 }
 
 provider "vmworkstation" {
-  # Schema note: the elsudano/vmworkstation provider renamed its inputs between
-  # early and 1.2+ releases — it now takes `username` + `endpoint` (not `user`
-  # + `url`). Kept the Terraform variable names unchanged for continuity.
+  # Schema notes for elsudano/vmworkstation v2.0+ (breaking changes from v1.x):
+  #   * inputs: username + endpoint (was: user + url)
+  #   * debug:  string "NONE"|"INFO"|"ERROR"|"DEBUG" (was: bool)
+  #   * resource type: vmworkstation_resource_vm (was: vmworkstation_vm)
+  # Kept the Terraform variable names unchanged for continuity with
+  # example.tfvars contracts.
   username = var.vmware_workstation_user
   password = var.vmware_workstation_password
   endpoint = var.vmware_workstation_api_url
   https    = false
-  debug    = false
+  debug    = "NONE"
 }
 
 # ─── The VM itself ────────────────────────────────────────────────────────
-resource "vmworkstation_vm" "nexus_gateway" {
+resource "vmworkstation_resource_vm" "nexus_gateway" {
   sourceid     = var.template_id
   denomination = "nexus-gateway"
   description  = "NexusPlatform lab edge router — VM #0. nftables NAT · dnsmasq DHCP+DNS · chrony NTP."
-  path         = var.vm_output_dir
-
+  # v2.0+ expects a full .vmx file path, not a directory.
+  path       = "${var.vm_output_dir}/nexus-gateway.vmx"
   processors = 1
   memory     = 512
+  state      = "off" # start powered off; the null_resource.power_on step brings it up after NIC mapping
 }
 
 # ─── NIC configuration — vmrun/vmx-edit fallback ──────────────────────────
@@ -60,7 +64,7 @@ resource "vmworkstation_vm" "nexus_gateway" {
 
 resource "null_resource" "configure_nics" {
   triggers = {
-    vm_id       = vmworkstation_vm.nexus_gateway.id
+    vm_id       = vmworkstation_resource_vm.nexus_gateway.id
     template_id = var.template_id
     mac_nic0    = var.mac_nic0
     mac_nic1    = var.mac_nic1
@@ -87,13 +91,13 @@ resource "null_resource" "configure_nics" {
     command     = "Write-Host 'Skipping NIC unconfig on destroy — VMX is deleted by vmworkstation_vm.'"
   }
 
-  depends_on = [vmworkstation_vm.nexus_gateway]
+  depends_on = [vmworkstation_resource_vm.nexus_gateway]
 }
 
 # ─── Power on after NICs are configured ───────────────────────────────────
 resource "null_resource" "power_on" {
   triggers = {
-    vm_id = vmworkstation_vm.nexus_gateway.id
+    vm_id = vmworkstation_resource_vm.nexus_gateway.id
   }
 
   provisioner "local-exec" {

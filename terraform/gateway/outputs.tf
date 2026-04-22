@@ -1,6 +1,6 @@
 output "vm_id" {
   description = "VMware Workstation VM ID of nexus-gateway."
-  value       = vmworkstation_vm.nexus_gateway.id
+  value       = vmworkstation_resource_vm.nexus_gateway.id
 }
 
 output "vm_path" {
