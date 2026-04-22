@@ -1,0 +1,16 @@
+---
+# debian_base — defaults
+#
+# Overridable via Packer extra-vars. Current call-site:
+#   packer/deb13/deb13.pkr.hcl passes `target_user=${var.ssh_username}`
+#   (defaults to `nexusadmin`).
+
+debian_base_target_user: nexusadmin
+
+# Interface name produced by the systemd .link rename (OriginalName=en* →
+# this value). Matches the nftables rules in files/nftables.conf.
+debian_base_nic_name: nic0
+
+# CIDR allowed to SSH into this template's clones. VMnet11 (192.168.70.0/24)
+# is the lab management plane.
+debian_base_ssh_allow_cidr: 192.168.70.0/24

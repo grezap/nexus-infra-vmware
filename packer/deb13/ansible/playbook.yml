@@ -1,0 +1,13 @@
+---
+# deb13 — Ansible playbook (local, run by Packer ansible-local provisioner)
+- name: Configure deb13 base template
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+
+  vars:
+    target_user: "{{ target_user | default('nexusadmin') }}"
+
+  roles:
+    - debian_base

@@ -93,6 +93,74 @@ terraform apply -auto-approve
 
 ---
 
+## 1a. Phase 0.B.2 — deb13 generic base template
+
+Full deep-dive: [`docs/deb13.md`](deb13.md). Parent image for ~60 of the 65 lab VMs.
+
+```powershell
+cd "F:\_CODING_\Repos\Local Development And Test\Portfolio_Project_Ideas\workspace\nexus-infra-vmware"
+
+# Build the template (~7–8 min)
+make deb13
+# Template lands at H:\VMS\NexusPlatform\_templates\deb13\deb13.vmx
+
+# Smoke-test the template via terraform/modules/vm/ (~10 sec)
+make deb13-smoke
+# Clone lands at H:\VMS\NexusPlatform\90-smoke\deb13-smoke\deb13-smoke.vmx
+# It will DHCP from nexus-gateway in 192.168.70.200-.250.
+
+# Find its lease + probe
+200..250 | ForEach-Object { $ip="192.168.70.$_"; if (Test-Connection -Quiet -Count 1 $ip) { "UP: $ip" } }
+Test-NetConnection <ip> -Port 22
+Test-NetConnection <ip> -Port 9100
+ssh nexusadmin@<ip>
+
+# Tear down
+make deb13-smoke-destroy
+```
+
+### 1a.1 Rebuilding from scratch
+
+```powershell
+make deb13-smoke-destroy                                                       # if a smoke VM exists
+Remove-Item -Recurse -Force H:\VMS\NexusPlatform\_templates\deb13 -ErrorAction SilentlyContinue
+make deb13
+make deb13-smoke                                                               # verify
+```
+
+### 1a.2 Reusing the module for real role VMs
+
+Every non-gateway VM will call `terraform/modules/vm/`:
+
+```hcl
+module "my_postgres" {
+  source            = "../modules/vm"
+  vm_name           = "my-postgres"
+  template_vmx_path = "H:/VMS/NexusPlatform/_templates/deb13/deb13.vmx"
+  vm_output_dir     = "H:/VMS/NexusPlatform/20-data/my-postgres"
+  mac_address       = "00:50:56:3F:00:30"   # :30-3F = data tier
+  # vnet defaults to VMnet11
+}
+```
+
+MAC allocation convention (fourth byte of `00:50:56:3F:XX:YY`):
+
+| Range  | Tier     | Example consumers             |
+|--------|----------|-------------------------------|
+| `:10-1F` | edge     | nexus-gateway                  |
+| `:20-2F` | smoke    | deb13-smoke, ad-hoc test VMs   |
+| `:30-3F` | data     | Postgres, Mongo, ClickHouse    |
+| `:40-4F` | core     | Vault, Consul, Redis           |
+| `:50-5F` | apps     | APIs, workers, Swarm nodes     |
+
+See [`terraform/modules/vm/README.md`](../terraform/modules/vm/README.md).
+
+### 1a.3 The gotcha worth remembering
+
+SSH host keys are wiped at Packer cleanup (so each clone gets unique keys) and regenerated on first boot via a `ssh.service.d/10-regenerate-host-keys.conf` drop-in. The drop-in **clears** the inherited `ExecStartPre` list before re-adding our own — without that, systemd's additive-append behavior runs the stock `sshd -t` before our `ssh-keygen -A`, `sshd -t` fails, and sshd never starts. Full story in [`docs/deb13.md`](deb13.md#ssh-host-keys-are-deliberately-removed-at-build-time--and-how-we-regenerate-them).
+
+---
+
 ## 2. Working with the running gateway
 
 ### 2.1 SSH in
@@ -237,27 +305,27 @@ nexus-infra-vmware/
 │   ├── architecture.md         # whole-fleet design
 │   ├── licensing.md            # Windows licensing canon
 │   ├── nexus-gateway.md        # per-VM runbook (Phase 0.B.1)
+│   ├── deb13.md                # per-template runbook (Phase 0.B.2)
 │   └── handbook.md             # this file
 ├── packer/
-│   └── nexus-gateway/
-│       ├── nexus-gateway.pkr.hcl
-│       ├── variables.pkr.hcl
+│   ├── nexus-gateway/
+│   │   ├── nexus-gateway.pkr.hcl
+│   │   ├── http/preseed.cfg
+│   │   ├── files/              # nftables.conf, dnsmasq.conf, chrony.conf
+│   │   └── ansible/roles/nexus_gateway/
+│   └── deb13/
+│       ├── deb13.pkr.hcl
 │       ├── http/preseed.cfg
-│       ├── files/              # nftables.conf, dnsmasq.conf, chrony.conf
-│       └── ansible/
-│           └── roles/nexus_gateway/
-│               ├── tasks/main.yml
-│               ├── handlers/main.yml
-│               └── files/nexusadmin.pub
+│       ├── files/              # nftables.conf, chrony.conf (client)
+│       └── ansible/roles/debian_base/
 ├── scripts/
-│   ├── configure-gateway-nics.ps1   # post-clone .vmx NIC rewriter
+│   ├── configure-gateway-nics.ps1   # gateway-only (3 NICs, MAC-pinned)
+│   ├── configure-vm-nic.ps1         # shared single-NIC rewriter (modules/vm uses this)
 │   └── check-no-product-key.ps1
 └── terraform/
-    └── gateway/
-        ├── main.tf             # null_resource + vmrun local-exec
-        ├── variables.tf
-        ├── outputs.tf
-        └── terraform.tfvars    # gitignored
+    ├── gateway/                # Phase 0.B.1 — nexus-gateway
+    ├── modules/vm/             # Phase 0.B.2 — reusable single-NIC clone driver
+    └── deb13-smoke/            # Phase 0.B.2 — smoke harness for modules/vm + deb13
 ```
 
 Template VMs live at `H:\VMS\NexusPlatform\_templates\<name>\<name>.vmx`.
@@ -270,8 +338,8 @@ Running instances at `H:\VMS\NexusPlatform\<tier>\<name>\<name>.vmx` (tier = `00
 | Phase | Task | Doc |
 |-------|------|-----|
 | 0.B.1 | ✅ nexus-gateway | [nexus-gateway.md](nexus-gateway.md) |
-| 0.B.2 | Debian 13 base template | *(pending)* |
-| 0.B.3 | Ubuntu 24.04 LTS base template | *(pending)* |
+| 0.B.2 | ✅ Debian 13 base template + reusable `modules/vm/` | [deb13.md](deb13.md) |
+| 0.B.3 | Ubuntu 24.04 LTS base template + DRY `nexus_observability` role | *(pending)* |
 | 0.B.4 | Windows Server 2025 Core template | *(pending)* |
 | 0.B.5 | Windows Server 2025 Desktop template | *(pending)* |
 | 0.B.6 | Windows 11 Enterprise template | *(pending)* |

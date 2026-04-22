@@ -1,0 +1,222 @@
+---
+# debian_base — role tasks
+#
+# Delivers the shared baseline for every non-gateway NexusPlatform Debian VM:
+#   - Persistent NIC naming (single NIC renamed to nic0 by OriginalName=en*)
+#   - chrony client pointing at 192.168.70.1 (nexus-gateway as time source)
+#   - nftables baseline (deny-in, allow SSH + node_exporter from VMnet11)
+#   - prometheus-node-exporter on :9100 for Phase 0.I Prometheus scrapes
+#   - Unattended security updates (Debian-Security origin only)
+#   - Hardened sshd config (PermitRootLogin no, etc.)
+#   - Owner's SSH public key → nexusadmin's authorized_keys (if present)
+#   - Template MOTD identifying the base image
+
+- name: Ensure baseline packages are present
+  ansible.builtin.apt:
+    name:
+      - nftables
+      - chrony
+      - prometheus-node-exporter
+      - unattended-upgrades
+      - apt-listchanges
+      - curl
+      - ca-certificates
+      - gnupg
+      - tcpdump
+      - mtr-tiny
+    state: present
+    update_cache: true
+
+# ─── Persistent NIC naming ──────────────────────────────────────────────
+# Every deb13 clone gets exactly one NIC (VMnet11), attached by Terraform's
+# modules/vm/ at clone time. We rename ens* → nic0 via OriginalName=en* —
+# this is deliberately MAC-agnostic so the same template serves any caller
+# regardless of the MAC they pick. VMs that need multiple NICs (rare; core
+# services tier) override this file post-clone with MAC-keyed .link files.
+- name: Deploy systemd .link file (renames ens* → nic0)
+  ansible.builtin.copy:
+    dest: /etc/systemd/network/10-{{ debian_base_nic_name }}.link
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Match]
+      OriginalName=en*
+
+      [Link]
+      Name={{ debian_base_nic_name }}
+
+- name: Deploy systemd-networkd .network file (DHCP on the renamed NIC)
+  ansible.builtin.copy:
+    dest: /etc/systemd/network/20-{{ debian_base_nic_name }}.network
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Match]
+      Name={{ debian_base_nic_name }}
+
+      [Network]
+      DHCP=yes
+
+- name: Ensure systemd-networkd is enabled
+  ansible.builtin.systemd:
+    name: systemd-networkd
+    enabled: true
+    masked: false
+
+# ─── nftables baseline ───────────────────────────────────────────────────
+- name: Install nftables baseline ruleset (staged by Packer at /tmp/nftables.conf)
+  ansible.builtin.copy:
+    src: /tmp/nftables.conf
+    dest: /etc/nftables.conf
+    owner: root
+    group: root
+    mode: "0755"
+    remote_src: true
+
+- name: Validate nftables ruleset
+  ansible.builtin.command: nft -c -f /etc/nftables.conf
+  changed_when: false
+
+- name: Enable + start nftables
+  ansible.builtin.systemd:
+    name: nftables
+    enabled: true
+    state: started
+
+# ─── chrony client ───────────────────────────────────────────────────────
+- name: Install chrony client config
+  ansible.builtin.copy:
+    src: /tmp/chrony.conf
+    dest: /etc/chrony/chrony.conf
+    owner: root
+    group: root
+    mode: "0644"
+    remote_src: true
+  notify: Restart chrony
+
+- name: Enable + start chrony
+  ansible.builtin.systemd:
+    name: chrony
+    enabled: true
+    state: started
+
+# ─── node_exporter ───────────────────────────────────────────────────────
+- name: Enable + start prometheus-node-exporter
+  ansible.builtin.systemd:
+    name: prometheus-node-exporter
+    enabled: true
+    state: started
+
+# ─── Unattended security updates ─────────────────────────────────────────
+- name: Configure unattended-upgrades (security only)
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/50nexus-unattended
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      Unattended-Upgrade::Origins-Pattern {
+          "origin=Debian,codename=${distro_codename},label=Debian-Security";
+      };
+      Unattended-Upgrade::Automatic-Reboot "false";
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+# ─── Owner public key (optional) ─────────────────────────────────────────
+# If packer/deb13/ansible/roles/debian_base/files/nexusadmin.pub exists at
+# build time, deploy it so the owner can SSH in from day one. Absent file
+# is not an error — Phase 0.D Vault SSH CA takes over later.
+- name: Check for owner's SSH public key (optional)
+  ansible.builtin.stat:
+    path: "{{ role_path }}/files/nexusadmin.pub"
+  register: debian_base_nexusadmin_pub
+
+- name: Ensure ~/.ssh exists for {{ target_user }}
+  ansible.builtin.file:
+    path: "/home/{{ target_user }}/.ssh"
+    state: directory
+    owner: "{{ target_user }}"
+    group: "{{ target_user }}"
+    mode: "0700"
+  when: debian_base_nexusadmin_pub.stat.exists
+
+- name: Install owner's public key into authorized_keys
+  ansible.posix.authorized_key:
+    user: "{{ target_user }}"
+    key: "{{ lookup('ansible.builtin.file', role_path + '/files/nexusadmin.pub') }}"
+    state: present
+    exclusive: false
+  when: debian_base_nexusadmin_pub.stat.exists
+
+# ─── SSH host-key regeneration on first boot ────────────────────────────
+# Packer cleanup wipes /etc/ssh/ssh_host_* so every clone gets unique keys.
+# Debian 13's stock ssh.service has `ExecStartPre=/usr/sbin/sshd -t` which
+# fails without keys. systemd drop-ins APPEND ExecStartPre entries (they
+# don't prepend), so a naïve additional `ExecStartPre=-/usr/bin/ssh-keygen -A`
+# would never fire — sshd -t fails first, systemd gives up.
+#
+# Fix: clear the inherited list with a bare `ExecStartPre=`, then re-declare
+# the pre-steps in the order we want: regen first (idempotent — no-op after
+# boot 1), then the validation test. Verified on the first failed clone by
+# running `ssh-keygen -A` manually → service came up; the logs showed both
+# pre-steps running in the correct order.
+- name: Ensure ssh.service drop-in dir exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/ssh.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Drop-in — regenerate host keys before sshd -t
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/ssh.service.d/10-regenerate-host-keys.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Service]
+      # Clear inherited ExecStartPre list, then re-declare in order:
+      ExecStartPre=
+      ExecStartPre=-/usr/bin/ssh-keygen -A
+      ExecStartPre=/usr/sbin/sshd -t
+
+# ─── SSH hardening ───────────────────────────────────────────────────────
+# Keep password auth enabled during Packer build so Packer can log in.
+# Phase 0.D's post-Vault run swaps to key-only + disables password.
+- name: Harden SSH (server-side minimums)
+  ansible.builtin.blockinfile:
+    path: /etc/ssh/sshd_config.d/10-nexus-hardening.conf
+    create: true
+    owner: root
+    group: root
+    mode: "0644"
+    block: |
+      PermitRootLogin no
+      X11Forwarding no
+      AllowAgentForwarding no
+      MaxAuthTries 3
+      LoginGraceTime 20
+      ClientAliveInterval 60
+      ClientAliveCountMax 3
+  notify: Restart ssh
+
+# ─── Banner ──────────────────────────────────────────────────────────────
+- name: Install MOTD
+  ansible.builtin.copy:
+    dest: /etc/motd
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      ╔═══════════════════════════════════════════════════════════════╗
+      ║  deb13 — NexusPlatform generic Debian 13 base template        ║
+      ║  Gateway: 192.168.70.1 (DNS/NTP/egress)                       ║
+      ║  Services: nftables · chrony-client · node_exporter           ║
+      ║  Built from nexus-infra-vmware/packer/deb13                   ║
+      ║                                                                ║
+      ║  This is a BASE IMAGE. A clone should have its own role       ║
+      ║  overlay applied before considering it provisioned.           ║
+      ╚═══════════════════════════════════════════════════════════════╝
