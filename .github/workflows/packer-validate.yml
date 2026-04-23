@@ -19,10 +19,10 @@ jobs:
       matrix:
         template:
           - nexus-gateway
-          - deb13     # Phase 0.B.2
-          - ubuntu24  # Phase 0.B.3
+          - deb13        # Phase 0.B.2
+          - ubuntu24     # Phase 0.B.3
+          - ws2025-core  # Phase 0.B.4
           # Remaining templates are stubs until filled in:
-          # - ws2025-core   # Phase 0.B.4
           # - ws2025-desktop # Phase 0.B.5
           # - win11ent      # Phase 0.B.6
     steps:
@@ -55,6 +55,7 @@ jobs:
           - gateway
           - deb13-smoke
           - ubuntu24-smoke
+          - ws2025-core-smoke
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
@@ -89,6 +90,25 @@ jobs:
           scandir: ./scripts
           severity: warning
           ignore_names: '*.ps1'
+      - name: PSScriptAnalyzer (Windows PowerShell provisioners + scripts)
+        shell: pwsh
+        run: |
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+          $targets = @(
+            'packer/ws2025-core/scripts',
+            'scripts'
+          ) | Where-Object { Test-Path $_ }
+          $issues = foreach ($t in $targets) {
+            Invoke-ScriptAnalyzer -Path $t -Recurse -Severity Warning,Error `
+              -ExcludeRule PSAvoidUsingWriteHost,PSUseShouldProcessForStateChangingFunctions
+          }
+          if ($issues) {
+            $issues | Format-Table -AutoSize | Out-String | Write-Host
+            $errors = $issues | Where-Object Severity -eq 'Error'
+            if ($errors) { throw "PSScriptAnalyzer: $($errors.Count) error(s)" }
+          } else {
+            Write-Host "PSScriptAnalyzer: clean"
+          }
 
   gitleaks:
     name: gitleaks (secret scan)

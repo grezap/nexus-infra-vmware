@@ -9,7 +9,8 @@ OUTPUT_ROOT ?= H:/VMS/NexusPlatform/_templates
         gateway gateway-apply gateway-destroy \
         deb13 deb13-smoke deb13-smoke-destroy \
         ubuntu24 ubuntu24-smoke ubuntu24-smoke-destroy \
-        ws2025-core ws2025-desktop win11ent \
+        ws2025-core ws2025-core-msdn ws2025-core-smoke ws2025-core-smoke-destroy \
+        ws2025-desktop win11ent \
         all-templates clean
 
 help:
@@ -25,7 +26,10 @@ help:
 	@echo "  make ubuntu24         - Build Ubuntu 24.04 LTS base template"
 	@echo "  make ubuntu24-smoke   - Instantiate ubuntu24 via modules/vm (smoke test)"
 	@echo "  make ubuntu24-smoke-destroy - Tear down the ubuntu24 smoke VM"
-	@echo "  make ws2025-core      - Build Windows Server 2025 Core template"
+	@echo "  make ws2025-core      - Build Windows Server 2025 Core template (evaluation ISO)"
+	@echo "  make ws2025-core-msdn - Build Windows Server 2025 Core (retail/MSDN ISO + bootstrap key)"
+	@echo "  make ws2025-core-smoke         - Instantiate ws2025-core via modules/vm (smoke test)"
+	@echo "  make ws2025-core-smoke-destroy - Tear down the ws2025-core smoke VM"
 	@echo "  make ws2025-desktop   - Build Windows Server 2025 Desktop template"
 	@echo "  make win11ent         - Build Windows 11 Enterprise template"
 	@echo "  make all-templates    - Build every template in order"
@@ -37,9 +41,11 @@ init:
 	@cd packer/nexus-gateway    && $(PACKER) init nexus-gateway.pkr.hcl
 	@cd packer/deb13            && $(PACKER) init deb13.pkr.hcl
 	@cd packer/ubuntu24         && $(PACKER) init ubuntu24.pkr.hcl
-	@cd terraform/gateway        && $(TERRAFORM) init
-	@cd terraform/deb13-smoke    && $(TERRAFORM) init
-	@cd terraform/ubuntu24-smoke && $(TERRAFORM) init
+	@cd packer/ws2025-core      && $(PACKER) init ws2025-core.pkr.hcl
+	@cd terraform/gateway            && $(TERRAFORM) init
+	@cd terraform/deb13-smoke        && $(TERRAFORM) init
+	@cd terraform/ubuntu24-smoke     && $(TERRAFORM) init
+	@cd terraform/ws2025-core-smoke  && $(TERRAFORM) init
 
 validate:
 	@echo "→ packer validate nexus-gateway"
@@ -48,14 +54,18 @@ validate:
 	@cd packer/deb13         && $(PACKER) validate .
 	@echo "→ packer validate ubuntu24"
 	@cd packer/ubuntu24      && $(PACKER) validate .
+	@echo "→ packer validate ws2025-core"
+	@cd packer/ws2025-core   && $(PACKER) validate .
 	@echo "→ terraform fmt -check (all)"
-	@cd terraform                && $(TERRAFORM) fmt -check -recursive
+	@cd terraform                    && $(TERRAFORM) fmt -check -recursive
 	@echo "→ terraform validate (gateway)"
-	@cd terraform/gateway        && $(TERRAFORM) init -backend=false && $(TERRAFORM) validate
+	@cd terraform/gateway            && $(TERRAFORM) init -backend=false && $(TERRAFORM) validate
 	@echo "→ terraform validate (deb13-smoke)"
-	@cd terraform/deb13-smoke    && $(TERRAFORM) init -backend=false && $(TERRAFORM) validate
+	@cd terraform/deb13-smoke        && $(TERRAFORM) init -backend=false && $(TERRAFORM) validate
 	@echo "→ terraform validate (ubuntu24-smoke)"
-	@cd terraform/ubuntu24-smoke && $(TERRAFORM) init -backend=false && $(TERRAFORM) validate
+	@cd terraform/ubuntu24-smoke     && $(TERRAFORM) init -backend=false && $(TERRAFORM) validate
+	@echo "→ terraform validate (ws2025-core-smoke)"
+	@cd terraform/ws2025-core-smoke  && $(TERRAFORM) init -backend=false && $(TERRAFORM) validate
 
 # ─── Phase 0.B.1 — nexus-gateway (VM #0) ─────────────────────────────────
 
@@ -92,10 +102,26 @@ ubuntu24-smoke:
 ubuntu24-smoke-destroy:
 	@cd terraform/ubuntu24-smoke && $(TERRAFORM) destroy -auto-approve
 
-# ─── Phase 0.B.4-6 — remaining OS templates (stubs until implemented) ────
+# ─── Phase 0.B.4 — ws2025-core Windows Server 2025 Core template ─────────
 
 ws2025-core:
-	@cd packer/ws2025-core    && $(PACKER) build .
+	@cd packer/ws2025-core          && $(PACKER) build .
+
+# Owner-only: msdn/retail ISO + bootstrap JSON with product key.
+# Expects C:/Users/<owner>/.nexus/secrets/windows-keys.json to exist — see
+# docs/licensing.md §"Pre-Phase-0.D bootstrap".
+ws2025-core-msdn:
+	@cd packer/ws2025-core          && $(PACKER) build \
+		-var "product_source=msdn" \
+		-var "bootstrap_keys_file=$(USERPROFILE)/.nexus/secrets/windows-keys.json" .
+
+ws2025-core-smoke:
+	@cd terraform/ws2025-core-smoke && $(TERRAFORM) apply -auto-approve
+
+ws2025-core-smoke-destroy:
+	@cd terraform/ws2025-core-smoke && $(TERRAFORM) destroy -auto-approve
+
+# ─── Phase 0.B.5-6 — remaining Windows templates (stubs until implemented) ─
 
 ws2025-desktop:
 	@cd packer/ws2025-desktop && $(PACKER) build .

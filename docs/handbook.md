@@ -155,9 +155,47 @@ MAC allocation convention (fourth byte of `00:50:56:3F:XX:YY`):
 
 See [`terraform/modules/vm/README.md`](../terraform/modules/vm/README.md).
 
-### 1a.3 The gotcha worth remembering
+### 1a.3 The gotcha worth remembering (Linux templates)
 
 SSH host keys are wiped at Packer cleanup (so each clone gets unique keys) and regenerated on first boot via a `ssh.service.d/10-regenerate-host-keys.conf` drop-in. The drop-in **clears** the inherited `ExecStartPre` list before re-adding our own — without that, systemd's additive-append behavior runs the stock `sshd -t` before our `ssh-keygen -A`, `sshd -t` fails, and sshd never starts. Full story in [`docs/deb13.md`](deb13.md#ssh-host-keys-are-deliberately-removed-at-build-time--and-how-we-regenerate-them).
+
+---
+
+## 1b. Phase 0.B.4 — ws2025-core Windows Server 2025 Core template
+
+Full deep-dive: [`docs/ws2025-core.md`](ws2025-core.md). First Windows image in the fleet.
+
+```powershell
+cd "F:\_CODING_\Repos\Local Development And Test\Portfolio_Project_Ideas\workspace\nexus-infra-vmware"
+
+# Build the template — evaluation path (default; 180-day eval, no product key).
+# Eval ISO must be staged at H:/VMS/ISO/WindowsServer2025Evaluation.iso.
+# First build is slow: ~15 min Setup + ~25 min PowerShell provisioning + Tools install.
+make ws2025-core
+
+# MSDN / retail path (owner only, requires bootstrap JSON with product key):
+make ws2025-core-msdn
+
+# Smoke-test
+make ws2025-core-smoke
+# VM lands at H:/VMS/NexusPlatform/90-smoke/ws2025-core-smoke/*.vmx
+
+# Find its lease + SSH in
+ssh nexusadmin@192.168.70.1 "awk '\$2==\"00:50:56:3f:00:22\" {print \$3}' /var/lib/misc/dnsmasq.leases"
+Test-NetConnection <ip> -Port 22      # OpenSSH (key-only)
+Test-NetConnection <ip> -Port 9182    # windows_exporter
+ssh nexusadmin@<ip>                    # logs in via owner ed25519 pubkey
+
+make ws2025-core-smoke-destroy
+```
+
+### 1b.1 The gotcha worth remembering (Windows template)
+
+For admin users, Windows OpenSSH reads `C:\ProgramData\ssh\administrators_authorized_keys` — not `~/.ssh/authorized_keys`. If the pubkey is only in the user-profile file, sshd silently falls back to password auth (which 01-nexus-identity.ps1 has disabled) and every connection gets `Permission denied (publickey)`. The script writes to both paths and ACL-locks each. Full story in [`docs/ws2025-core.md`](ws2025-core.md#windowss-two-file-authorized_keys-quirk).
+
+### 1b.2 Why PowerShell, not Ansible
+
+The Linux shared roles (`nexus_identity`, `nexus_network`, `nexus_firewall`, `nexus_observability`) are systemd / nftables / chrony / node_exporter — every component is Linux-native. Windows has different primitives (Windows Firewall, W32Time, Windows Capabilities, windows_exporter MSI) and running Ansible against Windows requires either WSL + pywinrm on the build host or pulling Python into the template. Neither is worth the dependency weight for parity that's one-to-one with straight PowerShell. DRY extraction into `packer/_shared/powershell/` happens when `ws2025-desktop` (Phase 0.B.5) gives us a second concrete caller.
 
 ---
 
@@ -324,11 +362,25 @@ nexus-infra-vmware/
 │   │   ├── http/preseed.cfg
 │   │   ├── files/              # nftables.conf, chrony.conf (client)
 │   │   └── ansible/roles/debian_base/    # thin OS tail: apt pkgs + Debian-Security origin + MOTD
-│   └── ubuntu24/
-│       ├── ubuntu24.pkr.hcl
-│       ├── http/user-data + meta-data    # Subiquity autoinstall (NoCloud)
-│       ├── files/              # nftables.conf, chrony.conf (ntp.ubuntu.com fallback)
-│       └── ansible/roles/ubuntu_base/    # thin OS tail: apt pkgs + cloud-init/netplan scrub + Ubuntu origin + MOTD
+│   ├── ubuntu24/
+│   │   ├── ubuntu24.pkr.hcl
+│   │   ├── http/user-data + meta-data    # Subiquity autoinstall (NoCloud)
+│   │   ├── files/              # nftables.conf, chrony.conf (ntp.ubuntu.com fallback)
+│   │   └── ansible/roles/ubuntu_base/    # thin OS tail: apt pkgs + cloud-init/netplan scrub + Ubuntu origin + MOTD
+│   └── ws2025-core/            # Phase 0.B.4 — Windows Server 2025 Core
+│       ├── ws2025-core.pkr.hcl         # vmware-iso + WinRM + floppy Autounattend
+│       ├── variables.pkr.hcl           # product_source evaluation|msdn + dual-ISO paths
+│       ├── floppy/Autounattend.xml.tpl # rendered in-memory by templatefile()
+│       ├── scripts/                    # PowerShell provisioners (parallel to Linux _shared roles)
+│       │   ├── bootstrap-winrm.ps1          #   runs at OOBE FirstLogonCommand
+│       │   ├── 00-install-vmware-tools.ps1
+│       │   ├── 01-nexus-identity.ps1        #   nexusadmin + OpenSSH + admin-group authorized_keys
+│       │   ├── 02-nexus-network.ps1         #   NIC rename nic0 + W32Time + DNS
+│       │   ├── 03-nexus-firewall.ps1        #   default-deny + VMnet11 allowlist
+│       │   ├── 04-nexus-observability.ps1   #   windows_exporter on :9182
+│       │   ├── 05-windows-baseline.ps1      #   WU policy, telemetry, TLS, banner, pagefile
+│       │   └── 99-sysprep.ps1               #   teardown build listener + generalize
+│       └── files/nexusadmin-authorized_keys
 ├── scripts/
 │   ├── configure-gateway-nics.ps1   # gateway-only (3 NICs, MAC-pinned)
 │   ├── configure-vm-nic.ps1         # shared single-NIC rewriter (modules/vm uses this)
@@ -337,7 +389,8 @@ nexus-infra-vmware/
     ├── gateway/                # Phase 0.B.1 — nexus-gateway
     ├── modules/vm/             # Phase 0.B.2 — reusable single-NIC clone driver
     ├── deb13-smoke/            # Phase 0.B.2 — smoke harness for modules/vm + deb13
-    └── ubuntu24-smoke/         # Phase 0.B.3 — smoke harness for ubuntu24
+    ├── ubuntu24-smoke/         # Phase 0.B.3 — smoke harness for ubuntu24
+    └── ws2025-core-smoke/      # Phase 0.B.4 — smoke harness for ws2025-core
 ```
 
 Template VMs live at `H:\VMS\NexusPlatform\_templates\<name>\<name>.vmx`.
@@ -352,7 +405,7 @@ Running instances at `H:\VMS\NexusPlatform\<tier>\<name>\<name>.vmx` (tier = `00
 | 0.B.1 | ✅ nexus-gateway | [nexus-gateway.md](nexus-gateway.md) |
 | 0.B.2 | ✅ Debian 13 base template + reusable `modules/vm/` | [deb13.md](deb13.md) |
 | 0.B.3 | ✅ Ubuntu 24.04 LTS base template + DRY `_shared/` roles (`nexus_identity`, `nexus_network`, `nexus_firewall`, `nexus_observability`) | [ubuntu24.md](ubuntu24.md) |
-| 0.B.4 | Windows Server 2025 Core template | *(pending)* |
+| 0.B.4 | ✅ Windows Server 2025 Core template (first Windows image; WinRM-build / OpenSSH-runtime; PowerShell provisioners parallel to the Linux shared roles) | [ws2025-core.md](ws2025-core.md) |
 | 0.B.5 | Windows Server 2025 Desktop template | *(pending)* |
 | 0.B.6 | Windows 11 Enterprise template | *(pending)* |
 | 0.C   | Core services tier (`10-core/`) | *(pending)* |

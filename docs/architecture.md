@@ -84,6 +84,21 @@ Common Ansible logic is extracted into shared roles under `packer/_shared/ansibl
 
 Per-template roles (`debian_base`, `ubuntu_base`, …) shrink to the OS-specific tail: distro-specific package lists, the `unattended-upgrades` origin pattern (`Debian-Security` vs `${distro_id}:${distro_codename}-security` + ESM), MOTD banner text, and (Ubuntu only) cloud-init network-config disable + `/etc/netplan/50-cloud-init.yaml` removal + `/etc/update-motd.d/*` chmod 0644. Each template's `ansible/playbook.yml` runs the four shared roles first, then its OS tail; Packer's `ansible-local` provisioner uploads each role via its `role_paths` list so they resolve by name without symlinks or vendored copies.
 
+## Windows templates — deliberately parallel, not unified
+
+The Linux `_shared/ansible/roles/nexus_*` are deeply Linux-specific (systemd units, nftables, systemd-networkd `.link`/`.network`, chrony). Windows has analogous *jobs* — local admin + SSH, NIC naming, firewall, time sync, metrics export — but every *implementation* is different (Windows Firewall cmdlets, W32Time, Rename-NetAdapter, windows_exporter MSI, OpenSSH-Server Windows Capability, WinRM-for-build / OpenSSH-for-runtime).
+
+Rather than force-fit Ansible across the OS boundary (which would require build-host pywinrm + WSL or Python inside the Windows template — both painful), the Windows templates use native PowerShell provisioners with script names parallel to the Linux role names:
+
+| Linux shared role      | Windows PowerShell parallel (ws2025-core/scripts/) |
+|------------------------|----------------------------------------------------|
+| `nexus_identity`       | `01-nexus-identity.ps1`                            |
+| `nexus_network`        | `02-nexus-network.ps1`                             |
+| `nexus_firewall`       | `03-nexus-firewall.ps1`                            |
+| `nexus_observability`  | `04-nexus-observability.ps1`                       |
+
+Same parallel naming is intentional — reading the two trees side-by-side makes the one-to-one correspondence obvious. DRY extraction into `packer/_shared/powershell/` (modules or a scripts/ dir) is deferred until the second Windows template (`ws2025-desktop`, Phase 0.B.5) gives us two concrete callers, matching the same two-call-sites principle the Linux extraction followed.
+
 ## Why vmrun/PowerShell for NIC config
 
 The `elsudano/vmworkstation` provider v1.2.0 supports create/delete/start/stop but does not yet expose `ethernet*.connectionType` or `ethernet*.address`. Three options were weighed:

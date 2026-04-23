@@ -1,0 +1,228 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Autounattend.xml.tpl — Packer templatefile() inputs:
+    image_name      : install.wim ImageName string (Core edition)
+    product_key     : "" for evaluation, XXXXX-XXXXX-... for msdn
+    admin_username  : local admin/WinRM account created at OOBE
+    admin_password  : build-time-only password (rotated to Vault in Phase 0.D)
+    computer_name   : NETBIOS hostname (ws2025-core for the template)
+
+  Key design points:
+    - UEFI + GPT: ESP + MSR + OS partition. WS2025 Setup refuses legacy BIOS
+      on recent builds and our vmware-iso source is firmware=efi.
+    - No product key on evaluation path (ProductKey block omitted entirely)
+      vs msdn (ProductKey present with Key). templatefile() renders one or
+      the other via Terraform-style %{ if } blocks.
+    - OOBESystem → FirstLogonCommands runs A:\bootstrap-winrm.ps1 to open
+      the WinRM listener for Packer. Runtime remote access is OpenSSH, which
+      01-nexus-identity.ps1 installs once we're past OOBE.
+-->
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+
+  <!-- ─── Phase 1: windowsPE — partition + pick image + product key ── -->
+  <settings pass="windowsPE">
+
+    <component name="Microsoft-Windows-International-Core-WinPE"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <SetupUILanguage>
+        <UILanguage>en-US</UILanguage>
+      </SetupUILanguage>
+      <InputLocale>en-US</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-US</UserLocale>
+    </component>
+
+    <component name="Microsoft-Windows-Setup"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+
+      <DiskConfiguration>
+        <Disk wcm:action="add">
+          <DiskID>0</DiskID>
+          <WillWipeDisk>true</WillWipeDisk>
+          <CreatePartitions>
+            <!-- EFI System Partition -->
+            <CreatePartition wcm:action="add">
+              <Order>1</Order>
+              <Type>EFI</Type>
+              <Size>260</Size>
+            </CreatePartition>
+            <!-- Microsoft Reserved Partition -->
+            <CreatePartition wcm:action="add">
+              <Order>2</Order>
+              <Type>MSR</Type>
+              <Size>128</Size>
+            </CreatePartition>
+            <!-- OS partition (remainder) -->
+            <CreatePartition wcm:action="add">
+              <Order>3</Order>
+              <Type>Primary</Type>
+              <Extend>true</Extend>
+            </CreatePartition>
+          </CreatePartitions>
+          <ModifyPartitions>
+            <ModifyPartition wcm:action="add">
+              <Order>1</Order>
+              <PartitionID>1</PartitionID>
+              <Label>System</Label>
+              <Format>FAT32</Format>
+            </ModifyPartition>
+            <ModifyPartition wcm:action="add">
+              <Order>2</Order>
+              <PartitionID>2</PartitionID>
+            </ModifyPartition>
+            <ModifyPartition wcm:action="add">
+              <Order>3</Order>
+              <PartitionID>3</PartitionID>
+              <Label>Windows</Label>
+              <Letter>C</Letter>
+              <Format>NTFS</Format>
+            </ModifyPartition>
+          </ModifyPartitions>
+        </Disk>
+      </DiskConfiguration>
+
+      <ImageInstall>
+        <OSImage>
+          <InstallFrom>
+            <MetaData wcm:action="add">
+              <Key>/IMAGE/NAME</Key>
+              <Value>${image_name}</Value>
+            </MetaData>
+          </InstallFrom>
+          <InstallTo>
+            <DiskID>0</DiskID>
+            <PartitionID>3</PartitionID>
+          </InstallTo>
+        </OSImage>
+      </ImageInstall>
+
+%{ if product_key != "" ~}
+      <UserData>
+        <ProductKey>
+          <Key>${product_key}</Key>
+          <WillShowUI>OnError</WillShowUI>
+        </ProductKey>
+        <AcceptEula>true</AcceptEula>
+        <FullName>NexusPlatform</FullName>
+        <Organization>NexusPlatform</Organization>
+      </UserData>
+%{ else ~}
+      <UserData>
+        <AcceptEula>true</AcceptEula>
+        <FullName>NexusPlatform</FullName>
+        <Organization>NexusPlatform</Organization>
+      </UserData>
+%{ endif ~}
+
+    </component>
+  </settings>
+
+  <!-- ─── Phase 2: specialize — computer name, timezone, autologon prep ─ -->
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Shell-Setup"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <ComputerName>${computer_name}</ComputerName>
+      <TimeZone>UTC</TimeZone>
+      <RegisteredOrganization>NexusPlatform</RegisteredOrganization>
+      <RegisteredOwner>NexusPlatform</RegisteredOwner>
+    </component>
+
+    <component name="Microsoft-Windows-TerminalServices-LocalSessionManager"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <!-- Allow RDP so owner can fall back to GUI console if WinRM dies mid-build.
+           Firewall rules gate actual access to VMnet11 (03-nexus-firewall.ps1). -->
+      <fDenyTSConnections>false</fDenyTSConnections>
+    </component>
+  </settings>
+
+  <!-- ─── Phase 3: oobeSystem — create admin user + first-logon commands ─ -->
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-Shell-Setup"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <HideLocalAccountScreen>true</HideLocalAccountScreen>
+        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
+        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <NetworkLocation>Work</NetworkLocation>
+        <ProtectYourPC>3</ProtectYourPC>
+        <SkipMachineOOBE>true</SkipMachineOOBE>
+        <SkipUserOOBE>true</SkipUserOOBE>
+      </OOBE>
+
+      <UserAccounts>
+        <AdministratorPassword>
+          <Value>${admin_password}</Value>
+          <PlainText>true</PlainText>
+        </AdministratorPassword>
+        <LocalAccounts>
+          <LocalAccount wcm:action="add">
+            <Password>
+              <Value>${admin_password}</Value>
+              <PlainText>true</PlainText>
+            </Password>
+            <Description>NexusPlatform build + runtime admin</Description>
+            <DisplayName>${admin_username}</DisplayName>
+            <Group>Administrators</Group>
+            <Name>${admin_username}</Name>
+          </LocalAccount>
+        </LocalAccounts>
+      </UserAccounts>
+
+      <!-- AutoLogon so FirstLogonCommands can run without a Ctrl-Alt-Del prompt.
+           Count=1 means it runs exactly once; subsequent boots require login. -->
+      <AutoLogon>
+        <Password>
+          <Value>${admin_password}</Value>
+          <PlainText>true</PlainText>
+        </Password>
+        <Enabled>true</Enabled>
+        <LogonCount>1</LogonCount>
+        <Username>${admin_username}</Username>
+      </AutoLogon>
+
+      <FirstLogonCommands>
+        <!-- Order 1: bring WinRM up so Packer can connect.
+             A:\ maps to the floppy Packer attaches via floppy_files. -->
+        <SynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <CommandLine>powershell -NoProfile -ExecutionPolicy Bypass -File A:\bootstrap-winrm.ps1</CommandLine>
+          <Description>Enable WinRM listener for Packer</Description>
+          <RequiresUserInput>false</RequiresUserInput>
+        </SynchronousCommand>
+      </FirstLogonCommands>
+
+      <TimeZone>UTC</TimeZone>
+    </component>
+
+    <component name="Microsoft-Windows-International-Core"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <InputLocale>en-US</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-US</UserLocale>
+    </component>
+  </settings>
+
+</unattend>
