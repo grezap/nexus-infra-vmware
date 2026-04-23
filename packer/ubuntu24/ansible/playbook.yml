@@ -1,0 +1,13 @@
+---
+# ubuntu24 — Ansible playbook (local, run by Packer ansible-local provisioner)
+- name: Configure ubuntu24 base template
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+
+  vars:
+    target_user: "{{ target_user | default('nexusadmin') }}"
+
+  roles:
+    - ubuntu_base

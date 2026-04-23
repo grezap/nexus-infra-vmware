@@ -19,12 +19,12 @@ jobs:
       matrix:
         template:
           - nexus-gateway
-          # Other templates are stubs until Phase 0.B.2+; enable here when filled in.
-          # - deb13
-          # - ubuntu24
-          # - ws2025-core
-          # - ws2025-desktop
-          # - win11ent
+          - deb13     # Phase 0.B.2
+          - ubuntu24  # Phase 0.B.3
+          # Remaining templates are stubs until filled in:
+          # - ws2025-core   # Phase 0.B.4
+          # - ws2025-desktop # Phase 0.B.5
+          # - win11ent      # Phase 0.B.6
     steps:
       - uses: actions/checkout@v4
 
@@ -46,19 +46,26 @@ jobs:
         run: packer validate -syntax-only .
 
   terraform:
-    name: Terraform fmt + validate
+    name: Terraform fmt + validate (${{ matrix.env }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env:
+          - gateway
+          - deb13-smoke
+          - ubuntu24-smoke
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.9.8"
-      - name: terraform fmt -check
-        run: terraform -chdir=terraform/gateway fmt -check -recursive
+      - name: terraform fmt -check (repo-wide, once per matrix leg)
+        run: terraform -chdir=terraform fmt -check -recursive
       - name: terraform init (no backend)
-        run: terraform -chdir=terraform/gateway init -backend=false
+        run: terraform -chdir=terraform/${{ matrix.env }} init -backend=false
       - name: terraform validate
-        run: terraform -chdir=terraform/gateway validate
+        run: terraform -chdir=terraform/${{ matrix.env }} validate
 
   ansible-lint:
     name: ansible-lint
@@ -69,7 +76,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ansible-lint ansible
-      - run: ansible-lint packer/nexus-gateway/ansible/
+      - run: ansible-lint packer/nexus-gateway/ansible/ packer/deb13/ansible/ packer/ubuntu24/ansible/
 
   shell-lint:
     name: ShellCheck + PSScriptAnalyzer

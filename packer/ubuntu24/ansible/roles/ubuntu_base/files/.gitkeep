@@ -1,0 +1,3 @@
+# Drop nexusadmin.pub here to bake the owner's SSH key into the template.
+# Matches packer/deb13/ansible/roles/debian_base/files/nexusadmin.pub
+# (keep both files in sync, or copy from there once DRY extraction lands).

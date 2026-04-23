@@ -1,0 +1,95 @@
+#cloud-config
+# Ubuntu 24.04 Subiquity autoinstall — ubuntu24 generic base template
+# Non-interactive install. No GUI, no desktop. Ansible (via Packer's
+# ansible-local) does everything post-install.
+#
+# Parity with deb13/http/preseed.cfg:
+#   - hostname:           ubuntu24
+#   - user:               nexusadmin  (sudo NOPASSWD; password for Packer SSH)
+#   - storage:            whole disk, ext4, swap via default direct layout
+#   - packages:           openssh-server + nftables + chrony + node_exporter
+#                         + python3 (Ansible target) and friends
+#   - late-commands:      enable core services so first boot comes up clean
+
+autoinstall:
+  version: 1
+
+  # Subiquity refresh-installer step hits the Snap Store on boot to check for
+  # a newer installer release. On slow links (or when Canonical's CDN is
+  # throttling) this can stall the install for 10–30 min before timing out.
+  # Skipping it is safe — we're pinned to 24.04.4 and don't need a newer
+  # installer mid-build.
+  refresh-installer:
+    update: false
+
+  # No interactive sections; version:1 already implies this, but be explicit.
+  interactive-sections: []
+
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+
+  # Apt mirror — use Ubuntu's geo-rotated default. No proxy.
+  apt:
+    geoip: true
+    preserve_sources_list: false
+
+  # No automatic security updates during install; unattended-upgrades is
+  # configured by the ubuntu_base Ansible role with the correct origin.
+  updates: security
+  package_update: true
+  package_upgrade: false
+
+  # ─── Identity ──────────────────────────────────────────────────────────
+  # Password hash below is SHA-512 crypt of "nexus-packer-build-only"
+  # (matches variables.pkr.hcl ssh_password). Packer uses password auth
+  # during build; Ansible flips sshd to key-only later.
+  identity:
+    hostname: ubuntu24
+    realname: NexusPlatform Admin
+    username: nexusadmin
+    password: "$6$nexusSalt42$LggGyZ/Kmjm2O9bfo7wzJReet7xv2s/587TkWOhub5YOiVX6oiBfuoamLRZXvtzwsPEm3etQ.KSwgIuNvFUyy."
+
+  ssh:
+    install-server: true
+    allow-pw: true
+
+  # ─── Storage ───────────────────────────────────────────────────────────
+  # `direct` layout = single-disk whole-device install with GPT + ext4 root.
+  # Matches deb13's `partman-auto/choose_recipe atomic` intent.
+  storage:
+    layout:
+      name: direct
+
+  # ─── Packages (install-time; Ansible adds more post-install) ──────────
+  packages:
+    - openssh-server
+    - sudo
+    - curl
+    - ca-certificates
+    - gnupg
+    - nftables
+    - chrony
+    - prometheus-node-exporter
+    - python3
+    - python3-apt
+
+  # ─── Late commands ─────────────────────────────────────────────────────
+  # Grant passwordless sudo to the build user (Ansible locks this down later)
+  # and ensure the core services are enabled so first boot is clean.
+  late-commands:
+    - echo 'nexusadmin ALL=(ALL) NOPASSWD:ALL' > /target/etc/sudoers.d/nexusadmin
+    - chmod 0440 /target/etc/sudoers.d/nexusadmin
+    - curtin in-target --target=/target -- systemctl enable ssh
+    - curtin in-target --target=/target -- systemctl enable nftables
+    - curtin in-target --target=/target -- systemctl enable chrony
+    - curtin in-target --target=/target -- systemctl enable prometheus-node-exporter
+
+  # Reboot into the installed system when autoinstall finishes. MUST be reboot,
+  # not poweroff — Packer waits for SSH after autoinstall; SSH only comes up on
+  # the newly-installed OS after reboot. (First ubuntu24 build hit this:
+  # `shutdown: poweroff` made Subiquity power off the VM at ~9 min, then
+  # Packer blocked 46 min on SSH-to-an-off-VM before timing out.)
+  # Packer takes over once SSH is reachable and issues its own shutdown_command
+  # at the end of the build.
+  shutdown: reboot
