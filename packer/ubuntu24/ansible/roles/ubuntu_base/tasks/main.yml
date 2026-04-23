@@ -1,18 +1,16 @@
 ---
-# ubuntu_base — role tasks
+# ubuntu_base — thin OS-specific tail
 #
-# Delivers the shared baseline for every non-gateway NexusPlatform Ubuntu VM.
-# Mirrors debian_base line-for-line except for the three Ubuntu-specific bits
-# flagged inline (unattended-upgrades origin, MOTD, cloud-init interaction).
+# Post-Phase 0.B.3 step 2 shape: everything generic lives under
+# packer/_shared/ansible/roles/ (nexus_identity, nexus_network, nexus_firewall,
+# nexus_observability). This role is now only what is genuinely Ubuntu-24.04
+# specific:
 #
-#   - Persistent NIC naming (single NIC renamed to nic0 by OriginalName=en*)
-#   - chrony client pointing at 192.168.70.1 (nexus-gateway as time source)
-#   - nftables baseline (deny-in, allow SSH + node_exporter from VMnet11)
-#   - prometheus-node-exporter on :9100 for Phase 0.I Prometheus scrapes
-#   - Unattended security updates (Ubuntu:${distro}-security origin)
-#   - Hardened sshd config
-#   - Owner's SSH public key → nexusadmin's authorized_keys (if present)
-#   - Template MOTD identifying the base image
+#   - Baseline package install (distribution-shipped package names)
+#   - cloud-init network config disable + /etc/netplan/50-cloud-init.yaml removal
+#   - update-motd.d neutering (Landscape/ESM nag screens → chmod 0644)
+#   - unattended-upgrades origin pattern (Ubuntu + ESM, not Debian's)
+#   - MOTD banner identifying the base image
 
 - name: Ensure baseline packages are present
   ansible.builtin.apt:
@@ -32,9 +30,9 @@
 
 # ─── Disable Ubuntu's default cloud-init network config ────────────────
 # Ubuntu server ships with 50-cloud-init.yaml under /etc/netplan/. We bypass
-# netplan entirely (systemd-networkd directly) so our .link + .network files
-# take effect. Leaving netplan active would cause it to regenerate configs
-# on boot and race with our systemd-networkd config.
+# netplan entirely (systemd-networkd directly via nexus_network) so our .link
+# + .network files take effect. Leaving netplan active would cause it to
+# regenerate configs on boot and race with our systemd-networkd config.
 - name: Disable cloud-init network config generation
   ansible.builtin.copy:
     dest: /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
@@ -49,89 +47,7 @@
     path: /etc/netplan/50-cloud-init.yaml
     state: absent
 
-# ─── Persistent NIC naming ──────────────────────────────────────────────
-# Every ubuntu24 clone gets exactly one NIC (VMnet11), attached by
-# Terraform's modules/vm/ at clone time. MAC-agnostic rename — same template
-# serves any caller regardless of MAC.
-- name: Deploy systemd .link file (renames ens* → nic0)
-  ansible.builtin.copy:
-    dest: /etc/systemd/network/10-{{ ubuntu_base_nic_name }}.link
-    owner: root
-    group: root
-    mode: "0644"
-    content: |
-      [Match]
-      OriginalName=en*
-
-      [Link]
-      Name={{ ubuntu_base_nic_name }}
-
-- name: Deploy systemd-networkd .network file (DHCP on the renamed NIC)
-  ansible.builtin.copy:
-    dest: /etc/systemd/network/20-{{ ubuntu_base_nic_name }}.network
-    owner: root
-    group: root
-    mode: "0644"
-    content: |
-      [Match]
-      Name={{ ubuntu_base_nic_name }}
-
-      [Network]
-      DHCP=yes
-
-- name: Ensure systemd-networkd is enabled
-  ansible.builtin.systemd:
-    name: systemd-networkd
-    enabled: true
-    masked: false
-
-# ─── nftables baseline ───────────────────────────────────────────────────
-- name: Install nftables baseline ruleset (staged by Packer at /tmp/nftables.conf)
-  ansible.builtin.copy:
-    src: /tmp/nftables.conf
-    dest: /etc/nftables.conf
-    owner: root
-    group: root
-    mode: "0755"
-    remote_src: true
-
-- name: Validate nftables ruleset
-  ansible.builtin.command: nft -c -f /etc/nftables.conf
-  changed_when: false
-
-- name: Enable + start nftables
-  ansible.builtin.systemd:
-    name: nftables
-    enabled: true
-    state: started
-
-# ─── chrony client ───────────────────────────────────────────────────────
-- name: Install chrony client config
-  ansible.builtin.copy:
-    src: /tmp/chrony.conf
-    dest: /etc/chrony/chrony.conf
-    owner: root
-    group: root
-    mode: "0644"
-    remote_src: true
-  notify: Restart chrony
-
-- name: Enable + start chrony
-  ansible.builtin.systemd:
-    name: chrony
-    enabled: true
-    state: started
-
-# ─── node_exporter ───────────────────────────────────────────────────────
-- name: Enable + start prometheus-node-exporter
-  ansible.builtin.systemd:
-    name: prometheus-node-exporter
-    enabled: true
-    state: started
-
-# ─── Unattended security updates (Ubuntu-specific origin pattern) ────────
-# deb13 uses `origin=Debian,label=Debian-Security`. Ubuntu's equivalent
-# origin is `Ubuntu` with the `${distro_codename}-security` suite.
+# ─── Unattended security updates (Ubuntu origin pattern) ─────────────────
 - name: Configure unattended-upgrades (security only)
   ansible.builtin.copy:
     dest: /etc/apt/apt.conf.d/50nexus-unattended
@@ -147,81 +63,6 @@
       Unattended-Upgrade::Automatic-Reboot "false";
       APT::Periodic::Update-Package-Lists "1";
       APT::Periodic::Unattended-Upgrade "1";
-
-# ─── Owner public key (optional) ─────────────────────────────────────────
-# If packer/ubuntu24/ansible/roles/ubuntu_base/files/nexusadmin.pub exists
-# at build time, deploy it so the owner can SSH in from day one. Absent
-# file is not an error — Phase 0.D Vault SSH CA takes over later.
-- name: Check for owner's SSH public key (optional)
-  ansible.builtin.stat:
-    path: "{{ role_path }}/files/nexusadmin.pub"
-  register: ubuntu_base_nexusadmin_pub
-
-- name: Ensure ~/.ssh exists for {{ target_user }}
-  ansible.builtin.file:
-    path: "/home/{{ target_user }}/.ssh"
-    state: directory
-    owner: "{{ target_user }}"
-    group: "{{ target_user }}"
-    mode: "0700"
-  when: ubuntu_base_nexusadmin_pub.stat.exists
-
-- name: Install owner's public key into authorized_keys
-  ansible.posix.authorized_key:
-    user: "{{ target_user }}"
-    key: "{{ lookup('ansible.builtin.file', role_path + '/files/nexusadmin.pub') }}"
-    state: present
-    exclusive: false
-  when: ubuntu_base_nexusadmin_pub.stat.exists
-
-# ─── SSH host-key regeneration on first boot ────────────────────────────
-# Packer cleanup wipes /etc/ssh/ssh_host_* so every clone gets unique keys.
-# Ubuntu 24.04's stock ssh.service is structurally identical to Debian 13's:
-# an ExecStartPre=/usr/sbin/sshd -t that fails fatally without host keys.
-# systemd drop-ins APPEND ExecStartPre entries (don't prepend), so we clear
-# the inherited list with a bare `ExecStartPre=`, then re-declare in order:
-# regen first (idempotent — no-op after boot 1), then the validation test.
-# See docs/deb13.md → "SSH host keys" for the discovery story.
-- name: Ensure ssh.service drop-in dir exists
-  ansible.builtin.file:
-    path: /etc/systemd/system/ssh.service.d
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-
-- name: Drop-in — regenerate host keys before sshd -t
-  ansible.builtin.copy:
-    dest: /etc/systemd/system/ssh.service.d/10-regenerate-host-keys.conf
-    owner: root
-    group: root
-    mode: "0644"
-    content: |
-      [Service]
-      # Clear inherited ExecStartPre list, then re-declare in order:
-      ExecStartPre=
-      ExecStartPre=-/usr/bin/ssh-keygen -A
-      ExecStartPre=/usr/sbin/sshd -t
-
-# ─── SSH hardening ───────────────────────────────────────────────────────
-# Keep password auth enabled during Packer build so Packer can log in.
-# Phase 0.D's post-Vault run swaps to key-only + disables password.
-- name: Harden SSH (server-side minimums)
-  ansible.builtin.blockinfile:
-    path: /etc/ssh/sshd_config.d/10-nexus-hardening.conf
-    create: true
-    owner: root
-    group: root
-    mode: "0644"
-    block: |
-      PermitRootLogin no
-      X11Forwarding no
-      AllowAgentForwarding no
-      MaxAuthTries 3
-      LoginGraceTime 20
-      ClientAliveInterval 60
-      ClientAliveCountMax 3
-  notify: Restart ssh
 
 # ─── Banner ──────────────────────────────────────────────────────────────
 - name: Install MOTD

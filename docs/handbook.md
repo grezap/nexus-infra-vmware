@@ -308,16 +308,27 @@ nexus-infra-vmware/
 │   ├── deb13.md                # per-template runbook (Phase 0.B.2)
 │   └── handbook.md             # this file
 ├── packer/
+│   ├── _shared/                # Phase 0.B.3 step 2 — DRY Ansible roles shared across templates
+│   │   └── ansible/roles/
+│   │       ├── nexus_identity/        # owner pubkey, sshd hardening, host-key regen drop-in
+│   │       ├── nexus_network/         # en*→nic0 + systemd-networkd + chrony client
+│   │       ├── nexus_firewall/        # nftables baseline
+│   │       └── nexus_observability/   # prometheus-node-exporter (room for OTel Collector)
 │   ├── nexus-gateway/
 │   │   ├── nexus-gateway.pkr.hcl
 │   │   ├── http/preseed.cfg
 │   │   ├── files/              # nftables.conf, dnsmasq.conf, chrony.conf
 │   │   └── ansible/roles/nexus_gateway/
-│   └── deb13/
-│       ├── deb13.pkr.hcl
-│       ├── http/preseed.cfg
-│       ├── files/              # nftables.conf, chrony.conf (client)
-│       └── ansible/roles/debian_base/
+│   ├── deb13/
+│   │   ├── deb13.pkr.hcl
+│   │   ├── http/preseed.cfg
+│   │   ├── files/              # nftables.conf, chrony.conf (client)
+│   │   └── ansible/roles/debian_base/    # thin OS tail: apt pkgs + Debian-Security origin + MOTD
+│   └── ubuntu24/
+│       ├── ubuntu24.pkr.hcl
+│       ├── http/user-data + meta-data    # Subiquity autoinstall (NoCloud)
+│       ├── files/              # nftables.conf, chrony.conf (ntp.ubuntu.com fallback)
+│       └── ansible/roles/ubuntu_base/    # thin OS tail: apt pkgs + cloud-init/netplan scrub + Ubuntu origin + MOTD
 ├── scripts/
 │   ├── configure-gateway-nics.ps1   # gateway-only (3 NICs, MAC-pinned)
 │   ├── configure-vm-nic.ps1         # shared single-NIC rewriter (modules/vm uses this)
@@ -325,7 +336,8 @@ nexus-infra-vmware/
 └── terraform/
     ├── gateway/                # Phase 0.B.1 — nexus-gateway
     ├── modules/vm/             # Phase 0.B.2 — reusable single-NIC clone driver
-    └── deb13-smoke/            # Phase 0.B.2 — smoke harness for modules/vm + deb13
+    ├── deb13-smoke/            # Phase 0.B.2 — smoke harness for modules/vm + deb13
+    └── ubuntu24-smoke/         # Phase 0.B.3 — smoke harness for ubuntu24
 ```
 
 Template VMs live at `H:\VMS\NexusPlatform\_templates\<name>\<name>.vmx`.
@@ -339,7 +351,7 @@ Running instances at `H:\VMS\NexusPlatform\<tier>\<name>\<name>.vmx` (tier = `00
 |-------|------|-----|
 | 0.B.1 | ✅ nexus-gateway | [nexus-gateway.md](nexus-gateway.md) |
 | 0.B.2 | ✅ Debian 13 base template + reusable `modules/vm/` | [deb13.md](deb13.md) |
-| 0.B.3 | Ubuntu 24.04 LTS base template + DRY `nexus_observability` role | *(pending)* |
+| 0.B.3 | ✅ Ubuntu 24.04 LTS base template + DRY `_shared/` roles (`nexus_identity`, `nexus_network`, `nexus_firewall`, `nexus_observability`) | [ubuntu24.md](ubuntu24.md) |
 | 0.B.4 | Windows Server 2025 Core template | *(pending)* |
 | 0.B.5 | Windows Server 2025 Desktop template | *(pending)* |
 | 0.B.6 | Windows 11 Enterprise template | *(pending)* |

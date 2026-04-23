@@ -114,18 +114,22 @@ The file exists from Subiquity's install step, pointing at `ens*` with `dhcp4: t
 
 Ubuntu's `pam_motd` pulls from `/etc/update-motd.d/` — dynamic scripts that inject Landscape adverts, ESM upgrade pitches, "XX updates can be applied" banners, and release-upgrade prompts. Making those scripts non-executable (`chmod 0644`) keeps them on-disk for audit but disables execution. `pam_motd` then falls back to static `/etc/motd`, which we own. Uses `failed_when: false` because not every minor release ships all the same scripts.
 
-### Shared parts with deb13 — the forcing function for Phase 0.B.3 step 2
+### Shared parts with deb13 — the Phase 0.B.3 step 2 DRY extraction
 
-After this template builds + smoke-passes, the extraction pass lifts the following tasks out of both `debian_base` and `ubuntu_base` into four roles under `packer/_shared/ansible/roles/`:
+With two concrete call sites (not one) the abstraction picks itself: everything behaviourally identical between `debian_base` and `ubuntu_base` lifts into four generic roles under [`packer/_shared/ansible/roles/`](../packer/_shared/ansible/roles/):
 
 | Shared role             | Lifts                                                           |
 |-------------------------|-----------------------------------------------------------------|
-| `nexus_identity`        | nexusadmin + pubkey, sshd hardening drop-in, host-key regen    |
-| `nexus_network`         | NIC rename `en*→nic0`, chrony client config                    |
-| `nexus_firewall`        | nftables baseline                                               |
-| `nexus_observability`   | prometheus-node-exporter (reserves room for OTel Collector)     |
+| `nexus_identity`        | nexusadmin pubkey → authorized_keys, sshd hardening drop-in, ssh.service ExecStartPre re-ordering (`ssh-keygen -A` before `sshd -t`) |
+| `nexus_network`         | NIC rename `en*→nic0` + systemd-networkd + chrony client config |
+| `nexus_firewall`        | nftables baseline (deny-in + SSH/9100 from VMnet11)             |
+| `nexus_observability`   | prometheus-node-exporter (room reserved for OTel Collector at Phase 0.I) |
 
-`debian_base` / `ubuntu_base` shrink to the OS-specific tail: unattended-upgrades origin pattern, MOTD string, and (ubuntu_base only) the cloud-init/netplan/update-motd cleanup. Both Packer pkr.hcl files add `../_shared/ansible/roles` to `role_paths` so shared roles resolve without symlinks.
+`debian_base` / `ubuntu_base` each shrink to the OS-specific tail:
+- `debian_base`: apt package list + Debian-Security `unattended-upgrades` origin + MOTD
+- `ubuntu_base`: apt package list + Ubuntu + ESM `unattended-upgrades` origins + cloud-init `network: {config: disabled}` + `/etc/netplan/50-cloud-init.yaml` removal + `/etc/update-motd.d/*` chmod 0644 + MOTD
+
+Both Packer pkr.hcl files list the four `../_shared/ansible/roles/<name>` entries in `role_paths` alongside their OS-specific role; the ansible-local provisioner uploads each as its own role directory and `playbook.yml` references them by name. No symlinks, no `vendor/`, no submodules.
 
 ## Rebuild procedure
 

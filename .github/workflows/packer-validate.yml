@@ -76,7 +76,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ansible-lint ansible
-      - run: ansible-lint packer/nexus-gateway/ansible/ packer/deb13/ansible/ packer/ubuntu24/ansible/
+      - run: ansible-lint packer/nexus-gateway/ansible/ packer/deb13/ansible/ packer/ubuntu24/ansible/ packer/_shared/ansible/
 
   shell-lint:
     name: ShellCheck + PSScriptAnalyzer

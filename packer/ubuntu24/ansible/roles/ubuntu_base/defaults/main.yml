@@ -1,20 +1,9 @@
 ---
 # ubuntu_base — defaults
 #
-# Overridable via Packer extra-vars. Current call-site:
-#   packer/ubuntu24/ubuntu24.pkr.hcl passes `target_user=${var.ssh_username}`
-#   (defaults to `nexusadmin`).
-#
-# Mirrors debian_base exactly — the Phase 0.B.3 DRY refactor extracts these
-# into _shared/ansible/roles/ once step 1 (ubuntu24 standing up end-to-end)
-# is verified.
+# Post-Phase 0.B.3 step 2: the generic variables (target_user, nic_name,
+# ssh_allow_cidr) live on the shared roles (nexus_identity, nexus_network)
+# and inherit from those. This file stays as an override hook for anything
+# Ubuntu-24-specific that might surface later.
 
 ubuntu_base_target_user: nexusadmin
-
-# Interface name produced by the systemd .link rename (OriginalName=en* →
-# this value). Matches the nftables rules in files/nftables.conf.
-ubuntu_base_nic_name: nic0
-
-# CIDR allowed to SSH into this template's clones. VMnet11 (192.168.70.0/24)
-# is the lab management plane.
-ubuntu_base_ssh_allow_cidr: 192.168.70.0/24

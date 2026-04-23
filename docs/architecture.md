@@ -73,7 +73,16 @@ packer/<template>/
       defaults/main.yml   # role inputs
 ```
 
-Common Ansible logic (user creation, OTel agent, node_exporter, Vault cert trust) is extracted into shared roles under `packer/_shared/ansible/roles/` once ≥2 templates need the same thing — Phase 0.B.3+.
+Common Ansible logic is extracted into shared roles under `packer/_shared/ansible/roles/` once ≥2 templates need the same thing. The Phase 0.B.3 DRY pass (landed after `deb13` and `ubuntu24` both existed) split the common baseline into four generic roles:
+
+| Shared role             | Responsibility                                                       |
+|-------------------------|----------------------------------------------------------------------|
+| `nexus_identity`        | Owner SSH pubkey → nexusadmin authorized_keys, sshd hardening drop-in, ssh.service ExecStartPre re-ordering so `ssh-keygen -A` runs before `sshd -t` on first boot |
+| `nexus_network`         | systemd `.link` rename `en* → nic0`, systemd-networkd DHCP, chrony client pointed at 192.168.70.1 |
+| `nexus_firewall`        | nftables baseline (deny-in; allow SSH + :9100 from VMnet11)          |
+| `nexus_observability`   | prometheus-node-exporter on :9100. Reserves room for OTel Collector (Phase 0.I), filebeat/vector, hardware exporters — added here as they become shared. |
+
+Per-template roles (`debian_base`, `ubuntu_base`, …) shrink to the OS-specific tail: distro-specific package lists, the `unattended-upgrades` origin pattern (`Debian-Security` vs `${distro_id}:${distro_codename}-security` + ESM), MOTD banner text, and (Ubuntu only) cloud-init network-config disable + `/etc/netplan/50-cloud-init.yaml` removal + `/etc/update-motd.d/*` chmod 0644. Each template's `ansible/playbook.yml` runs the four shared roles first, then its OS tail; Packer's `ansible-local` provisioner uploads each role via its `role_paths` list so they resolve by name without symlinks or vendored copies.
 
 ## Why vmrun/PowerShell for NIC config
 

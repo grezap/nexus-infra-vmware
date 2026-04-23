@@ -1,5 +1,11 @@
 ---
 # ubuntu24 — Ansible playbook (local, run by Packer ansible-local provisioner)
+#
+# Post-Phase 0.B.3 step 2: four generic roles (shipped from
+# packer/_shared/ansible/roles/) run first, then the thin Ubuntu-24.04 tail.
+# Order matters only loosely — nexus_identity deploys sshd config + drop-in
+# before ubuntu_base installs the unattended-upgrades origin; nexus_network
+# must run before nexus_firewall's rules take effect (nic0 must exist).
 - name: Configure ubuntu24 base template
   hosts: localhost
   connection: local
@@ -10,4 +16,8 @@
     target_user: "{{ target_user | default('nexusadmin') }}"
 
   roles:
+    - nexus_identity
+    - nexus_network
+    - nexus_firewall
+    - nexus_observability
     - ubuntu_base

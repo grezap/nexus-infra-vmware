@@ -119,10 +119,19 @@ build {
     ]
   }
 
-  # Apply the debian_base Ansible role
+  # Apply the shared nexus_* roles + the Debian-specific tail.
+  # ansible-local uploads each role_paths entry as its own directory under
+  # the target's /tmp/packer-provisioner-ansible-local/roles/, so they
+  # resolve by role name from playbook.yml without needing a roles/ parent.
   provisioner "ansible-local" {
     playbook_file = "ansible/playbook.yml"
-    role_paths    = ["ansible/roles/debian_base"]
+    role_paths = [
+      "ansible/roles/debian_base",
+      "../_shared/ansible/roles/nexus_identity",
+      "../_shared/ansible/roles/nexus_network",
+      "../_shared/ansible/roles/nexus_firewall",
+      "../_shared/ansible/roles/nexus_observability",
+    ]
     extra_arguments = [
       "--extra-vars",
       "target_user=${var.ssh_username}"
