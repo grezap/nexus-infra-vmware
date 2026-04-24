@@ -99,8 +99,8 @@ variable "cpus" {
 variable "memory_mb" {
   type    = number
   default = 4096
-  # WS2025 Setup nags below 2 GB. 4 GB gives Setup + VMware Tools install
-  # comfortable headroom; clones can be shrunk to 2048 via modules/vm/.
+  # WS2025 Core Setup + VMware Tools install fit in 4 GB comfortably.
+  # Clones can be shrunk to 2048 via modules/vm/ post-template.
 }
 
 variable "disk_gb" {

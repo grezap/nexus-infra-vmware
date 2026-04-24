@@ -12,12 +12,14 @@
       on recent builds and our vmware-iso source is firmware=efi.
     - No product key on evaluation path (ProductKey block omitted entirely)
       vs msdn (ProductKey present with Key). templatefile() renders one or
-      the other via Terraform-style %{ if } blocks.
+      the other via Terraform-style conditional template directives.
     - OOBESystem → FirstLogonCommands runs A:\bootstrap-winrm.ps1 to open
       the WinRM listener for Packer. Runtime remote access is OpenSSH, which
       01-nexus-identity.ps1 installs once we're past OOBE.
 -->
-<unattend xmlns="urn:schemas-microsoft-com:unattend">
+<unattend xmlns="urn:schemas-microsoft-com:unattend"
+          xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 
   <!-- ─── Phase 1: windowsPE — partition + pick image + product key ── -->
   <settings pass="windowsPE">

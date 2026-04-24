@@ -112,6 +112,11 @@ source "vmware-iso" "ws2025_core" {
   memory        = var.memory_mb
   disk_size     = var.disk_gb * 1024
   disk_type_id  = 0 # growable single-file VMDK
+  # WS2025 WinPE doesn't include the VMware PVSCSI driver -- Setup can't see
+  # the disk and shows an empty "Select location to install Windows" list.
+  # lsilogic-sas is built into Windows Setup's driver store; post-install,
+  # 00-install-vmware-tools.ps1 adds the PVSCSI driver for runtime VMs.
+  disk_adapter_type = "lsisas1068"
 
   # Single NIC, NAT during build for Windows Update / VMware Tools fetch.
   # Terraform modules/vm/ attaches the real VMnet11 NIC at clone time.
@@ -132,10 +137,38 @@ source "vmware-iso" "ws2025_core" {
     "scripts/bootstrap-winrm.ps1"
   ]
 
-  # Windows Setup auto-boots from the ISO with zero keystrokes — no boot_command
-  # needed. The long boot_wait lets the Windows bootloader hand off to Setup
-  # (which then finds Autounattend.xml on A:\).
-  boot_wait = "10s"
+  # Windows Server 2025 ISOs show "Press any key to boot from CD or DVD..." for
+  # ~5 seconds. If no key is pressed, EFI falls through past the empty disk and
+  # lands at the UEFI Boot Manager menu (stuck). We send a burst of <enter>s to
+  # catch that window. Once Setup is running it reads Autounattend.xml from A:\
+  # and the install is hands-off from there.
+  # EFI firmware on WS2025 ISOs does NOT honor keystrokes during its
+  # device-probe phase, and there's no reliable press-any-key window on the
+  # CDROM. Instead, let EFI walk through its default boot order (empty HDD ->
+  # CDROM probe -> Floppy -> Network timeout) and land at the Boot Manager
+  # menu. Then we navigate explicitly to "EFI VMware Virtual IDE CDROM Drive".
+  #
+  # Boot Manager layout (cursor starts on "Boot normally"):
+  #   > Boot normally
+  #     EFI VMware Virtual SCSI Hard Drive (0.0)
+  #     EFI VMware Virtual IDE CDROM Drive (IDE 0:0)   <-- down x2 + enter
+  #     EFI Floppy
+  #     EFI Network
+  #     ...
+  # 90s is conservative -- Network probe alone can take ~30s to time out.
+  boot_wait    = "90s"
+  boot_command = [
+    # Stage 1: navigate EFI Boot Manager -> "EFI VMware Virtual IDE CDROM".
+    "<down><down><enter>",
+    # Stage 2: "Press any key to boot from CD or DVD..." -- ~5s window.
+    # One spacebar is enough; more can pollute Setup's keyboard buffer and
+    # cause the initial Setup UI to crash (observed: blue-screen-then-reboot
+    # loop with 16 spacebars).
+    "<wait3><spacebar>",
+    # Stage 3: Windows Boot Manager from CD -- "Windows Setup [EMS Enabled]"
+    # is default-highlighted; press Enter to proceed into Setup.
+    "<wait5><enter>",
+  ]
 
   # WinRM — listener enabled via FirstLogonCommands → bootstrap-winrm.ps1.
   communicator   = "winrm"
@@ -156,6 +189,7 @@ source "vmware-iso" "ws2025_core" {
   # VMware Tools — upload windows.iso from the Workstation install to
   # C:\Windows\Temp\windows.iso; scripts/05-windows-baseline.ps1 mounts
   # and installs it silently.
+  tools_mode          = "upload"
   tools_upload_flavor = "windows"
   tools_upload_path   = "C:\\Windows\\Temp\\windows.iso"
 
@@ -164,7 +198,7 @@ source "vmware-iso" "ws2025_core" {
   vmx_remove_ethernet_interfaces = true
 
   vmx_data = {
-    "annotation"           = "ws2025-core Windows Server 2025 Core base template (Phase 0.B.4) — built by Packer"
+    "annotation"           = "ws2025-core Windows Server 2025 Core base template (Phase 0.B.4) -- built by Packer"
     "tools.upgrade.policy" = "useGlobal"
   }
 }
