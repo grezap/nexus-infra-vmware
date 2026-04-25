@@ -15,23 +15,12 @@ $ErrorActionPreference = 'Continue'   # don't hard-fail on log-clear noise
 
 Write-Host "=== 99-sysprep: teardown + generalize ==="
 
-# -- 1. Remove build-time WinRM HTTP listener + firewall rule --------------
-try {
-    # Remove every HTTP listener (there should be one -- Address=*, Transport=HTTP)
-    $listeners = & winrm enumerate winrm/config/listener 2>$null
-    if ($listeners -match 'Transport = HTTP\s') {
-        & winrm delete winrm/config/Listener?Address=*+Transport=HTTP 2>$null | Out-Null
-    }
-    Remove-NetFirewallRule -Name 'WinRM-HTTP-In-Build' -ErrorAction SilentlyContinue
-
-    # Turn off Basic auth + unencrypted -- won't affect runtime (no listener)
-    # but belt-and-braces in case someone manually re-creates one later.
-    & winrm set winrm/config/service/auth '@{Basic="false"}' 2>$null | Out-Null
-    & winrm set winrm/config/service '@{AllowUnencrypted="false"}' 2>$null | Out-Null
-}
-catch {
-    Write-Host "WARN teardown WinRM: $($_.Exception.Message)"
-}
+# -- 1. WinRM teardown is DEFERRED to the post-cleanup scheduled task.
+# Doing it inline kills Packer's per-provisioner cleanup upload (HTTP 401 ->
+# "Couldn't create shell"). The deferred task at the bottom of this script
+# tears down the listener + firewall rule + auth knobs immediately before
+# launching sysprep, by which point Packer has finished cleanup and is in
+# its shutdown wait phase.
 
 # -- 2. Clear event logs --------------------------------------------------
 wevtutil el | ForEach-Object {
@@ -39,7 +28,7 @@ wevtutil el | ForEach-Object {
 }
 
 # -- 3. Nuke Packer working files -----------------------------------------
-Remove-Item -Recurse -Force 'C:\Windows\Temp\*' -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force 'C:\Windows\Temp\*' -Exclude 'packer-*' -ErrorAction SilentlyContinue
 
 # -- 4. Clear DNS cache --------------------------------------------------
 Clear-DnsClientCache
@@ -81,9 +70,44 @@ $sysprepUnattend = @'
 $unattendPath = 'C:\Windows\System32\Sysprep\unattend.xml'
 Set-Content -Path $unattendPath -Value $sysprepUnattend -Encoding utf8
 
-Write-Host "Starting sysprep /generalize /oobe /shutdown"
-& "$env:WINDIR\System32\Sysprep\sysprep.exe" /generalize /oobe /shutdown /quiet /unattend:$unattendPath
+# Sysprep launch is *deferred* via a one-shot scheduled task that fires 90s
+# in the future. Why: sysprep tears down the WinRM listener as part of
+# /generalize. If we invoke it inline, Packer's per-provisioner cleanup
+# phase (which uploads packer-cleanup-XXXX.ps1 to delete this script's
+# remnants on C:\Windows\Temp) hits a dead listener and the build errors
+# out with HTTP 401 -> connection-refused. By the time the deferred task
+# fires, Packer has long since finished cleanup and entered shutdown_command
+# wait, so it just observes the VM power off normally.
+#
+# 90s is conservative -- empirically Packer's post-script cleanup completes
+# in <5s on this host, but the cost of overshooting is just a slightly later
+# shutdown.
+# Composite command: tear down WinRM listener/auth, then run sysprep. This
+# runs as SYSTEM at T+90s, well after Packer's cleanup window has closed.
+$deferredCmd = @"
+try {
+    `$listeners = & winrm enumerate winrm/config/listener 2>`$null
+    if (`$listeners -match 'Transport = HTTP\s') {
+        & winrm delete 'winrm/config/Listener?Address=*+Transport=HTTP' 2>`$null | Out-Null
+    }
+    Remove-NetFirewallRule -Name 'WinRM-HTTP-In-Build' -ErrorAction SilentlyContinue
+    & winrm set winrm/config/service/auth '@{Basic=\"false\"}' 2>`$null | Out-Null
+    & winrm set winrm/config/service '@{AllowUnencrypted=\"false\"}' 2>`$null | Out-Null
+} catch { }
+& "`$env:WINDIR\System32\Sysprep\sysprep.exe" /generalize /oobe /shutdown /quiet /unattend:"$unattendPath"
+"@
+$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($deferredCmd))
 
-# Sysprep takes the VM down itself. Give Packer something to watch -- it sees
-# the VM power off via VMware Tools + closes out the build.
-Start-Sleep -Seconds 120
+$action  = New-ScheduledTaskAction -Execute 'powershell.exe' `
+    -Argument "-NoProfile -WindowStyle Hidden -EncodedCommand $encoded"
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(90)
+$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest -LogonType ServiceAccount
+$settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable
+
+Write-Host "Scheduling deferred sysprep /generalize /oobe /shutdown (T+90s)"
+Register-ScheduledTask -TaskName 'NexusDeferredSysprep' `
+    -Action $action -Trigger $trigger -Principal $principal -Settings $settings `
+    -Force | Out-Null
+
+Write-Host "=== 99-sysprep: scheduled; returning so Packer cleanup can drain ==="

@@ -37,7 +37,15 @@ if (-not (Test-Path $dcKey)) { New-Item -Path $dcKey -Force | Out-Null }
 Set-ItemProperty -Path $dcKey -Name 'AllowTelemetry' -Value 0 -Type DWord
 
 # -- 3. PS execution policy -----------------------------------------------
-Set-ExecutionPolicy -Scope LocalMachine -ExecutionPolicy RemoteSigned -Force
+# Write the machine-scope policy directly to the registry rather than via
+# Set-ExecutionPolicy. Packer invokes provisioners with `-ExecutionPolicy
+# Bypass`, which sets Process scope; Set-ExecutionPolicy -Scope LocalMachine
+# then emits a non-terminating "override" warning that $ErrorActionPreference
+# promotes to terminating. The registry write achieves the same persistence
+# (applies to future non-Packer sessions) without the warning.
+$psPolicyKey = 'HKLM:\SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell'
+if (-not (Test-Path $psPolicyKey)) { New-Item -Path $psPolicyKey -Force | Out-Null }
+Set-ItemProperty -Path $psPolicyKey -Name 'ExecutionPolicy' -Value 'RemoteSigned' -Type String
 
 # -- 4. Login banner (Windows equivalent of /etc/motd) --------------------
 $lsaKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'

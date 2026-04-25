@@ -13,11 +13,22 @@
 $ErrorActionPreference = 'Stop'
 
 # -- 1. NIC rename: whatever the single active Ethernet adapter is -> nic0 --
-$adapters = Get-NetAdapter -Physical | Where-Object Status -eq 'Up'
+# @(...) wrap: empty pipeline yields $null, not a 0-length array; without @()
+# $adapters.Count prints blank and the comparison misbehaves.
+$adapters = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue |
+    Where-Object { $_.Status -eq 'Up' })
+if ($adapters.Count -eq 0) {
+    # Fallback: relax the Physical filter -- VMware e1000e sometimes classifies
+    # oddly right after a VMware Tools install + restart. Accept any Up Ethernet.
+    $adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue |
+        Where-Object { $_.Status -eq 'Up' -and $_.MediaType -eq '802.3' })
+    Write-Host "Primary -Physical filter empty; relaxed fallback found $($adapters.Count) adapter(s)"
+}
+
 if ($adapters.Count -ne 1) {
-    # Packer build runs with a single NAT NIC. If we see more, log + skip
+    # Packer build runs with a single NAT NIC. If we see more/less, log + skip
     # instead of failing -- Terraform modules/vm/ will reassign at clone time.
-    Write-Host "WARN: expected 1 active physical adapter, found $($adapters.Count). Skipping rename."
+    Write-Host "WARN: expected 1 active Ethernet adapter, found $($adapters.Count). Skipping rename."
 }
 else {
     $nic = $adapters[0]
@@ -31,25 +42,30 @@ else {
 
 # -- 2. W32Time -> chrony-equivalent client pointed at the gateway ----------
 # During build we have NAT -> internet, so using the gateway IP (192.168.70.1)
-# would fail (not routable from NAT). Point at time.windows.com during build;
-# Terraform post-clone or a first-boot script re-points at the gateway once
-# VMnet11 is the live NIC.
+# would fail (not routable from NAT). Configure W32Time with the gateway as
+# the manual peer + time.windows.com fallback; the service re-syncs on the
+# first post-clone boot when VMnet11 is the live NIC.
 #
-# For the template baseline we still want the *runtime* target to be the
-# gateway. So: configure W32Time with the gateway as the manual peer, but
-# leave it Disabled during the build; the service will try the peer on first
-# post-clone boot and, failing that, fall back to time.windows.com NTP.
+# Implementation note: /update requires w32time to be RUNNING (it's a SCM
+# notify-reconfig call). Starting it first, not stopping it. Older pattern of
+# "Stop-Service; w32tm /config /update" yields 0x80070426 ERROR_SERVICE_NOT_ACTIVE
+# and leaks that exit code via $LastExitCode.
 
 Write-Host "Configuring W32Time for runtime: gateway (192.168.70.1) primary, time.windows.com fallback"
 
-# Stop w32time so config takes cleanly
-Stop-Service -Name w32time -ErrorAction SilentlyContinue
-
-# Manual peer list -- gateway first, time.windows.com as safety net
-w32tm /config /manualpeerlist:"192.168.70.1,0x8 time.windows.com,0x9" /syncfromflags:manual /reliable:no /update | Out-Null
-
-# Make sure service starts automatically at runtime
+# Ensure w32time is running so /config /update can reconfigure the live service.
 Set-Service -Name w32time -StartupType Automatic
+Start-Service -Name w32time -ErrorAction SilentlyContinue
+
+# Manual peer list -- gateway first, time.windows.com as safety net.
+# Swallow output but check exit code explicitly so it doesn't leak to Packer.
+$null = & w32tm /config /manualpeerlist:"192.168.70.1,0x8 time.windows.com,0x9" `
+    /syncfromflags:manual /reliable:no /update 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "WARN: w32tm /config exited $LASTEXITCODE -- template runtime will re-sync on first boot"
+    # Reset so the wrapper's `exit $LastExitCode` doesn't propagate this.
+    $global:LASTEXITCODE = 0
+}
 
 # -- 3. DNS -- point at the gateway's dnsmasq (192.168.70.1) ----------------
 # During build the NAT DHCP supplies its own DNS, which is fine. We bake the

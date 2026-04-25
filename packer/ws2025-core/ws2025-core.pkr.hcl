@@ -186,12 +186,12 @@ source "vmware-iso" "ws2025_core" {
 
   headless = true
 
-  # VMware Tools — upload windows.iso from the Workstation install to
-  # C:\Windows\Temp\windows.iso; scripts/05-windows-baseline.ps1 mounts
-  # and installs it silently.
-  tools_mode          = "upload"
-  tools_upload_flavor = "windows"
-  tools_upload_path   = "C:\\Windows\\Temp\\windows.iso"
+  # VMware Tools -- attach windows.iso as a CD-ROM device (zero-copy; no
+  # WinRM upload). scripts/00-install-vmware-tools.ps1 finds the attached
+  # Tools CD by scanning optical drives for setup64.exe/setup.exe/MSI and
+  # runs the silent installer from the CD directly.
+  tools_mode        = "attach"
+  tools_source_path = "C:/Program Files (x86)/VMware/VMware Workstation/windows.iso"
 
   # Strip NIC config — Terraform modules/vm/ rewrites it post-clone, same
   # pattern as deb13/ubuntu24.
