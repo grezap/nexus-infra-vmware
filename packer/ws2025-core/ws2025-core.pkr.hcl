@@ -156,7 +156,7 @@ source "vmware-iso" "ws2025_core" {
   #     EFI Network
   #     ...
   # 90s is conservative -- Network probe alone can take ~30s to time out.
-  boot_wait    = "90s"
+  boot_wait = "90s"
   boot_command = [
     # Stage 1: navigate EFI Boot Manager -> "EFI VMware Virtual IDE CDROM".
     "<down><down><enter>",
