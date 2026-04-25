@@ -7,7 +7,9 @@ Full runbook in [`docs/ws2025-core.md`](../../docs/ws2025-core.md). This README 
 ```
 packer/ws2025-core/
 ├── ws2025-core.pkr.hcl                    # vmware-iso + WinRM + floppy Autounattend
-├── variables.pkr.hcl                      # ISO paths + product_source + tunables
+└── variables.pkr.hcl                      # ISO paths + product_source + tunables
+
+packer/_shared/powershell/                 # DRY-extracted at Phase 0.B.5 (shared with ws2025-desktop)
 ├── floppy/
 │   └── Autounattend.xml.tpl               # templatefile() renders into floppy_content
 ├── scripts/

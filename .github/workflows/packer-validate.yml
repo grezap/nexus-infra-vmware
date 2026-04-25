@@ -21,9 +21,9 @@ jobs:
           - nexus-gateway
           - deb13        # Phase 0.B.2
           - ubuntu24     # Phase 0.B.3
-          - ws2025-core  # Phase 0.B.4
+          - ws2025-core    # Phase 0.B.4
+          - ws2025-desktop # Phase 0.B.5
           # Remaining templates are stubs until filled in:
-          # - ws2025-desktop # Phase 0.B.5
           # - win11ent      # Phase 0.B.6
     steps:
       - uses: actions/checkout@v4
@@ -56,6 +56,7 @@ jobs:
           - deb13-smoke
           - ubuntu24-smoke
           - ws2025-core-smoke
+          - ws2025-desktop-smoke
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
@@ -95,7 +96,8 @@ jobs:
         run: |
           Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
           $targets = @(
-            'packer/ws2025-core/scripts',
+            'packer/_shared/powershell/scripts',
+            'packer/ws2025-desktop/scripts',
             'scripts'
           ) | Where-Object { Test-Path $_ }
           $issues = foreach ($t in $targets) {

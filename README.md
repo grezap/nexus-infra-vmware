@@ -55,10 +55,12 @@ packer/
     http/preseed.cfg         Debian automated install
     files/{nftables,dnsmasq,chrony}.conf
     ansible/playbook.yml     post-install config
-  deb13/                     Generic Debian 13 template (stub, Phase 0.B.2)
-  ubuntu24/                  Ubuntu 24.04 template    (stub, Phase 0.B.3)
-  ws2025-core/               Windows Server 2025 Core (stub, Phase 0.B.4)
-  ws2025-desktop/            Windows Server 2025 Desktop (stub, Phase 0.B.5)
+  deb13/                     Generic Debian 13 template (Phase 0.B.2)
+  ubuntu24/                  Ubuntu 24.04 template    (Phase 0.B.3)
+  _shared/ansible/roles/     DRY-extracted Linux baseline roles (Phase 0.B.3)
+  ws2025-core/               Windows Server 2025 Core (Phase 0.B.4)
+  ws2025-desktop/            Windows Server 2025 Desktop Experience (Phase 0.B.5)
+  _shared/powershell/        DRY-extracted Windows baseline scripts (Phase 0.B.5)
   win11ent/                  Windows 11 Enterprise    (stub, Phase 0.B.6)
 
 terraform/

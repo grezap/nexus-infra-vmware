@@ -87,7 +87,7 @@ locals {
   # It is *not* written to disk — floppy_content provides the rendered bytes
   # directly to Packer's floppy builder. Therefore no gitignored artifact is
   # produced on the build host, which closes the main leak vector for the key.
-  autounattend_xml = templatefile("${path.root}/floppy/Autounattend.xml.tpl", {
+  autounattend_xml = templatefile("${path.root}/../_shared/powershell/floppy/Autounattend.xml.tpl", {
     image_name     = local.image_name
     product_key    = local.product_key
     admin_username = var.admin_username
@@ -134,7 +134,7 @@ source "vmware-iso" "ws2025_core" {
     "Autounattend.xml" = local.autounattend_xml
   }
   floppy_files = [
-    "scripts/bootstrap-winrm.ps1"
+    "../_shared/powershell/scripts/bootstrap-winrm.ps1"
   ]
 
   # Windows Server 2025 ISOs show "Press any key to boot from CD or DVD..." for
@@ -210,7 +210,7 @@ build {
 
   # ── Stage the authorized_keys file for nexusadmin's OpenSSH config ────
   provisioner "file" {
-    source      = "files/nexusadmin-authorized_keys"
+    source      = "../_shared/powershell/files/nexusadmin-authorized_keys"
     destination = "C:/Windows/Temp/nexusadmin-authorized_keys"
   }
 
@@ -218,7 +218,7 @@ build {
   # Runs first so subsequent reboots have Tools-aware shutdown/time sync.
   provisioner "powershell" {
     scripts = [
-      "scripts/00-install-vmware-tools.ps1"
+      "../_shared/powershell/scripts/00-install-vmware-tools.ps1"
     ]
   }
   provisioner "windows-restart" {
@@ -227,16 +227,16 @@ build {
 
   # ── Nexus baseline (PowerShell parallel to the Linux shared roles) ────
   # Each script is the Windows analog of one of the _shared/ansible/roles.
-  # Kept as separate numbered scripts so a failure stops at the offending
-  # layer and logs are obvious; final DRY extraction will split these into
-  # _shared/powershell/modules/ when ws2025-desktop lands (Phase 0.B.5).
+  # Phase 0.B.5 DRY pass: scripts live under packer/_shared/powershell/scripts/
+  # and are referenced by both ws2025-core and ws2025-desktop (two-call-sites
+  # rule, mirrors the _shared/ansible/roles extraction at Phase 0.B.3).
   provisioner "powershell" {
     scripts = [
-      "scripts/01-nexus-identity.ps1",      # nexusadmin user, OpenSSH Server, authorized_keys, sshd hardening
-      "scripts/02-nexus-network.ps1",       # NIC rename nic0, static DNS at 192.168.70.1, W32Time client
-      "scripts/03-nexus-firewall.ps1",      # Windows Firewall baseline (deny-in + SSH/5986/9182 from VMnet11)
-      "scripts/04-nexus-observability.ps1", # windows_exporter service on :9182
-      "scripts/05-windows-baseline.ps1",    # Defender AV baseline, telemetry off, login banner, Start Menu pins sanity
+      "../_shared/powershell/scripts/01-nexus-identity.ps1",      # nexusadmin user, OpenSSH Server, authorized_keys, sshd hardening
+      "../_shared/powershell/scripts/02-nexus-network.ps1",       # NIC rename nic0, static DNS at 192.168.70.1, W32Time client
+      "../_shared/powershell/scripts/03-nexus-firewall.ps1",      # Windows Firewall baseline (deny-in + SSH/5986/9182 from VMnet11)
+      "../_shared/powershell/scripts/04-nexus-observability.ps1", # windows_exporter service on :9182
+      "../_shared/powershell/scripts/05-windows-baseline.ps1",    # Defender AV baseline, telemetry off, login banner, Start Menu pins sanity
     ]
     environment_vars = [
       "NEXUS_ADMIN_USERNAME=${var.admin_username}"
@@ -247,7 +247,7 @@ build {
   # Packer's shutdown_command is a no-op; sysprep handles the actual poweroff.
   provisioner "powershell" {
     scripts = [
-      "scripts/99-sysprep.ps1"
+      "../_shared/powershell/scripts/99-sysprep.ps1"
     ]
     # Expect non-zero while the VM powers off; don't fail the build on that.
     valid_exit_codes = [0, 1, 2, 259, 2147942402]
