@@ -11,7 +11,7 @@ OUTPUT_ROOT ?= H:/VMS/NexusPlatform/_templates
         ubuntu24 ubuntu24-smoke ubuntu24-smoke-destroy \
         ws2025-core ws2025-core-msdn ws2025-core-smoke ws2025-core-smoke-destroy \
         ws2025-desktop ws2025-desktop-msdn ws2025-desktop-smoke ws2025-desktop-smoke-destroy \
-        win11ent \
+        win11ent win11ent-msdn win11ent-smoke win11ent-smoke-destroy \
         all-templates clean
 
 help:
@@ -35,7 +35,10 @@ help:
 	@echo "  make ws2025-desktop-msdn - Build Windows Server 2025 Desktop (retail/MSDN ISO + bootstrap key)"
 	@echo "  make ws2025-desktop-smoke         - Instantiate ws2025-desktop via modules/vm (smoke test)"
 	@echo "  make ws2025-desktop-smoke-destroy - Tear down the ws2025-desktop smoke VM"
-	@echo "  make win11ent         - Build Windows 11 Enterprise template"
+	@echo "  make win11ent         - Build Windows 11 Enterprise template (evaluation ISO)"
+	@echo "  make win11ent-msdn    - Build Windows 11 Enterprise (retail/MSDN ISO + bootstrap key)"
+	@echo "  make win11ent-smoke         - Instantiate win11ent via modules/vm (smoke test)"
+	@echo "  make win11ent-smoke-destroy - Tear down the win11ent smoke VM"
 	@echo "  make all-templates    - Build every template in order"
 	@echo ""
 	@echo "  make validate         - packer validate + terraform fmt/validate (all)"
@@ -47,11 +50,13 @@ init:
 	@cd packer/ubuntu24         && $(PACKER) init ubuntu24.pkr.hcl
 	@cd packer/ws2025-core      && $(PACKER) init ws2025-core.pkr.hcl
 	@cd packer/ws2025-desktop   && $(PACKER) init ws2025-desktop.pkr.hcl
+	@cd packer/win11ent         && $(PACKER) init win11ent.pkr.hcl
 	@cd terraform/gateway              && $(TERRAFORM) init
 	@cd terraform/deb13-smoke          && $(TERRAFORM) init
 	@cd terraform/ubuntu24-smoke       && $(TERRAFORM) init
 	@cd terraform/ws2025-core-smoke    && $(TERRAFORM) init
 	@cd terraform/ws2025-desktop-smoke && $(TERRAFORM) init
+	@cd terraform/win11ent-smoke       && $(TERRAFORM) init
 
 validate:
 	@echo "→ packer validate nexus-gateway"
@@ -64,6 +69,8 @@ validate:
 	@cd packer/ws2025-core   && $(PACKER) validate .
 	@echo "→ packer validate ws2025-desktop"
 	@cd packer/ws2025-desktop && $(PACKER) validate .
+	@echo "→ packer validate win11ent"
+	@cd packer/win11ent       && $(PACKER) validate .
 	@echo "→ terraform fmt -check (all)"
 	@cd terraform                    && $(TERRAFORM) fmt -check -recursive
 	@echo "→ terraform validate (gateway)"
@@ -76,6 +83,8 @@ validate:
 	@cd terraform/ws2025-core-smoke    && $(TERRAFORM) init -backend=false && $(TERRAFORM) validate
 	@echo "→ terraform validate (ws2025-desktop-smoke)"
 	@cd terraform/ws2025-desktop-smoke && $(TERRAFORM) init -backend=false && $(TERRAFORM) validate
+	@echo "→ terraform validate (win11ent-smoke)"
+	@cd terraform/win11ent-smoke       && $(TERRAFORM) init -backend=false && $(TERRAFORM) validate
 
 # ─── Phase 0.B.1 — nexus-gateway (VM #0) ─────────────────────────────────
 
@@ -149,10 +158,23 @@ ws2025-desktop-smoke:
 ws2025-desktop-smoke-destroy:
 	@cd terraform/ws2025-desktop-smoke && $(TERRAFORM) destroy -auto-approve
 
-# ─── Phase 0.B.6 — remaining Windows template (stub until implemented) ───
+# ─── Phase 0.B.6 — win11ent Windows 11 Enterprise client template ────────
 
 win11ent:
 	@cd packer/win11ent       && $(PACKER) build .
+
+# Owner-only: msdn/retail ISO + bootstrap JSON with product key. Mirrors
+# ws2025-*-msdn -- same JSON, different key (template name = win11ent).
+win11ent-msdn:
+	@cd packer/win11ent       && $(PACKER) build \
+		-var "product_source=msdn" \
+		-var "bootstrap_keys_file=$(USERPROFILE)/.nexus/secrets/windows-keys.json" .
+
+win11ent-smoke:
+	@cd terraform/win11ent-smoke && $(TERRAFORM) apply -auto-approve
+
+win11ent-smoke-destroy:
+	@cd terraform/win11ent-smoke && $(TERRAFORM) destroy -auto-approve
 
 all-templates: gateway deb13 ubuntu24 ws2025-core ws2025-desktop win11ent
 

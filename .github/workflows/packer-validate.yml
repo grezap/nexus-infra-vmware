@@ -23,8 +23,7 @@ jobs:
           - ubuntu24     # Phase 0.B.3
           - ws2025-core    # Phase 0.B.4
           - ws2025-desktop # Phase 0.B.5
-          # Remaining templates are stubs until filled in:
-          # - win11ent      # Phase 0.B.6
+          - win11ent       # Phase 0.B.6
     steps:
       - uses: actions/checkout@v4
 
@@ -57,6 +56,7 @@ jobs:
           - ubuntu24-smoke
           - ws2025-core-smoke
           - ws2025-desktop-smoke
+          - win11ent-smoke
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
@@ -98,6 +98,7 @@ jobs:
           $targets = @(
             'packer/_shared/powershell/scripts',
             'packer/ws2025-desktop/scripts',
+            'packer/win11ent/scripts',
             'scripts'
           ) | Where-Object { Test-Path $_ }
           $issues = foreach ($t in $targets) {
