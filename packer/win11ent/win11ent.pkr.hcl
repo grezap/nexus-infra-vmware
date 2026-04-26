@@ -7,7 +7,7 @@
  * portfolio demos (the desktop-app side of the Nexus showcase).
  *
  * Reuses the entire packer/_shared/powershell/ bundle:
- *   - floppy/Autounattend.xml.tpl   (parametric on image_name only)
+ *   - floppy/Autounattend.xml.tpl   (image_name + bypass_win11_checks)
  *   - scripts/00-install-vmware-tools.ps1
  *   - scripts/01-nexus-identity.ps1     ← identity, OpenSSH, nexusadmin, key
  *   - scripts/02-nexus-network.ps1      ← network/DNS baseline
@@ -17,9 +17,10 @@
  *   - scripts/99-sysprep.ps1
  * The win11ent delta is a single client-tooling script under scripts/.
  *
- * NEW vs WS2025 templates: Win11 enforces TPM 2.0 + Secure Boot + UEFI at
- * install. We provide them via VMware Workstation's vTPM ("software" key
- * provider) — see vmx_data block below for the encryption tradeoff.
+ * Win11 install gate: Setup checks TPM 2.0 + Secure Boot + RAM. Standalone
+ * VMware Workstation cannot expose a real vTPM to Packer headlessly, so
+ * the gate is satisfied via LabConfig regkeys written by Autounattend's
+ * windowsPE RunSynchronousCommands (bypass_win11_checks=true). See README.
  *
  * Build:   make win11ent
  * Smoke:   make win11ent-smoke
@@ -72,15 +73,17 @@ locals {
   # Same shared Autounattend template as the WS2025 templates. Win11
   # Enterprise honors LocalAccount + AutoLogon and the OOBE skip flags
   # without needing the BypassNRO registry hack that Win11 Pro/Home would.
-  # If a future Win11 build smuggles in an MSA prompt anyway, add
-  #   reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE /v BypassNRO /t REG_DWORD /d 1
-  # as the first FirstLogonCommand in the shared tpl (harmless on Server).
+  # bypass_win11_checks=true emits the LabConfig RunSynchronousCommands
+  # that skip the TPM/Secure-Boot/RAM gates -- see template header for
+  # the full rationale (standalone Workstation can't expose a real vTPM
+  # to Packer headlessly).
   autounattend_xml = templatefile("${path.root}/../_shared/powershell/floppy/Autounattend.xml.tpl", {
-    image_name     = local.image_name
-    product_key    = local.product_key
-    admin_username = var.admin_username
-    admin_password = var.admin_password
-    computer_name  = var.vm_name
+    image_name          = local.image_name
+    product_key         = local.product_key
+    admin_username      = var.admin_username
+    admin_password      = var.admin_password
+    computer_name       = var.vm_name
+    bypass_win11_checks = true
   })
 }
 
@@ -107,8 +110,7 @@ source "vmware-iso" "win11ent" {
   network_adapter_type = "e1000e"
   network              = "nat"
 
-  # Hardware version ≥ 14 is required for vTPM; 20 is the Workstation 17
-  # default and matches the WS2025 templates.
+  # HW version 20 matches the WS2025 templates; UEFI required by Win11.
   version  = "20"
   firmware = "efi"
 
@@ -148,31 +150,12 @@ source "vmware-iso" "win11ent" {
 
   vmx_remove_ethernet_interfaces = true
 
-  # ─── vTPM + Secure Boot (Win11 install requirement) ────────────────────
-  # Win11 Setup refuses to install without TPM 2.0 + Secure Boot. We provide
-  # both via VMware Workstation's "software" vTPM mode:
-  #
-  #   managedvm.autoAddVTPM = "software"
-  #     Adds a virtual TPM 2.0 device backed by a host-derived key — no
-  #     encryption password required at boot or clone time.
-  #   uefi.secureBoot.enabled = "TRUE"
-  #     Required for Win11; vmware-iso's firmware=efi already sets up UEFI,
-  #     this flag flips Secure Boot from "available" to "enforced".
-  #   encryption.required = "FALSE"
-  #     Forces "TPM-only" encryption: only the .nvram (vTPM key blob) is
-  #     encrypted on disk; the .vmx and .vmdk stay plaintext. Tradeoff vs
-  #     full VM encryption: we lose at-rest secrecy of the disk image (raw
-  #     .vmdk is mountable) in exchange for keeping Packer manifest reads
-  #     and Terraform clone-from-template flows working without
-  #     encryption-key distribution. The template carries no real secrets
-  #     (bootstrap creds rotated to Vault in Phase 0.D), so the loss is
-  #     paper-only. Per-clone Terraform full encryption stays an option.
+  # No vTPM keys: standalone Workstation ignores managedvm.autoAddVTPM
+  # (vSphere-only) and the install-time gate is satisfied via LabConfig
+  # bypass instead. See template header for context.
   vmx_data = {
-    "annotation"              = "win11ent Windows 11 Enterprise base template (Phase 0.B.6) -- built by Packer"
-    "tools.upgrade.policy"    = "useGlobal"
-    "managedvm.autoAddVTPM"   = "software"
-    "uefi.secureBoot.enabled" = "TRUE"
-    "encryption.required"     = "FALSE"
+    "annotation"           = "win11ent Windows 11 Enterprise base template (Phase 0.B.6) -- built by Packer"
+    "tools.upgrade.policy" = "useGlobal"
   }
 }
 

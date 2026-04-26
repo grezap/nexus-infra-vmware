@@ -64,11 +64,12 @@ locals {
 
   # Same shared Autounattend template as ws2025-core; only image_name differs.
   autounattend_xml = templatefile("${path.root}/../_shared/powershell/floppy/Autounattend.xml.tpl", {
-    image_name     = local.image_name
-    product_key    = local.product_key
-    admin_username = var.admin_username
-    admin_password = var.admin_password
-    computer_name  = var.vm_name
+    image_name          = local.image_name
+    product_key         = local.product_key
+    admin_username      = var.admin_username
+    admin_password      = var.admin_password
+    computer_name       = var.vm_name
+    bypass_win11_checks = false
   })
 }
 
