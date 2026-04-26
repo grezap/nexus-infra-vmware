@@ -170,11 +170,21 @@ build {
     destination = "C:/Windows/Temp/nexusadmin-authorized_keys"
   }
 
+  # ── elevated_user/password: Win11 specific ─────────────────────────────
+  # Win11 (unlike Server SKUs) gives Packer's WinRM-launched PowerShell a
+  # session that lacks the privileges DISM/TrustedInstaller need for
+  # Add-WindowsCapability, Install-WindowsFeature, and similar setup-level
+  # operations. LocalAccountTokenFilterPolicy=1 in bootstrap-winrm.ps1
+  # helps for most cmdlets but not for DISM. Packer's elevated_user
+  # parameters wrap each provisioner in a scheduled task that runs with
+  # HighestAvailable run-level, which bypasses UAC entirely. We apply it
+  # to every PowerShell provisioner below for consistency.
+
   # ── VMware Tools first ──
   provisioner "powershell" {
-    scripts = [
-      "../_shared/powershell/scripts/00-install-vmware-tools.ps1"
-    ]
+    scripts           = ["../_shared/powershell/scripts/00-install-vmware-tools.ps1"]
+    elevated_user     = var.admin_username
+    elevated_password = var.admin_password
   }
   provisioner "windows-restart" {
     restart_timeout = "15m"
@@ -199,6 +209,8 @@ build {
       "NEXUS_TEMPLATE_NAME=${var.vm_name}",
       "NEXUS_PHASE=0.B.6",
     ]
+    elevated_user     = var.admin_username
+    elevated_password = var.admin_password
   }
 
   # ── Win11 client tooling delta (.NET 10 SDK, WinAppSDK, Terminal) ──
@@ -206,9 +218,9 @@ build {
   # workstation profile that justifies a separate Win11 template over the
   # WS2025-Desktop admin profile. winget-driven; idempotent.
   provisioner "powershell" {
-    scripts = [
-      "scripts/10-win11ent-client-tools.ps1"
-    ]
+    scripts           = ["scripts/10-win11ent-client-tools.ps1"]
+    elevated_user     = var.admin_username
+    elevated_password = var.admin_password
   }
   provisioner "windows-restart" {
     restart_timeout = "15m"
@@ -216,10 +228,10 @@ build {
 
   # ── Sysprep (shared) ──
   provisioner "powershell" {
-    scripts = [
-      "../_shared/powershell/scripts/99-sysprep.ps1"
-    ]
-    valid_exit_codes = [0, 1, 2, 259, 2147942402]
+    scripts           = ["../_shared/powershell/scripts/99-sysprep.ps1"]
+    valid_exit_codes  = [0, 1, 2, 259, 2147942402]
+    elevated_user     = var.admin_username
+    elevated_password = var.admin_password
   }
 
   post-processor "manifest" {
