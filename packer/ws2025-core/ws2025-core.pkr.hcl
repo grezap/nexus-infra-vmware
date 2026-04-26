@@ -239,7 +239,9 @@ build {
       "../_shared/powershell/scripts/05-windows-baseline.ps1",    # Defender AV baseline, telemetry off, login banner, Start Menu pins sanity
     ]
     environment_vars = [
-      "NEXUS_ADMIN_USERNAME=${var.admin_username}"
+      "NEXUS_ADMIN_USERNAME=${var.admin_username}",
+      "NEXUS_TEMPLATE_NAME=${var.vm_name}",
+      "NEXUS_PHASE=0.B.4",
     ]
   }
 

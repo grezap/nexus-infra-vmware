@@ -48,13 +48,20 @@ if (-not (Test-Path $psPolicyKey)) { New-Item -Path $psPolicyKey -Force | Out-Nu
 Set-ItemProperty -Path $psPolicyKey -Name 'ExecutionPolicy' -Value 'RemoteSigned' -Type String
 
 # -- 4. Login banner (Windows equivalent of /etc/motd) --------------------
+# Per-template stamp: NEXUS_TEMPLATE_NAME and NEXUS_PHASE are set in each
+# Packer template's powershell-provisioner environment_vars block. Fall
+# back to '<unset>' so this script still runs when invoked directly outside
+# Packer (e.g., manual re-runs during debugging).
+$tmplName = if ($env:NEXUS_TEMPLATE_NAME) { $env:NEXUS_TEMPLATE_NAME } else { '<unset>' }
+$phase    = if ($env:NEXUS_PHASE)         { $env:NEXUS_PHASE }         else { '<unset>' }
+$bannerLine = ('     Template: {0}  Phase: {1}' -f $tmplName, $phase).PadRight(62)
 $lsaKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
 Set-ItemProperty -Path $lsaKey -Name 'LegalNoticeCaption' -Value 'NexusPlatform'
 Set-ItemProperty -Path $lsaKey -Name 'LegalNoticeText' -Value @"
 #==============================================================#
 #                      NexusPlatform                           #
 #     Authorized access only. All activity is logged.          #
-#     Template: ws2025-core  Phase: 0.B.4                      #
+#$bannerLine#
 #==============================================================#
 "@
 
