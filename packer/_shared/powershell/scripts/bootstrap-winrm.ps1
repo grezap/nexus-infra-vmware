@@ -18,35 +18,54 @@ Start-Transcript -Path $log -Append -Force | Out-Null
 try {
     Write-Host "[$(Get-Date -Format s)] bootstrap-winrm.ps1 start"
 
-    # 1. Make sure WinRM service is running + set to auto-start.
+    # 1. Force every NIC's network category to Private. Win11 OOBE assigns
+    #    new connections to "Public" by default, and WinRM refuses to flip
+    #    AllowUnencrypted on while any NIC is Public ("WinRM firewall
+    #    exception will not work since one of the network connection types
+    #    on this machine is set to Public"). Server SKUs default new NICs
+    #    to Private, which is why ws2025-* didn't hit this and win11ent did.
+    Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private
+
+    # 2. Make sure WinRM service is running + set to auto-start.
     Set-Service -Name WinRM -StartupType Automatic
     Start-Service -Name WinRM
 
-    # 2. Quick-config equivalent -- but scripted so we never wait on a prompt.
+    # 3. Quick-config equivalent -- but scripted so we never wait on a prompt.
     #    -Force suppresses the interactive "this changes firewall rules" prompt.
     winrm quickconfig -quiet -force | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "winrm quickconfig failed (exit $LASTEXITCODE)" }
 
-    # 3. Allow Basic auth + unencrypted -- Packer's default winrm communicator
+    # 4. Allow Basic auth + unencrypted -- Packer's default winrm communicator
     #    uses HTTP + Basic. Flipped off again in 99-sysprep.ps1 before sysprep.
-    winrm set winrm/config/service/auth '@{Basic="true"}' | Out-Null
-    winrm set winrm/config/service '@{AllowUnencrypted="true"}' | Out-Null
-    winrm set winrm/config/winrs    '@{MaxMemoryPerShellMB="1024"}' | Out-Null
+    #    The PowerShell-native Set-Item cmdlets are reliable; the older
+    #    `winrm set winrm/config/... '@{Foo="bar"}'` syntax has fragile
+    #    arg-parsing through the cmd->vbs shim and silently no-ops on Win11
+    #    when the inner double-quoted "true" gets stripped.
+    Set-Item -Path WSMan:\localhost\Service\Auth\Basic       -Value $true -Force
+    Set-Item -Path WSMan:\localhost\Service\AllowUnencrypted -Value $true -Force
+    Set-Item -Path WSMan:\localhost\Shell\MaxMemoryPerShellMB -Value 1024 -Force
 
-    # 4. Confirm an HTTP listener exists on :5985. quickconfig usually creates
+    # 5. Confirm an HTTP listener exists on :5985. quickconfig usually creates
     #    one, but if the NIC came up after WinRM started the listener can be
     #    missing. Create it idempotently.
     $listeners = winrm enumerate winrm/config/listener 2>$null
     if ($listeners -notmatch 'Transport = HTTP') {
         winrm create winrm/config/Listener?Address=*+Transport=HTTP | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "winrm create listener failed (exit $LASTEXITCODE)" }
     }
 
-    # 5. Firewall rule for 5985 in + 5986 in (5986 unused now, reserved for
+    # 6. Firewall rule for 5985 in + 5986 in (5986 unused now, reserved for
     #    HTTPS post-cert rollout). Scope = any during build; 03-nexus-firewall.ps1
     #    re-scopes to VMnet11 only.
     New-NetFirewallRule -Name 'WinRM-HTTP-In-Build' `
         -DisplayName 'WinRM HTTP (build-time)' `
         -Protocol TCP -LocalPort 5985 -Direction Inbound -Action Allow `
         -Profile Any -ErrorAction SilentlyContinue | Out-Null
+
+    # 7. Restart WinRM so the new auth/transport config takes effect on
+    #    the live listener (Set-Item edits the config but in-flight listener
+    #    behavior can lag until restart).
+    Restart-Service -Name WinRM -Force
 
     Write-Host "[$(Get-Date -Format s)] bootstrap-winrm.ps1 done -- listener up"
 }
