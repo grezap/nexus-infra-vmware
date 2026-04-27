@@ -32,11 +32,20 @@ Invoke-WebRequest -Uri 'https://dot.net/v1/dotnet-install.ps1' -OutFile $install
 
 Write-Host "Installing .NET 10 SDK to $installDir"
 & $installer -Channel '10.0' -InstallDir $installDir -NoPath
-if ($LASTEXITCODE -ne 0) { throw "dotnet-install.ps1 SDK failed (exit $LASTEXITCODE)" }
+# dotnet-install.ps1 throws on error under our $ErrorActionPreference='Stop',
+# so reaching this line means success. Don't check $LASTEXITCODE -- it's not
+# set by .ps1 invocations the way it is for native .exe calls (would compare
+# $null against 0 and falsely throw "exit ").
+if (-not (Test-Path "$installDir\dotnet.exe")) {
+    throw "dotnet-install.ps1 SDK ran but $installDir\dotnet.exe missing"
+}
 
 Write-Host "Installing .NET 10 Desktop Runtime to $installDir"
 & $installer -Channel '10.0' -InstallDir $installDir -Runtime windowsdesktop -NoPath
-if ($LASTEXITCODE -ne 0) { throw "dotnet-install.ps1 Desktop Runtime failed (exit $LASTEXITCODE)" }
+$runtimes = & "$installDir\dotnet.exe" --list-runtimes 2>&1 | Out-String
+if ($runtimes -notmatch 'Microsoft\.WindowsDesktop\.App 10\.') {
+    throw "Desktop Runtime 10.x not found after install -- runtimes:`n$runtimes"
+}
 
 # -NoPath above skips the script's own PATH munging (which only edits
 # the *user* PATH); we want the *machine* PATH so every clone's account
