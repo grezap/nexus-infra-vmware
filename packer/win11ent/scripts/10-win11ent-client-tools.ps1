@@ -5,29 +5,58 @@
 #   - .NET 10 SDK             nexus-desk app development (WinForms/WPF/WinUI 3)
 #   - .NET 10 Desktop Runtime running compiled WPF/WinForms binaries
 #   - Windows App SDK runtime WinUI 3 demo apps
-#   - Windows Terminal        default shell for the nexusadmin desktop session
+#   - Windows Terminal        latest version (Win11 22H2+ pre-ships an older one)
 #
-# winget-driven so the manifests track upstream releases automatically.
-# VS Code is intentionally NOT installed at template-time -- it's a per-user
-# tool, not a fleet baseline; clones layer it on via Ansible if needed.
+# .NET goes through Microsoft's official dotnet-install.ps1 rather than
+# winget. The winget Microsoft.DotNet.SDK.10 manifest hit
+# 0x8a15000f "Data required by the source is missing" on a clean Win11
+# build (download succeeded but installer's secondary content fetch broke);
+# dotnet-install.ps1 pulls direct from the .NET CDN without a winget
+# intermediary and is the Microsoft-supported scripted-install path.
 #
-# winget caveat on freshly-installed Win11: the App Installer source needs
-# to resolve before the first install can run. We force a `winget source
-# update` upfront and retry once if it fails (transient registration race).
+# WinAppSDK + Terminal stay on winget because they're smaller, single-shot
+# downloads. We `winget source reset --force` upfront in case the source
+# index got into the same broken state .NET surfaced.
 
 $ErrorActionPreference = 'Stop'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 Write-Host "=== 10-win11ent-client-tools ==="
 
-# -- 1. Verify winget is on PATH and the App Installer source is ready ----
-$winget = Get-Command winget -ErrorAction SilentlyContinue
-if (-not $winget) {
-    throw "winget not found on PATH -- Microsoft.DesktopAppInstaller did not provision. Check Win11 Enterprise SKU."
+# -- 1. .NET 10 SDK + Desktop Runtime via dotnet-install.ps1 --------------
+$installer = Join-Path $env:TEMP 'dotnet-install.ps1'
+$installDir = 'C:\Program Files\dotnet'
+
+Write-Host "Downloading dotnet-install.ps1"
+Invoke-WebRequest -Uri 'https://dot.net/v1/dotnet-install.ps1' -OutFile $installer -UseBasicParsing
+
+Write-Host "Installing .NET 10 SDK to $installDir"
+& $installer -Channel '10.0' -InstallDir $installDir -NoPath
+if ($LASTEXITCODE -ne 0) { throw "dotnet-install.ps1 SDK failed (exit $LASTEXITCODE)" }
+
+Write-Host "Installing .NET 10 Desktop Runtime to $installDir"
+& $installer -Channel '10.0' -InstallDir $installDir -Runtime windowsdesktop -NoPath
+if ($LASTEXITCODE -ne 0) { throw "dotnet-install.ps1 Desktop Runtime failed (exit $LASTEXITCODE)" }
+
+# -NoPath above skips the script's own PATH munging (which only edits
+# the *user* PATH); we want the *machine* PATH so every clone's account
+# inherits dotnet, not just the build-time nexusadmin.
+$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+if ($machinePath -notlike "*$installDir*") {
+    [Environment]::SetEnvironmentVariable('Path', "$machinePath;$installDir", 'Machine')
+    Write-Host "Added $installDir to machine PATH"
 }
 
-# Force the source registration to settle. On a fresh OOBE, the first
-# winget call sometimes errors with "Failed in attempting to update the
-# source: winget" -- retry once after a short wait.
+# -- 2. WindowsAppRuntime + Windows Terminal via winget -------------------
+$winget = Get-Command winget -ErrorAction SilentlyContinue
+if (-not $winget) {
+    throw "winget not found on PATH -- Microsoft.DesktopAppInstaller did not provision."
+}
+
+# Reset source first to clear the kind of cache corruption that broke
+# Microsoft.DotNet.SDK.10. Idempotent and cheap.
+& winget source reset --force --disable-interactivity 2>&1 | Out-Null
+
 $srcOk = $false
 foreach ($attempt in 1, 2) {
     try {
@@ -43,12 +72,9 @@ if (-not $srcOk) {
     throw "winget source update failed twice -- check network or App Installer registration."
 }
 
-# -- 2. Install developer-workstation packages ----------------------------
 $packages = @(
-    @{ Id = 'Microsoft.DotNet.SDK.10';             Name = '.NET 10 SDK' },
-    @{ Id = 'Microsoft.DotNet.DesktopRuntime.10';  Name = '.NET 10 Desktop Runtime' },
-    @{ Id = 'Microsoft.WindowsAppRuntime.1.5';     Name = 'Windows App SDK 1.5 runtime' },
-    @{ Id = 'Microsoft.WindowsTerminal';           Name = 'Windows Terminal' }
+    @{ Id = 'Microsoft.WindowsAppRuntime.1.5'; Name = 'Windows App SDK 1.5 runtime' },
+    @{ Id = 'Microsoft.WindowsTerminal';       Name = 'Windows Terminal' }
 )
 
 foreach ($pkg in $packages) {
