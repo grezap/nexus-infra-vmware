@@ -235,6 +235,17 @@ build {
     restart_timeout = "15m"
   }
 
+  # ── Stage clone first-boot fixes (Win11-specific) ─────────────────────
+  # Seeds C:\Windows\Setup\Scripts\SetupComplete.cmd + fix-sshd-privileges.ps1
+  # so the clone re-grants SeAssignPrimaryTokenPrivilege and
+  # SeIncreaseQuotaPrivilege to NT SERVICE\sshd on first boot. sysprep
+  # /generalize strips both, leaving sshd unable to spawn user sessions.
+  provisioner "powershell" {
+    scripts           = ["scripts/15-stage-firstboot-fixes.ps1"]
+    elevated_user     = var.admin_username
+    elevated_password = var.admin_password
+  }
+
   # ── Sysprep (shared) ──
   provisioner "powershell" {
     scripts           = ["../_shared/powershell/scripts/99-sysprep.ps1"]
