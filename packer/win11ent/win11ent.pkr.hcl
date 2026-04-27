@@ -190,6 +190,15 @@ build {
     restart_timeout = "15m"
   }
 
+  # ── OpenSSH from Win32-OpenSSH GitHub release (Win11-specific) ──
+  # Replaces the FOD path that the shared 01-nexus-identity.ps1 would
+  # otherwise take. See scripts/05-install-openssh.ps1 header for why.
+  provisioner "powershell" {
+    scripts           = ["scripts/05-install-openssh.ps1"]
+    elevated_user     = var.admin_username
+    elevated_password = var.admin_password
+  }
+
   # ── Shared Nexus baseline (same scripts as the WS2025 templates) ──
   # All five scripts are OS-agnostic across WS2025/Win11: they touch only
   # registry policy keys, scheduled tasks, SCHANNEL, and pagefile WMI —

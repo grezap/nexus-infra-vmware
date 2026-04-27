@@ -33,10 +33,15 @@ if (-not (Get-LocalGroupMember -Group Administrators -Member $user -ErrorAction 
     Add-LocalGroupMember -Group Administrators -Member $user
 }
 
-# 2. OpenSSH Server capability (ships with WS2025; just needs to be enabled).
-$cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0'
-if ($cap.State -ne 'Installed') {
-    Write-Host "Installing OpenSSH.Server capability"
+# 2. OpenSSH Server: WS2025 ships the FOD payload in install.wim so
+#    Add-WindowsCapability completes quickly. Win11 client SKUs do *not*,
+#    and Add-WindowsCapability over Windows Update routinely takes 20+
+#    minutes and trips Packer's WinRM timeouts -- so win11ent's
+#    05-install-openssh.ps1 runs ahead of this script and registers sshd
+#    via the Win32-OpenSSH GitHub release. We honor that pre-install if
+#    present, otherwise fall back to FOD for the Server SKU path.
+if (-not (Get-Service -Name sshd -ErrorAction SilentlyContinue)) {
+    Write-Host "Installing OpenSSH.Server capability via FOD"
     Add-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' | Out-Null
 }
 
