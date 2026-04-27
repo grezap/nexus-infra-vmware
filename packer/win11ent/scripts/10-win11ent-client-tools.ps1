@@ -5,18 +5,16 @@
 #   - .NET 10 SDK             nexus-desk app development (WinForms/WPF/WinUI 3)
 #   - .NET 10 Desktop Runtime running compiled WPF/WinForms binaries
 #   - Windows App SDK runtime WinUI 3 demo apps
-#   - Windows Terminal        latest version (Win11 22H2+ pre-ships an older one)
+#   - Windows Terminal        pre-installed on Win11 22H2+; we don't reinstall
 #
-# .NET goes through Microsoft's official dotnet-install.ps1 rather than
-# winget. The winget Microsoft.DotNet.SDK.10 manifest hit
-# 0x8a15000f "Data required by the source is missing" on a clean Win11
-# build (download succeeded but installer's secondary content fetch broke);
-# dotnet-install.ps1 pulls direct from the .NET CDN without a winget
-# intermediary and is the Microsoft-supported scripted-install path.
-#
-# WinAppSDK + Terminal stay on winget because they're smaller, single-shot
-# downloads. We `winget source reset --force` upfront in case the source
-# index got into the same broken state .NET surfaced.
+# Both binaries come from direct Microsoft URLs rather than winget. Win11
+# Enterprise Evaluation hits 0x8a15000f "Data required by the source is
+# missing" on every winget Microsoft.* manifest -- the initial download
+# succeeds but the installer's secondary content fetch fails. The bug
+# surfaced first on Microsoft.DotNet.SDK.10, then reproduced on
+# Microsoft.WindowsAppRuntime.1.5 even after `winget source reset --force`.
+# Direct downloads from dot.net + aka.ms shortlinks bypass the broken
+# winget content-delivery path entirely.
 
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -24,7 +22,7 @@ $ErrorActionPreference = 'Stop'
 Write-Host "=== 10-win11ent-client-tools ==="
 
 # -- 1. .NET 10 SDK + Desktop Runtime via dotnet-install.ps1 --------------
-$installer = Join-Path $env:TEMP 'dotnet-install.ps1'
+$installer  = Join-Path $env:TEMP 'dotnet-install.ps1'
 $installDir = 'C:\Program Files\dotnet'
 
 Write-Host "Downloading dotnet-install.ps1"
@@ -56,45 +54,32 @@ if ($machinePath -notlike "*$installDir*") {
     Write-Host "Added $installDir to machine PATH"
 }
 
-# -- 2. WindowsAppRuntime + Windows Terminal via winget -------------------
-$winget = Get-Command winget -ErrorAction SilentlyContinue
-if (-not $winget) {
-    throw "winget not found on PATH -- Microsoft.DesktopAppInstaller did not provision."
+# -- 2. Windows App SDK 1.6 runtime via direct download -------------------
+# aka.ms shortlink redirects to the latest 1.6 runtime installer. The
+# stand-alone installer is a self-contained MSIX/MSI that doesn't reach
+# back to Windows Update -- no winget involvement.
+$wasInstaller = Join-Path $env:TEMP 'windowsappruntimeinstall-x64.exe'
+$wasUrl       = 'https://aka.ms/windowsappsdk/1.6/latest/windowsappruntimeinstall-x64.exe'
+
+Write-Host "Downloading WindowsAppRuntime 1.6 from $wasUrl"
+Invoke-WebRequest -Uri $wasUrl -OutFile $wasInstaller -UseBasicParsing
+
+Write-Host "Installing WindowsAppRuntime (silent)"
+$proc = Start-Process -FilePath $wasInstaller -ArgumentList '--quiet' -Wait -PassThru -NoNewWindow
+if ($proc.ExitCode -ne 0) {
+    throw "WindowsAppRuntime installer failed (exit $($proc.ExitCode))"
 }
 
-# Reset source first to clear the kind of cache corruption that broke
-# Microsoft.DotNet.SDK.10. Idempotent and cheap.
-& winget source reset --force --disable-interactivity 2>&1 | Out-Null
-
-$srcOk = $false
-foreach ($attempt in 1, 2) {
-    try {
-        & winget source update --disable-interactivity 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) { $srcOk = $true; break }
-    }
-    catch {
-        Write-Verbose "winget source update attempt $attempt threw: $_"
-    }
-    Start-Sleep -Seconds 10
-}
-if (-not $srcOk) {
-    throw "winget source update failed twice -- check network or App Installer registration."
-}
-
-$packages = @(
-    @{ Id = 'Microsoft.WindowsAppRuntime.1.5'; Name = 'Windows App SDK 1.5 runtime' },
-    @{ Id = 'Microsoft.WindowsTerminal';       Name = 'Windows Terminal' }
-)
-
-foreach ($pkg in $packages) {
-    Write-Host "Installing $($pkg.Name) ($($pkg.Id)) ..."
-    & winget install --exact --id $pkg.Id `
-        --accept-source-agreements --accept-package-agreements `
-        --silent --disable-interactivity --source winget
-    # winget exit codes: 0 = installed, -1978335189 = already installed.
-    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335189) {
-        throw "winget install $($pkg.Id) failed with exit code $LASTEXITCODE"
-    }
+# -- 3. Windows Terminal: pre-installed on Win11 22H2+ -------------------
+# Win11 ships Windows Terminal as the default console host since 22H2 and
+# Microsoft.WindowsTerminal is a built-in Appx package. No install needed;
+# users see the latest Store update on first run. Confirm presence so the
+# template's exit gate (`(Get-Command wt.exe).Source` resolves) holds.
+$wt = Get-Command wt.exe -ErrorAction SilentlyContinue
+if (-not $wt) {
+    Write-Host "WARNING: wt.exe not on PATH (unexpected on Win11 22H2+); smoke gate may need adjustment."
+} else {
+    Write-Host "Windows Terminal present at $($wt.Source)"
 }
 
 Write-Host "=== 10-win11ent-client-tools: OK ==="
