@@ -235,21 +235,18 @@ build {
     restart_timeout = "15m"
   }
 
-  # ── Stage clone first-boot fixes (Win11-specific) ─────────────────────
-  # Seeds C:\Windows\Setup\Scripts\SetupComplete.cmd + fix-sshd-privileges.ps1
-  # so the clone re-grants SeAssignPrimaryTokenPrivilege and
-  # SeIncreaseQuotaPrivilege to NT SERVICE\sshd on first boot. sysprep
-  # /generalize strips both, leaving sshd unable to spawn user sessions.
-  provisioner "powershell" {
-    scripts           = ["scripts/15-stage-firstboot-fixes.ps1"]
-    elevated_user     = var.admin_username
-    elevated_password = var.admin_password
-  }
-
   # ── Sysprep (shared) ──
+  # NEXUS_ADMIN_USERNAME/PASSWORD pass through to 99-sysprep.ps1 so the
+  # clone-time unattend can re-apply nexusadmin's password through
+  # /generalize. Without these env vars, sysprep clears local-account
+  # passwords and the clone is RDP-locked on first boot.
   provisioner "powershell" {
-    scripts           = ["../_shared/powershell/scripts/99-sysprep.ps1"]
-    valid_exit_codes  = [0, 1, 2, 259, 2147942402]
+    scripts          = ["../_shared/powershell/scripts/99-sysprep.ps1"]
+    valid_exit_codes = [0, 1, 2, 259, 2147942402]
+    environment_vars = [
+      "NEXUS_ADMIN_USERNAME=${var.admin_username}",
+      "NEXUS_ADMIN_PASSWORD=${var.admin_password}",
+    ]
     elevated_user     = var.admin_username
     elevated_password = var.admin_password
   }

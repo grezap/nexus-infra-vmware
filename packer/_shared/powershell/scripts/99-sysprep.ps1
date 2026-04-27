@@ -34,13 +34,58 @@ Remove-Item -Recurse -Force 'C:\Windows\Temp\*' -Exclude 'packer-*' -ErrorAction
 Clear-DnsClientCache
 
 # -- 5. sysprep /generalize /oobe /shutdown -------------------------------
-# Use the Packer-for-Windows-recommended unattend to skip the OOBE on first
-# clone boot -- it auto-creates an Administrator with the build password.
-# Terraform post-clone will immediately rotate that via modules/vm/ before
-# handing the VM off to the role overlay (Phase 0.D moves it to Vault).
-$sysprepUnattend = @'
+# Clone-time unattend that mini-OOBE consumes on the cloned VM's first
+# boot. Two design points:
+#
+#   (a) UserAccounts block re-applies nexusadmin's password through
+#       /generalize. Without it, sysprep clears local-account passwords
+#       and clones boot into a login screen no one can satisfy. The
+#       admin_username/admin_password come from each template's
+#       environment_vars passed by the powershell provisioner. If the
+#       env vars aren't set (e.g., a future template invokes 99-sysprep
+#       without wiring them through), we fall back to the bare-OOBE
+#       unattend and accept the clear-on-generalize behavior.
+#
+#   (b) Plaintext password lands on the cloned disk in
+#       C:\Windows\System32\Sysprep\unattend.xml until mini-OOBE consumes
+#       and redacts it (Win11 moves the consumed copy to
+#       C:\Windows\Panther\unattend.xml with the password stripped).
+#       Acceptable pre-Phase-0.D because Terraform post-clone rotates
+#       the password before the VM is networked outside the build host.
+$adminUser = $env:NEXUS_ADMIN_USERNAME
+$adminPass = $env:NEXUS_ADMIN_PASSWORD
+if ($adminUser -and $adminPass) {
+    $userAccountsXml = @"
+      <UserAccounts>
+        <AdministratorPassword>
+          <Value>$adminPass</Value>
+          <PlainText>true</PlainText>
+        </AdministratorPassword>
+        <LocalAccounts>
+          <LocalAccount wcm:action="add">
+            <Password>
+              <Value>$adminPass</Value>
+              <PlainText>true</PlainText>
+            </Password>
+            <Description>NexusPlatform admin (re-applied via 99-sysprep unattend)</Description>
+            <DisplayName>$adminUser</DisplayName>
+            <Group>Administrators</Group>
+            <Name>$adminUser</Name>
+          </LocalAccount>
+        </LocalAccounts>
+      </UserAccounts>
+"@
+    Write-Host "99-sysprep: preserving $adminUser password through generalize"
+}
+else {
+    $userAccountsXml = ''
+    Write-Host "99-sysprep: NEXUS_ADMIN_USERNAME/PASSWORD not both set -- clone passwords will be cleared by /generalize"
+}
+
+$sysprepUnattend = @"
 <?xml version="1.0" encoding="utf-8"?>
-<unattend xmlns="urn:schemas-microsoft-com:unattend">
+<unattend xmlns="urn:schemas-microsoft-com:unattend"
+          xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
   <settings pass="oobeSystem">
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
                publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
@@ -55,6 +100,7 @@ $sysprepUnattend = @'
         <SkipMachineOOBE>true</SkipMachineOOBE>
         <SkipUserOOBE>true</SkipUserOOBE>
       </OOBE>
+$userAccountsXml
       <TimeZone>UTC</TimeZone>
     </component>
     <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64"
@@ -66,7 +112,7 @@ $sysprepUnattend = @'
     </component>
   </settings>
 </unattend>
-'@
+"@
 $unattendPath = 'C:\Windows\System32\Sysprep\unattend.xml'
 Set-Content -Path $unattendPath -Value $sysprepUnattend -Encoding utf8
 
