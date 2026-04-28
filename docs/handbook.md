@@ -199,6 +199,90 @@ The Linux shared roles (`nexus_identity`, `nexus_network`, `nexus_firewall`, `ne
 
 ---
 
+## 1c. Phase 0.C.1 — `envs/foundation` (always-on plumbing)
+
+First Phase 0.C env. Lands the always-on support fleet that every other env (`data`, `ml`, `saas`, `microservices`, `demo-minimal`) depends on:
+
+| VM                    | Template          | MAC                 | Tier path                                      | Role                                   |
+|-----------------------|-------------------|---------------------|------------------------------------------------|----------------------------------------|
+| `dc-nexus`            | `ws2025-desktop`  | `00:50:56:3F:00:25` | `H:/VMS/NexusPlatform/10-core/dc-nexus`        | Domain controller (AD DS promotion = role overlay, deferred) |
+| `nexus-admin-jumpbox` | `ws2025-desktop`  | `00:50:56:3F:00:26` | `H:/VMS/NexusPlatform/10-core/nexus-admin-jumpbox` | Operator jump host (RSAT / GPMC / DNS tools) |
+
+Both clones DHCP from `nexus-gateway` on VMnet11 (192.168.70.0/24, .200–.250 range).
+
+```powershell
+cd "F:\_CODING_\Repos\Local Development And Test\Portfolio_Project_Ideas\workspace\nexus-infra-vmware"
+
+# Pre-req: ws2025-desktop template must exist (Phase 0.B.5).
+ls H:\VMS\NexusPlatform\_templates\ws2025-desktop\ws2025-desktop.vmx
+
+# Deploy both VMs (~20 sec; 2 sequential clones)
+make foundation-apply
+
+# Tear down (stops both, deletes both)
+make foundation-destroy
+```
+
+### 1c.1 Lease discovery + smoke probe
+
+Both VMs DHCP on first boot. Find leases via `nexus-gateway`'s dnsmasq:
+
+```powershell
+ssh nexusadmin@192.168.70.1 "grep -iE '00:50:56:3f:00:25|00:50:56:3f:00:26' /var/lib/misc/dnsmasq.leases"
+```
+
+```bash
+# Or scan VMnet11 from the Windows host:
+200..250 | ForEach-Object { $ip="192.168.70.$_"; if (Test-Connection -Quiet -Count 1 $ip) { "UP: $ip" } }
+```
+
+Probe each VM directly:
+
+```powershell
+Test-NetConnection <vm-ip> -Port 22      # OpenSSH (key-only)
+Test-NetConnection <vm-ip> -Port 9182    # windows_exporter
+ssh nexusadmin@<vm-ip>
+```
+
+Verify dc-nexus is ready for AD DS promotion (the role-overlay step lives in a later 0.C ticket — this stage just lands the bare clone):
+
+```powershell
+ssh nexusadmin@192.168.70.1 ssh nexusadmin@<dc-nexus-ip> `
+  "Get-WindowsFeature AD-Domain-Services, RSAT-AD-Tools, GPMC | ft Name, InstallState"
+```
+
+Verify nexus-admin-jumpbox has the operator toolset:
+
+```powershell
+ssh nexusadmin@192.168.70.1 ssh nexusadmin@<jumpbox-ip> `
+  "Get-WindowsFeature RSAT-AD-Tools, RSAT-DNS-Server, RSAT-DHCP, GPMC | ft Name, InstallState"
+```
+
+### 1c.2 Why `envs/foundation/` and not just another `*-smoke/`
+
+The per-template `*-smoke/` modules (Phase 0.B.2–0.B.6) each clone one template once to verify the template builds correctly. They are scratch — destroyed routinely as part of the Packer iteration loop.
+
+`envs/foundation/` is the first **fleet env**: it composes multiple `modules/vm/` instances into a permanent always-on group. It's the shape the remaining 0.C envs (`data`, `ml`, `saas`, `microservices`, `demo-minimal`) will copy. Same `modules/vm/` driver underneath; the env is the composition layer above.
+
+### 1c.3 MAC allocation (post-Phase-0.B)
+
+| Slot | VM                    | Source                  |
+|------|-----------------------|-------------------------|
+| `:20`–`:24` | per-template smoke harnesses | `terraform/<template>-smoke/` |
+| `:25` | `dc-nexus`            | `envs/foundation/`      |
+| `:26` | `nexus-admin-jumpbox` | `envs/foundation/`      |
+| `:27`–`:2F` | unallocated          | next foundation slot is `:27` |
+
+Subsequent envs will draw from the appropriate tier nibble (`:30-3F` data, `:40-4F` core, `:50-5F` apps) per the convention table in §1a.2.
+
+### 1c.4 Constraints honored at this stage
+
+- **Local `.tfstate`** — `envs/foundation/` writes state under its own dir. Migration to a Consul KV backend is Phase 0.E.
+- **Bootstrap creds** — both clones inherit `nexusadmin` / `NexusPackerBuild!1` from the Packer template; post-clone rotation lives in Phase 0.D when Vault lands.
+- **No role-overlay yet** — `dc-nexus` is a bare ws2025-desktop clone. AD DS promotion (`Install-ADDSForest -DomainName nexus.lab`), DNS configuration, and jumpbox tooling reservations are downstream 0.C tickets.
+
+---
+
 ## 2. Working with the running gateway
 
 ### 2.1 SSH in
@@ -390,7 +474,11 @@ nexus-infra-vmware/
     ├── modules/vm/             # Phase 0.B.2 — reusable single-NIC clone driver
     ├── deb13-smoke/            # Phase 0.B.2 — smoke harness for modules/vm + deb13
     ├── ubuntu24-smoke/         # Phase 0.B.3 — smoke harness for ubuntu24
-    └── ws2025-core-smoke/      # Phase 0.B.4 — smoke harness for ws2025-core
+    ├── ws2025-core-smoke/      # Phase 0.B.4 — smoke harness for ws2025-core
+    ├── ws2025-desktop-smoke/   # Phase 0.B.5 — smoke harness for ws2025-desktop
+    ├── win11ent-smoke/         # Phase 0.B.6 — smoke harness for win11ent
+    └── envs/
+        └── foundation/         # Phase 0.C.1 — always-on plumbing (dc-nexus + nexus-admin-jumpbox)
 ```
 
 Template VMs live at `H:\VMS\NexusPlatform\_templates\<name>\<name>.vmx`.
@@ -406,9 +494,11 @@ Running instances at `H:\VMS\NexusPlatform\<tier>\<name>\<name>.vmx` (tier = `00
 | 0.B.2 | ✅ Debian 13 base template + reusable `modules/vm/` | [deb13.md](deb13.md) |
 | 0.B.3 | ✅ Ubuntu 24.04 LTS base template + DRY `_shared/` roles (`nexus_identity`, `nexus_network`, `nexus_firewall`, `nexus_observability`) | [ubuntu24.md](ubuntu24.md) |
 | 0.B.4 | ✅ Windows Server 2025 Core template (first Windows image; WinRM-build / OpenSSH-runtime; PowerShell provisioners parallel to the Linux shared roles) | [ws2025-core.md](ws2025-core.md) |
-| 0.B.5 | Windows Server 2025 Desktop template | *(pending)* |
-| 0.B.6 | Windows 11 Enterprise template | *(pending)* |
-| 0.C   | Core services tier (`10-core/`) | *(pending)* |
-| 0.D   | Vault + SSH key rotation | *(pending)* |
+| 0.B.5 | ✅ Windows Server 2025 Desktop template + DRY `_shared/powershell/` extraction | [ws2025-desktop.md](ws2025-desktop.md) |
+| 0.B.6 | ✅ Windows 11 Enterprise template (vTPM bypass via LabConfig; LATFP + elevated_user; pinned Win32-OpenSSH v9.5) | [win11ent.md](win11ent.md) |
+| 0.C.1 | 🔄 `envs/foundation` — always-on plumbing (dc-nexus + nexus-admin-jumpbox) — **scaffolded; AD DS role overlay deferred** | §1c above |
+| 0.C.* | `envs/{data,ml,saas,microservices,demo-minimal}` — composing per-template clones into role fleets | *(pending)* |
+| 0.D   | Vault + SSH key rotation + KMIP for real vTPM | *(pending)* |
+| 0.E   | Consul KV terraform backend (replaces local `.tfstate`) | *(pending)* |
 
 Keep this file in sync as phases land — each new VM gets a per-VM doc under `docs/` and a section added here under §1.

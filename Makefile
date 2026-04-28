@@ -12,6 +12,7 @@ OUTPUT_ROOT ?= H:/VMS/NexusPlatform/_templates
         ws2025-core ws2025-core-msdn ws2025-core-smoke ws2025-core-smoke-destroy \
         ws2025-desktop ws2025-desktop-msdn ws2025-desktop-smoke ws2025-desktop-smoke-destroy \
         win11ent win11ent-msdn win11ent-smoke win11ent-smoke-destroy \
+        foundation-apply foundation-destroy \
         all-templates clean
 
 help:
@@ -39,6 +40,10 @@ help:
 	@echo "  make win11ent-msdn    - Build Windows 11 Enterprise (retail/MSDN ISO + bootstrap key)"
 	@echo "  make win11ent-smoke         - Instantiate win11ent via modules/vm (smoke test)"
 	@echo "  make win11ent-smoke-destroy - Tear down the win11ent smoke VM"
+	@echo ""
+	@echo "  make foundation-apply   - Phase 0.C.1: deploy envs/foundation (dc-nexus + nexus-admin-jumpbox)"
+	@echo "  make foundation-destroy - Tear down the foundation env"
+	@echo ""
 	@echo "  make all-templates    - Build every template in order"
 	@echo ""
 	@echo "  make validate         - packer validate + terraform fmt/validate (all)"
@@ -57,6 +62,7 @@ init:
 	@cd terraform/ws2025-core-smoke    && $(TERRAFORM) init
 	@cd terraform/ws2025-desktop-smoke && $(TERRAFORM) init
 	@cd terraform/win11ent-smoke       && $(TERRAFORM) init
+	@cd terraform/envs/foundation      && $(TERRAFORM) init
 
 validate:
 	@echo "→ packer validate nexus-gateway"
@@ -85,6 +91,8 @@ validate:
 	@cd terraform/ws2025-desktop-smoke && $(TERRAFORM) init -backend=false && $(TERRAFORM) validate
 	@echo "→ terraform validate (win11ent-smoke)"
 	@cd terraform/win11ent-smoke       && $(TERRAFORM) init -backend=false && $(TERRAFORM) validate
+	@echo "→ terraform validate (envs/foundation)"
+	@cd terraform/envs/foundation      && $(TERRAFORM) init -backend=false && $(TERRAFORM) validate
 
 # ─── Phase 0.B.1 — nexus-gateway (VM #0) ─────────────────────────────────
 
@@ -175,6 +183,14 @@ win11ent-smoke:
 
 win11ent-smoke-destroy:
 	@cd terraform/win11ent-smoke && $(TERRAFORM) destroy -auto-approve
+
+# ─── Phase 0.C.1 — envs/foundation (always-on plumbing) ──────────────────
+
+foundation-apply:
+	@cd terraform/envs/foundation && $(TERRAFORM) apply -auto-approve
+
+foundation-destroy:
+	@cd terraform/envs/foundation && $(TERRAFORM) destroy -auto-approve
 
 all-templates: gateway deb13 ubuntu24 ws2025-core ws2025-desktop win11ent
 

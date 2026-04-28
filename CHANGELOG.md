@@ -6,6 +6,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Phase 0.C.1 — `terraform/envs/foundation/`** — first env composing
+  multiple `modules/vm/` instances. Lands two `ws2025-desktop` clones on
+  VMnet11: `dc-nexus` (MAC `00:50:56:3F:00:25`) and `nexus-admin-jumpbox`
+  (MAC `00:50:56:3F:00:26`), both under tier path `H:/VMS/NexusPlatform/10-core/`.
+  Shape-template for the remaining 0.C envs (`data`, `ml`, `saas`,
+  `microservices`, `demo-minimal`). AD DS promotion + jumpbox tooling
+  reservations are downstream role-overlay tickets.
+- `Makefile` — `foundation-apply` / `foundation-destroy` targets,
+  `init` / `validate` extended to cover `terraform/envs/foundation/`.
+- `.github/workflows/packer-validate.yml` — `envs/foundation` added to
+  the `terraform` job matrix (fmt + `init -backend=false` + validate).
+- `docs/handbook.md` §1c — full reproduce flow for `envs/foundation`,
+  MAC allocation table, "why an env not a smoke" rationale.
+  §5 directory map + §6 phase table updated to reflect 0.B.5 / 0.B.6 ✅
+  and 0.C.1 🔄.
+
 ## [0.1.1] — 2026-04-22 — "Windows licensing canon + secret-leak defenses"
 
 Implements the nexus-infra-vmware side of

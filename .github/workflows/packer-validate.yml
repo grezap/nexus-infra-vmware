@@ -85,6 +85,7 @@ jobs:
           - ws2025-core-smoke
           - ws2025-desktop-smoke
           - win11ent-smoke
+          - envs/foundation       # Phase 0.C.1
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
