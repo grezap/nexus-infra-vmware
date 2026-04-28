@@ -23,6 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MAC allocation table, "why an env not a smoke" rationale.
   §5 directory map + §6 phase table updated to reflect 0.B.5 / 0.B.6 ✅
   and 0.C.1 🔄.
+- `docs/handbook.md` §1c.5 — **lesson #10 smoke-time gotcha**:
+  pre-`dc5c588` Windows templates ship a stale `sshd_config` and reproduce
+  lesson #8's connection-reset on clones — even Server SKUs that lesson #8
+  said were unaffected. Discovered 2026-04-28 during 0.C.1 foundation smoke
+  on `ws2025-desktop` clones (template last built `68012e8`, predates
+  `dc5c588`). Hot-fix recipe (per-clone in-place sshd_config patch),
+  permanent fix (rebuild affected template), and forward-implication note
+  for `_shared/powershell/` discipline are documented. Affected pre-`dc5c588`
+  templates flagged: `ws2025-core` (commit `42a5205`), `ws2025-desktop`
+  (commit `68012e8`). win11ent (rebuilt as part of `dc5c588`) is clean.
 
 ## [0.1.1] — 2026-04-22 — "Windows licensing canon + secret-leak defenses"
 

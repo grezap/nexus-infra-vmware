@@ -281,6 +281,82 @@ Subsequent envs will draw from the appropriate tier nibble (`:30-3F` data, `:40-
 - **Bootstrap creds** — both clones inherit `nexusadmin` / `NexusPackerBuild!1` from the Packer template; post-clone rotation lives in Phase 0.D when Vault lands.
 - **No role-overlay yet** — `dc-nexus` is a bare ws2025-desktop clone. AD DS promotion (`Install-ADDSForest -DomainName nexus.lab`), DNS configuration, and jumpbox tooling reservations are downstream 0.C tickets.
 
+### 1c.5 Smoke-time gotcha — pre-`dc5c588` Windows templates
+
+**Symptom:** `ssh -i $HOME\.ssh\nexus_gateway_ed25519 nexusadmin@<clone-ip>` returns `Connection reset by <ip> port 22` immediately after host-key acceptance. `Test-NetConnection -Port 22` succeeds (sshd is listening), the host key exchange completes, but every userauth attempt resets the connection.
+
+**Root cause:** Lesson #8 from 0.B.6 dropped `Match Group administrators` + `KerberosAuthentication`/`GSSAPIAuthentication`/`ChallengeResponseAuthentication` from `_shared/powershell/scripts/01-nexus-identity.ps1` because they crash sshd-children on userauth-request reprocess. The cleanup is only baked into a template at Packer build time. Any Windows template last built **before commit `dc5c588`** (where the cleanup landed) still ships the old `sshd_config` and reproduces the bug — even though lesson #8's narrative said Server SKUs were unaffected. The clone's event log will show `sshd: rexec line N: Unsupported option KerberosAuthentication` per failed connection.
+
+**Affected templates (as of 2026-04-28):**
+
+| Template | Last build | Status |
+|---|---|---|
+| `nexus-gateway` | `b56aa7b` (Linux, unaffected) | clean |
+| `deb13` / `ubuntu24` | (Linux, unaffected) | clean |
+| `ws2025-core` | `42a5205` | **pre-`dc5c588` — needs rebuild before next use** |
+| `ws2025-desktop` | `68012e8` | **pre-`dc5c588` — rebuild required for foundation env** |
+| `win11ent` | `5729472`+ (rebuilt as part of `dc5c588`) | clean |
+
+**Hot-fix on a running clone (~30 seconds; per-clone, doesn't fix the template):**
+
+Open the VM in Workstation GUI (`File → Open → H:\VMS\NexusPlatform\10-core\<vm>\<vm>.vmx`), login as `nexusadmin` (build-time password from `packer/ws2025-desktop/variables.pkr.hcl`), launch elevated PowerShell, then:
+
+```powershell
+Copy-Item 'C:\ProgramData\ssh\sshd_config' 'C:\ProgramData\ssh\sshd_config.bak' -Force
+$config = @'
+# sshd_config -- NexusPlatform Windows baseline (hot-fix matching _shared/powershell/scripts/01-nexus-identity.ps1)
+Port 22
+AddressFamily inet
+ListenAddress 0.0.0.0
+
+PubkeyAuthentication yes
+PasswordAuthentication no
+PermitRootLogin no
+PermitEmptyPasswords no
+
+AuthorizedKeysFile C:/ProgramData/ssh/administrators_authorized_keys
+
+ClientAliveInterval 300
+ClientAliveCountMax 2
+MaxAuthTries 3
+MaxSessions 10
+LoginGraceTime 30
+
+AllowUsers nexusadmin
+
+Subsystem sftp sftp-server.exe
+'@
+Set-Content -Path 'C:\ProgramData\ssh\sshd_config' -Value $config -Encoding ascii
+& 'C:\Windows\System32\OpenSSH\sshd.exe' -t   # must print nothing
+Restart-Service sshd -Force
+```
+
+Then verify from the Windows host (note: Windows OpenSSH defaults to `cmd.exe` as the remote shell, so wrap PowerShell-style commands explicitly):
+
+```powershell
+ssh -i $HOME\.ssh\nexus_gateway_ed25519 nexusadmin@<clone-ip> 'powershell -NoProfile -Command "hostname; whoami; (Get-Service sshd).Status"'
+```
+
+**Permanent fix — rebuild affected templates against current `_shared/powershell/`:**
+
+```powershell
+# Rebuild ws2025-desktop (foundation env consumer; ~25-40 min depending on host)
+Remove-Item -Recurse -Force H:\VMS\NexusPlatform\_templates\ws2025-desktop -ErrorAction SilentlyContinue
+cd packer\ws2025-desktop
+packer build .
+
+# Tear down + redeploy foundation against the new template
+cd ..\..\terraform\envs\foundation
+terraform destroy -auto-approve
+terraform apply -auto-approve
+
+# Re-smoke (should now succeed zero-touch, no hot-fix needed)
+ssh -i $HOME\.ssh\nexus_gateway_ed25519 nexusadmin@<dc-nexus-ip> 'powershell -NoProfile -Command "hostname"'
+ssh -i $HOME\.ssh\nexus_gateway_ed25519 nexusadmin@<jumpbox-ip>  'powershell -NoProfile -Command "hostname"'
+```
+
+**Forward implication for `_shared/` discipline:** any change to `packer/_shared/powershell/scripts/*.ps1` creates an "obsolete template" footprint. Every Windows template that consumes the modified script needs a rebuild before its clones can be relied on. Consider this when the next shared-script edit lands — flag affected templates in the commit message and rebuild them in the same effort.
+
 ---
 
 ## 2. Working with the running gateway
