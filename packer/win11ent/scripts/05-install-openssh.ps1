@@ -20,7 +20,13 @@ if (Get-Service -Name sshd -ErrorAction SilentlyContinue) {
     return
 }
 
-$url     = 'https://github.com/PowerShell/Win32-OpenSSH/releases/latest/download/OpenSSH-Win64.zip'
+# Pinned to v9.5.0.0p1-Beta. Newer Win32-OpenSSH releases (v9.8+, including
+# v10.0p2 which is currently `latest`) introduced a parent/sshd-session.exe
+# process split, and on Win11 24H2 (build 26200) clones post-sysprep the
+# spawned sshd-session.exe child immediately crashes with
+# STATUS_ACCESS_VIOLATION (0xC0000005) before the SSH protocol can begin.
+# v9.5 keeps the single-binary architecture and works reliably.
+$url     = 'https://github.com/PowerShell/Win32-OpenSSH/releases/download/v9.5.0.0p1-Beta/OpenSSH-Win64.zip'
 $zipPath = Join-Path $env:TEMP 'OpenSSH-Win64.zip'
 $extract = Join-Path $env:TEMP 'OpenSSH-Win64-extract'
 $dest    = 'C:\Program Files\OpenSSH'

@@ -77,10 +77,29 @@ icacls $adminAK /inheritance:r /grant "Administrators:F" "SYSTEM:F"             
 
 # 4. sshd_config hardening -- drop-in via the full file (no /etc/ssh/sshd_config.d
 #    behavior on Windows OpenSSH). Preserve Windows-specific includes.
+#
+# Notable absences vs. the Linux equivalent:
+#
+#   * No `Match Group administrators` block. Win32-OpenSSH treats users in
+#     the Administrators group specially (always reads
+#     C:\ProgramData\ssh\administrators_authorized_keys regardless of
+#     AuthorizedKeysFile), so the Match block is informational at best --
+#     and on Win11 24H2 (build 26200) clones post-sysprep, the Match-
+#     triggered config-reprocess pass crashes sshd-session/sshd children
+#     with STATUS_ACCESS_VIOLATION (0xC0000005) before the SSH protocol
+#     can begin. We set AuthorizedKeysFile globally instead.
+#
+#   * No KerberosAuthentication / GSSAPIAuthentication / Challenge
+#     ResponseAuthentication. Win32-OpenSSH (the standalone GitHub fork
+#     that win11ent uses) does not support these directives -- they
+#     parse-warn on initial config load and crash during reprocess.
+#     Server SKUs use the FOD-installed sshd which DOES support them,
+#     but keeping a single sshd_config across all NexusPlatform Windows
+#     templates is more important than the directive nuance.
 $sshdConfig = 'C:\ProgramData\ssh\sshd_config'
 $config = @'
-# sshd_config -- NexusPlatform ws2025-core baseline (Phase 0.B.4)
-# Managed by packer/ws2025-core/scripts/01-nexus-identity.ps1
+# sshd_config -- NexusPlatform Windows baseline
+# Managed by packer/_shared/powershell/scripts/01-nexus-identity.ps1
 
 Port 22
 AddressFamily inet
@@ -91,9 +110,8 @@ PubkeyAuthentication yes
 PasswordAuthentication no
 PermitRootLogin no
 PermitEmptyPasswords no
-ChallengeResponseAuthentication no
-KerberosAuthentication no
-GSSAPIAuthentication no
+
+AuthorizedKeysFile C:/ProgramData/ssh/administrators_authorized_keys
 
 # Session
 ClientAliveInterval 300
@@ -104,10 +122,6 @@ LoginGraceTime 30
 
 # Allow only our admin user
 AllowUsers nexusadmin
-
-# Admin-group authorized_keys location (the canonical Windows path)
-Match Group administrators
-    AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys
 
 # Subsystems (keep sftp for Ansible file module compatibility later)
 Subsystem sftp sftp-server.exe
