@@ -32,9 +32,7 @@ resource "null_resource" "gateway_dns_forward" {
     gateway_ip    = "192.168.70.1"
     dc_nexus_ip   = "192.168.70.240"
     ad_domain     = var.ad_domain
-    dns_overlay_v = "1" # bump to force re-apply
-    # Re-fire if dc-nexus is replaced (its IP doesn't change but the sshd identity does;
-    # we don't actually care -- this resource only edits the gateway).
+    dns_overlay_v = "2" # v2 = systemctl restart (not reload) so DNS cache flushes; v1 cached NXDOMAIN survived the SIGHUP reload
   }
 
   # The DNS forward only matters once dc-nexus is actually serving DNS. Wait for the
@@ -64,14 +62,22 @@ resource "null_resource" "gateway_dns_forward" {
         ""
       ) -join "`n"
 
-      # Drop the conf file via stdin (sudo tee), then reload dnsmasq.
+      # Drop the conf file via stdin (sudo tee), then RESTART dnsmasq.
+      #
+      # systemctl reload (SIGHUP) re-reads conf-dir but DOES NOT flush the DNS
+      # cache. Lesson learned 2026-04-29: when the gateway was queried for
+      # nexus.lab BEFORE the forward was added, dnsmasq cached the
+      # DNSSEC-signed NXDOMAIN from public resolvers (1.1.1.1, 1.0.0.1, 9.9.9.9).
+      # SIGHUP loaded the new server=/nexus.lab/<dc-ip> rule but the cached
+      # NXDOMAIN kept serving until cache TTL expired. systemctl restart drops
+      # the cache as part of process restart, so the forward is live immediately.
       $script = @"
         echo '$confLines' | sudo tee /etc/dnsmasq.d/foundation-nexus-lab.conf > /dev/null
-        sudo systemctl reload dnsmasq && echo OK
+        sudo systemctl restart dnsmasq && echo OK
 "@
-      Write-Host "[gateway dns] writing /etc/dnsmasq.d/foundation-nexus-lab.conf + reloading dnsmasq..."
+      Write-Host "[gateway dns] writing /etc/dnsmasq.d/foundation-nexus-lab.conf + restarting dnsmasq..."
       ssh nexusadmin@$gw $script
-      if ($LASTEXITCODE -ne 0) { throw "[gateway dns] ssh tee/reload failed (rc=$LASTEXITCODE)" }
+      if ($LASTEXITCODE -ne 0) { throw "[gateway dns] ssh tee/restart failed (rc=$LASTEXITCODE)" }
       Write-Host "[gateway dns] $domain forward live: queries -> $dc_ip"
     PWSH
   }

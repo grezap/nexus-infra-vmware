@@ -65,6 +65,20 @@ variable "dsrm_password" {
   sensitive   = true
 }
 
+variable "local_administrator_password" {
+  description = "Password to set on the built-in Administrator account before Install-ADDSForest runs. The local Administrator becomes the domain Administrator on forest creation; Install-ADDSForest refuses to promote when its password is blank (sysprep wipes the unattend-provided password on every clone). Pre-Phase-0.D plaintext default; Vault-backed in Phase 0.D."
+  type        = string
+  default     = "NexusAdmin!1"
+  sensitive   = true
+}
+
+variable "nexusadmin_password" {
+  description = "Password to set on the migrated `nexusadmin` AD user post-promotion. Install-ADDSForest converts the local SAM into the AD database; the local `nexusadmin` survives as a domain user but its password is wiped, so we reset it back to the build-time bootstrap value. Same Vault-rotation horizon as dsrm_password and local_administrator_password."
+  type        = string
+  default     = "NexusPackerBuild!1"
+  sensitive   = true
+}
+
 variable "dc_promotion_timeout_minutes" {
   description = "Per-step timeout for waiting on rename-reboot and post-promotion AD DS bootstrap. Tune up if the build host is slow."
   type        = number

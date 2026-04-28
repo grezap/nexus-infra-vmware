@@ -513,7 +513,50 @@ Bumping the `*_v` field in any `triggers` block forces re-execution (use this wh
 - **OUs / GPOs / service accounts** — start trivial in this phase; lab DC promotion only.
 - **Second DC for replication** — Phase 0.G (or whenever HA is needed).
 - **Vault-backed DSRM password** — Phase 0.D.
-- **Renaming the `nexusadmin` workgroup user → domain user** — Phase 0.D once Vault can issue domain creds.
+
+### 1d.4 Post-promotion remediation (baked into the `v4` promote step)
+
+`Install-ADDSForest` performs a hostile takeover of the local SAM. Without remediation in the same automation block, the promoted DC is unreachable via SSH and `nexusadmin` can't authenticate. The `v4` promote step runs all four of these AFTER `Install-ADDSForest -NoRebootOnCompletion` returns and BEFORE the reboot:
+
+| Step | Why |
+|---|---|
+| `Set-LocalUser Administrator -Password ...; Enable-LocalUser` (BEFORE promotion) | `Install-ADDSForest`'s prereq check fails with `the local Administrator password is blank` because sysprep `/generalize` wipes the unattend-provided password on every clone. The local Administrator becomes the domain Administrator on forest creation, so its password must be set first. |
+| `Set-ADAccountPassword -Identity nexusadmin -Reset` | AD DS migrates the local `nexusadmin` user into the AD database but blanks its password. Without this reset, `nexusadmin` is locked out of the new DC. |
+| `Add-ADGroupMember 'Domain Admins' -Members nexusadmin` | Migrated users land in `Domain Users` only, never Domain Admins. Without admin rights, `nexusadmin` can't manage the DC even if their password is reset. |
+| `sshd_config: comment out AllowUsers; Restart-Service sshd` | Win32-OpenSSH receives the post-promotion username as `nexus\nexusadmin` (domain-prefixed), which doesn't match the bare-username `AllowUsers nexusadmin` directive. SSH rejects every connection with "User ... not allowed because not listed in AllowUsers" (visible in `OpenSSH/Operational` event log Id 4). On a DC, dropping the directive entirely is the cleanest fix — trust = pubkey + Administrators group is sufficient. |
+
+Memory: [`feedback_addsforest_post_promotion.md`](memory/feedback_addsforest_post_promotion.md) canonizes this pattern for any future AD DS automation, not just NexusPlatform.
+
+### 1d.5 dnsmasq cache lesson — restart, don't reload
+
+The `gateway_dns_forward` resource (`dns_overlay_v=2`) calls `systemctl restart dnsmasq` rather than `systemctl reload`. Discovered 2026-04-29:
+
+- `systemctl reload dnsmasq` sends SIGHUP, which re-reads `/etc/dnsmasq.d/` files (so the new `server=/nexus.lab/192.168.70.240` rule loaded) BUT does NOT flush the DNS cache.
+- If `nexus.lab` queries hit dnsmasq BEFORE the forward zone was added, the response chain went to the public upstreams (1.1.1.1, 1.0.0.1, 9.9.9.9) which returned a DNSSEC-signed NXDOMAIN. dnsmasq cached that NXDOMAIN.
+- After the SIGHUP reload, the cached NXDOMAIN kept being served until the cache TTL expired — the new forward rule was loaded but never consulted.
+- `systemctl restart dnsmasq` drops the entire cache as part of process restart, so the forward is live immediately.
+
+If you ever need to add a forward zone to dnsmasq under load (where a service restart is undesirable), an alternative is to also clear the cache without a full restart: `kill -USR1 $(pidof dnsmasq)` dumps cache stats, but there's no signal to flush. The closest is `dnsmasq -k -c 0` (cache-size=0) at startup. For our purposes, restart is the simpler and more reliable path.
+
+### 1d.6 Smoke gate from workgroup peers — don't trust `nltest /dsgetdc:`
+
+`nltest /dsgetdc:nexus.lab` from a non-domain-joined peer (e.g. the `nexus-admin-jumpbox` in its current workgroup state) returns `1355 ERROR_NO_SUCH_DOMAIN` even when the DC is fully functional. Reason: Netlogon service is dormant on workgroup machines; tools that depend on it can't auto-start it without a domain context. **Don't use nltest from workgroup peers as a smoke gate.** Use these instead:
+
+```powershell
+# 1. nltest from the DC ITSELF -- decisive proof of forest health
+ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "nltest /dsgetdc:nexus.lab"'
+
+# 2. Resolve-DnsName from the peer -- proves DNS chain (peer -> gateway -> DC)
+ssh nexusadmin@192.168.70.241 'powershell -NoProfile -Command "Resolve-DnsName _ldap._tcp.nexus.lab -Type SRV"'
+
+# 3. TCP probes to the DC's AD ports from the peer -- proves connectivity
+ssh nexusadmin@192.168.70.241 'powershell -NoProfile -Command "Test-NetConnection 192.168.70.240 -Port 389; Test-NetConnection 192.168.70.240 -Port 88; Test-NetConnection 192.168.70.240 -Port 135"'
+
+# 4. Forest verify from the DC's own AD module
+ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-ADDomain | Format-List Forest, DomainMode, NetBIOSName"'
+```
+
+Once `nexus-admin-jumpbox` is domain-joined (Phase 0.C.3), Netlogon auto-starts and stays running, after which `nltest /dsgetdc:nexus.lab` from the jumpbox works cleanly.
 
 ---
 

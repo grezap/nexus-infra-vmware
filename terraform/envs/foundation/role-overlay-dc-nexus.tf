@@ -100,21 +100,25 @@ resource "null_resource" "dc_nexus_wait_renamed" {
     when        = create
     interpreter = ["pwsh", "-NoProfile", "-Command"]
     command     = <<-PWSH
-      $ip   = '${local.dc_nexus_ip}'
-      $name = '${local.dc_nexus_hostname}'
-      $deadline = (Get-Date).AddMinutes(${var.dc_promotion_timeout_minutes})
+      $ip       = '${local.dc_nexus_ip}'
+      $name     = '${local.dc_nexus_hostname}'
+      $timeout  = ${var.dc_promotion_timeout_minutes}
+      $deadline = (Get-Date).AddMinutes($timeout)
 
-      Write-Host "[dc-nexus wait_renamed] polling for hostname=$name (timeout: $${var.dc_promotion_timeout_minutes}m)"
+      Write-Host "[dc-nexus wait_renamed] polling for hostname=$name (timeout: $${timeout}m)"
       while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 15
-        $h = (ssh -o ConnectTimeout=5 nexusadmin@$ip 'powershell -NoProfile -Command "hostname"' 2>$null).Trim()
+        # Null-safe Trim: ssh returns empty stdout while port 22 is briefly down
+        # during the rename reboot; .Trim() on $null throws InvalidOperation.
+        $raw = ssh -o ConnectTimeout=5 nexusadmin@$ip 'powershell -NoProfile -Command "hostname"' 2>$null
+        $h   = if ($raw) { $raw.Trim() } else { '' }
         if ($h -eq $name) {
           Write-Host "[dc-nexus wait_renamed] hostname is now $name."
           exit 0
         }
-        Write-Host "[dc-nexus wait_renamed] hostname=$h, retrying..."
+        Write-Host "[dc-nexus wait_renamed] hostname='$h', retrying..."
       }
-      throw "[dc-nexus wait_renamed] timed out after ${var.dc_promotion_timeout_minutes}m -- hostname never became $name"
+      throw "[dc-nexus wait_renamed] timed out after $${timeout}m -- hostname never became $name"
     PWSH
   }
 }
@@ -127,7 +131,7 @@ resource "null_resource" "dc_nexus_promote" {
     wait_id    = null_resource.dc_nexus_wait_renamed[0].id
     ad_domain  = local.ad_domain
     ad_netbios = local.ad_netbios
-    promote_v  = "1" # bump to force re-promote
+    promote_v  = "4" # v4 = also bakes post-promotion remediation (nexusadmin password reset + Domain Admins + sshd_config AllowUsers fix)
   }
 
   depends_on = [null_resource.dc_nexus_wait_renamed]
@@ -136,38 +140,69 @@ resource "null_resource" "dc_nexus_promote" {
     when        = create
     interpreter = ["pwsh", "-NoProfile", "-Command"]
     command     = <<-PWSH
-      $ip       = '${local.dc_nexus_ip}'
-      $domain   = '${local.ad_domain}'
-      $netbios  = '${local.ad_netbios}'
-      $dsrm_pwd = '${var.dsrm_password}'
+      $ip            = '${local.dc_nexus_ip}'
+      $domain        = '${local.ad_domain}'
+      $netbios       = '${local.ad_netbios}'
+      $dsrm_pwd      = '${var.dsrm_password}'
+      $admin_pwd     = '${var.local_administrator_password}'
+      $nexusadmin_pwd = '${var.nexusadmin_password}'
 
-      # Idempotent: if the forest already exists, no-op.
-      $existing = ssh nexusadmin@$ip 'powershell -NoProfile -Command "(Get-ADDomain -ErrorAction SilentlyContinue).Forest"' 2>$null
-      if ($existing -and $existing.Trim() -eq $domain) {
+      # Idempotency: skip if the forest already exists. Wrap in try/catch
+      # because Get-ADDomain throws ResourceUnavailable on workgroup boxes,
+      # which -ErrorAction SilentlyContinue doesn't always suppress cleanly
+      # over SSH (the WARNING leaks through PowerShell's stderr).
+      $existing = ssh nexusadmin@$ip 'powershell -NoProfile -Command "try { (Get-ADDomain -ErrorAction Stop).Forest } catch { }"' 2>$null
+      if ($existing) { $existing = $existing.Trim() }
+      if ($existing -eq $domain) {
         Write-Host "[dc-nexus promote] forest $domain already exists, skipping promotion."
         exit 0
       }
 
-      # Install AD DS role + promote in one shot. Auto-reboots on success.
-      $script = @"
-        Install-WindowsFeature AD-Domain-Services -IncludeManagementTools | Out-Null
-        Import-Module ADDSDeployment
-        Install-ADDSForest ``
-          -DomainName '$domain' ``
-          -DomainNetbiosName '$netbios' ``
-          -SafeModeAdministratorPassword (ConvertTo-SecureString '$dsrm_pwd' -AsPlainText -Force) ``
-          -InstallDns ``
-          -CreateDnsDelegation:`$false ``
-          -DatabasePath 'C:\Windows\NTDS' ``
-          -LogPath 'C:\Windows\NTDS' ``
-          -SysvolPath 'C:\Windows\SYSVOL' ``
-          -Force ``
-          -NoRebootOnCompletion:`$false
-"@
-      Write-Host "[dc-nexus promote] kicking Install-ADDSForest -DomainName $domain (auto-reboots)..."
-      # The promotion process itself takes 2-5 minutes before the reboot fires.
-      ssh nexusadmin@$ip "powershell -NoProfile -Command `"$script`""
-      Write-Host "[dc-nexus promote] command issued; reboot will follow."
+      # Build install script as a SINGLE LINE then ship via base64-encoded
+      # transit (-EncodedCommand).
+      #
+      # Lessons baked in from promote_v=1..3 attempts:
+      #
+      # v1 (failed): multi-line `@"..."@` heredoc with backtick line-continuations
+      #   got mangled crossing pwsh -> ssh -> cmd.exe -> remote-powershell.
+      #   cmd.exe truncated at the first newline. -EncodedCommand sidesteps it.
+      #
+      # v2 (failed): Install-ADDSForest's prereq check rejected promotion with
+      #   "local Administrator password is blank, which might lead to security
+      #   issues" because the local Administrator becomes the domain
+      #   Administrator on forest creation, and sysprep generalize wipes the
+      #   unattend-provided password on every clone. We Set-LocalUser +
+      #   Enable-LocalUser BEFORE Install-ADDSForest so the prereq check passes.
+      #
+      # v3 (incomplete): Install-ADDSForest succeeded but post-promotion the
+      #   env was inaccessible -- AD DS converts the local SAM into the AD DB.
+      #   The local nexusadmin user survives as a migrated domain user, but:
+      #     a) Its password is wiped (similar to lesson #9 from 0.B.6)
+      #     b) It's NOT in Domain Admins
+      #     c) sshd_config's `AllowUsers nexusadmin` doesn't match the
+      #        domain-prefixed `nexus\nexusadmin` form used post-promotion
+      #   Result: SSH rejected every login with "not allowed because not
+      #   listed in AllowUsers" (visible in OpenSSH/Operational event log).
+      #
+      # v4 fixes all three by appending these steps to the promote script,
+      # AFTER Install-ADDSForest completes but BEFORE the reboot:
+      #   - Set-ADAccountPassword nexusadmin -Reset -NewPassword <bootstrap>
+      #   - Add-ADGroupMember 'Domain Admins' -Members nexusadmin
+      #   - Patch sshd_config: comment out `AllowUsers nexusadmin` line
+      #     (trust = pubkey + Administrators group membership; no need to
+      #     enumerate users post-AD)
+      #   - Restart-Service sshd to load the new sshd_config
+      $remote = "Set-LocalUser -Name 'Administrator' -Password (ConvertTo-SecureString '$admin_pwd' -AsPlainText -Force) -PasswordNeverExpires `$true; Enable-LocalUser -Name 'Administrator'; Install-WindowsFeature AD-Domain-Services -IncludeManagementTools | Out-Null; Import-Module ADDSDeployment; `$securePwd = ConvertTo-SecureString '$dsrm_pwd' -AsPlainText -Force; Install-ADDSForest -DomainName '$domain' -DomainNetbiosName '$netbios' -SafeModeAdministratorPassword `$securePwd -InstallDns -CreateDnsDelegation:`$false -DatabasePath 'C:\Windows\NTDS' -LogPath 'C:\Windows\NTDS' -SysvolPath 'C:\Windows\SYSVOL' -Force -NoRebootOnCompletion; Start-Sleep -Seconds 10; Import-Module ActiveDirectory; Set-ADAccountPassword -Identity nexusadmin -Reset -NewPassword (ConvertTo-SecureString '$nexusadmin_pwd' -AsPlainText -Force); Enable-ADAccount -Identity nexusadmin; Add-ADGroupMember -Identity 'Domain Admins' -Members nexusadmin; `$cfg = Get-Content 'C:\ProgramData\ssh\sshd_config'; `$cfg = `$cfg -replace '^\s*AllowUsers.*$', '# AllowUsers (removed post-AD-promotion: trust = pubkey + Administrators group membership)'; `$cfg | Set-Content 'C:\ProgramData\ssh\sshd_config' -Encoding ascii; Restart-Service sshd -Force; Start-Sleep -Seconds 5; shutdown /r /t 0"
+      $bytes = [System.Text.Encoding]::Unicode.GetBytes($remote)
+      $b64   = [Convert]::ToBase64String($bytes)
+
+      Write-Host "[dc-nexus promote] dispatching Install-ADDSForest + post-promotion remediation via -EncodedCommand (script bytes: $($remote.Length))..."
+      # SSH session stays alive while Install-ADDSForest runs (~3-5 min) +
+      # post-promotion AD ops (~10 sec) then we explicitly shutdown /r.
+      # SSH may exit 0 (clean) or 255 (connection dropped during reboot kick).
+      ssh nexusadmin@$ip "powershell -NoProfile -EncodedCommand $b64"
+      $rc = $LASTEXITCODE
+      Write-Host "[dc-nexus promote] command issued (ssh exit=$rc); reboot will follow. wait_promoted will poll for AD DS to come back."
     PWSH
   }
 }
@@ -188,19 +223,24 @@ resource "null_resource" "dc_nexus_wait_promoted" {
     command     = <<-PWSH
       $ip       = '${local.dc_nexus_ip}'
       $domain   = '${local.ad_domain}'
-      $deadline = (Get-Date).AddMinutes(${var.dc_promotion_timeout_minutes})
+      $timeout  = ${var.dc_promotion_timeout_minutes}
+      $deadline = (Get-Date).AddMinutes($timeout)
 
-      Write-Host "[dc-nexus wait_promoted] polling Get-ADDomain.Forest == $domain (timeout: $${var.dc_promotion_timeout_minutes}m)"
+      Write-Host "[dc-nexus wait_promoted] polling Get-ADDomain.Forest == $domain (timeout: $${timeout}m)"
       while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 30
-        $f = (ssh -o ConnectTimeout=5 nexusadmin@$ip 'powershell -NoProfile -Command "(Get-ADDomain -ErrorAction SilentlyContinue).Forest"' 2>$null)
-        if ($f -and $f.Trim() -eq $domain) {
+        # Wrap Get-ADDomain in try/catch -- on a workgroup or freshly-rebooting
+        # box it throws ResourceUnavailable, and -ErrorAction SilentlyContinue
+        # leaves a WARNING that confuses the empty-string check.
+        $raw = ssh -o ConnectTimeout=5 nexusadmin@$ip 'powershell -NoProfile -Command "try { (Get-ADDomain -ErrorAction Stop).Forest } catch { }"' 2>$null
+        $f   = if ($raw) { $raw.Trim() } else { '' }
+        if ($f -eq $domain) {
           Write-Host "[dc-nexus wait_promoted] domain $domain is live."
           exit 0
         }
         Write-Host "[dc-nexus wait_promoted] not ready yet (got: '$f'), retrying..."
       }
-      throw "[dc-nexus wait_promoted] timed out after ${var.dc_promotion_timeout_minutes}m -- AD DS never came up"
+      throw "[dc-nexus wait_promoted] timed out after $${timeout}m -- AD DS never came up"
     PWSH
   }
 }

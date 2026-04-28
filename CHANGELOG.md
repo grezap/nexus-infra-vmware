@@ -6,7 +6,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Phase 0.C.2 promote step `v3` -> `v4`** — bakes four post-promotion
+  remediation steps into the encoded command so fresh deploys land a
+  working DC zero-touch (no manual recovery needed). Steps added (in
+  order, all between Install-ADDSForest and the post-install reboot):
+  (a) `Set-ADAccountPassword nexusadmin -Reset` — AD DS migrates the
+      local `nexusadmin` into the AD database but blanks its password;
+  (b) `Add-ADGroupMember 'Domain Admins' -Members nexusadmin` — migrated
+      users land in `Domain Users` only, not Domain Admins;
+  (c) Comment out `AllowUsers nexusadmin` line in `C:\ProgramData\ssh\sshd_config`
+      — Win32-OpenSSH receives the username as `nexus\nexusadmin`
+      post-promotion and doesn't match the bare-username AllowUsers; trust
+      = pubkey + Administrators group is sufficient on a DC;
+  (d) `Restart-Service sshd -Force` to load the new sshd_config.
+  New variable `nexusadmin_password` (sensitive, default `NexusPackerBuild!1`,
+  Vault-rotated in Phase 0.D).
+
+- **Phase 0.C.2 gateway-dns step `dns_overlay_v` `1` -> `2`** —
+  changes `systemctl reload dnsmasq` to `systemctl restart dnsmasq`.
+  SIGHUP re-reads `/etc/dnsmasq.d/` files but does NOT flush the DNS
+  cache; cached NXDOMAIN responses (from queries that hit the public
+  upstream BEFORE the forward zone was added) survived the reload and
+  kept being served. `restart` drops the cache as part of process
+  restart, so the forward is live immediately.
+
 ### Added
+
+- **`memory/feedback_addsforest_post_promotion.md`** (new entry) —
+  canonical remediation pattern for any future automated AD DS
+  promotion: four post-promotion steps + base64-encoded transit +
+  smoke-gate guidance for workgroup peers (`nltest /dsgetdc` is
+  unreliable from workgroup boxes; use Resolve-DnsName + port probes
+  + DC-side nltest instead).
 
 - **Phase 0.C.2 — AD DS role overlay on `dc-nexus`** —
   `terraform/envs/foundation/role-overlay-dc-nexus.tf` lays five
