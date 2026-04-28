@@ -509,7 +509,7 @@ Bumping the `*_v` field in any `triggers` block forces re-execution (use this wh
 
 ### 1d.3 NOT in scope for 0.C.2
 
-- **Adding the jumpbox to the domain** (`Add-Computer -DomainName nexus.lab -Restart`) — separate role overlay, e.g. `role-overlay-jumpbox-domainjoin.tf`. Easier to scope as 0.C.3 since it depends on dc-nexus being live.
+- **Adding the jumpbox to the domain** — moved to Phase 0.C.3 (§1e below). `Add-Computer -DomainName nexus.lab` runs as a separate overlay so 0.C.2 can land/test in isolation.
 - **OUs / GPOs / service accounts** — start trivial in this phase; lab DC promotion only.
 - **Second DC for replication** — Phase 0.G (or whenever HA is needed).
 - **Vault-backed DSRM password** — Phase 0.D.
@@ -557,6 +557,68 @@ ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-ADDomain | Fo
 ```
 
 Once `nexus-admin-jumpbox` is domain-joined (Phase 0.C.3), Netlogon auto-starts and stays running, after which `nltest /dsgetdc:nexus.lab` from the jumpbox works cleanly.
+
+---
+
+## 1e. Phase 0.C.3 — `nexus-admin-jumpbox` domain-join to `nexus.lab`
+
+Layered on top of 0.C.2's promoted DC. Joins `nexus-admin-jumpbox` to the `nexus.lab` domain so it becomes a real domain member: operators authenticate as `nexus\nexusadmin` (or any future domain user), Group Policy can target it, RSAT tools work without explicit `-Credential`, and the cosmetic `nltest 1355` from §1d.6 disappears (Netlogon auto-starts post-join).
+
+**File:** `terraform/envs/foundation/role-overlay-jumpbox-domainjoin.tf` — 3 sequential top-level `null_resource`s:
+
+| Step | What it does |
+|---|---|
+| `jumpbox_domain_join` | Single base64-encoded SSH command that (a) patches sshd_config to drop `AllowUsers nexusadmin` so post-join SSH as `nexus\nexusadmin` works, then (b) `Add-Computer -DomainName nexus.lab -NewName nexus-admin-jumpbox -Credential <NEXUS\nexusadmin> -Force -Restart`. Add-Computer renames the local hostname AND adds to the domain in one atomic call. |
+| `jumpbox_wait_rejoined` | Polls `(Get-WmiObject Win32_ComputerSystem).PartOfDomain` over SSH until True + Domain=nexus.lab. ~3-7 min wall-clock. |
+| `jumpbox_verify` | Emits `Win32_ComputerSystem` membership state, `nltest /dsgetdc:nexus.lab` (now succeeds — Netlogon is live), and `Get-ADComputer nexus-admin-jumpbox` (proves the box is registered in AD). |
+
+**Toggle:** `var.enable_jumpbox_domain_join` (bool, default `true`). Implicitly depends on `enable_dc_promotion=true` because it `depends_on null_resource.dc_nexus_verify`.
+
+**Selective ops:**
+
+```powershell
+cd terraform\envs\foundation
+
+# Default — runs DC overlay + jumpbox join (~10-20 min cold including dc promotion + reboots)
+terraform apply -auto-approve
+
+# Skip just the join — keeps DC + bare workgroup jumpbox
+terraform apply -var enable_jumpbox_domain_join=false -auto-approve
+
+# Iterate on the join step alone (after DC is up)
+terraform apply -target=null_resource.jumpbox_domain_join -auto-approve
+
+# Re-fire just the join (script changed, want to re-run)
+terraform taint null_resource.jumpbox_domain_join
+terraform apply -target=null_resource.jumpbox_domain_join -auto-approve
+```
+
+**Smoke gate:**
+
+```powershell
+# Jumpbox is a real domain member
+ssh nexusadmin@192.168.70.241 'powershell -NoProfile -Command "(Get-WmiObject Win32_ComputerSystem) | Format-List Name, Domain, PartOfDomain, DomainRole"'
+# Expect: Domain = nexus.lab, PartOfDomain = True, DomainRole = 3 (member workstation)
+
+# Netlogon is live (nltest works from the jumpbox now)
+ssh nexusadmin@192.168.70.241 'powershell -NoProfile -Command "nltest /dsgetdc:nexus.lab"'
+
+# Jumpbox is registered in AD
+ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-ADComputer nexus-admin-jumpbox | Format-List Name, DNSHostName, DistinguishedName"'
+```
+
+**Idempotency:** the join script's first action over SSH is an idempotency check — `(Get-WmiObject).PartOfDomain` + `Domain == nexus.lab`. If both true, the script exits 0 and Add-Computer is never called. Re-applies are safe.
+
+### 1e.1 NOT in scope for 0.C.3
+
+- **OUs for organizing the jumpbox + future domain members** — Phase 0.C.4+
+- **GPO for jumpbox lockdown** — Phase 0.C.4+
+- **Removing the local `nexusadmin` from the jumpbox** — left in place as fallback during early lab phases; cleaned up when Phase 0.D rotates credentials via Vault
+- **Joining `dc-nexus` to itself** (it's the DC; it's *the* domain authority by definition; no `Add-Computer` needed)
+
+### 1e.2 Carries forward the post-AD lessons from §1d.4
+
+The same `sshd_config AllowUsers` trap that bit us on dc-nexus also applies to any domain-joined Windows peer. The join overlay applies the same patch (drop the directive, restart sshd) BEFORE the Add-Computer reboot so the post-reboot sshd allows domain-format usernames immediately. Memory entry [`feedback_addsforest_post_promotion.md`](memory/feedback_addsforest_post_promotion.md) covers both DC and member-server cases — same trust model (pubkey + Administrators group), same fix.
 
 ---
 
@@ -756,12 +818,13 @@ nexus-infra-vmware/
     ├── ws2025-desktop-smoke/   # Phase 0.B.5 — smoke harness for ws2025-desktop
     ├── win11ent-smoke/         # Phase 0.B.6 — smoke harness for win11ent
     └── envs/
-        └── foundation/                       # Phase 0.C.1 — always-on plumbing (dc-nexus + nexus-admin-jumpbox)
-            ├── main.tf                       # 2 modules/vm/ instances
-            ├── variables.tf                  # MAC + AD DS + selective-toggle vars
-            ├── outputs.tf                    # vm_paths, mac_addresses, domain_info, next_step
-            ├── role-overlay-dc-nexus.tf      # Phase 0.C.2 — rename + Install-ADDSForest
-            └── role-overlay-gateway-dns.tf   # Phase 0.C.2 — env-scoped dnsmasq forward for nexus.lab
+        └── foundation/                              # Phase 0.C.1 — always-on plumbing (dc-nexus + nexus-admin-jumpbox)
+            ├── main.tf                              # 2 modules/vm/ instances
+            ├── variables.tf                         # MAC + AD DS + selective-toggle vars
+            ├── outputs.tf                           # vm_paths, mac_addresses, domain_info, jumpbox_info, next_step
+            ├── role-overlay-dc-nexus.tf             # Phase 0.C.2 — rename + Install-ADDSForest + post-promote remediation
+            ├── role-overlay-gateway-dns.tf          # Phase 0.C.2 — env-scoped dnsmasq forward for nexus.lab
+            └── role-overlay-jumpbox-domainjoin.tf   # Phase 0.C.3 — Add-Computer nexus-admin-jumpbox → nexus.lab
 ```
 
 Template VMs live at `H:\VMS\NexusPlatform\_templates\<name>\<name>.vmx`.
@@ -780,8 +843,8 @@ Running instances at `H:\VMS\NexusPlatform\<tier>\<name>\<name>.vmx` (tier = `00
 | 0.B.5 | ✅ Windows Server 2025 Desktop template + DRY `_shared/powershell/` extraction | [ws2025-desktop.md](ws2025-desktop.md) |
 | 0.B.6 | ✅ Windows 11 Enterprise template (vTPM bypass via LabConfig; LATFP + elevated_user; pinned Win32-OpenSSH v9.5) | [win11ent.md](win11ent.md) |
 | 0.C.1 | ✅ `envs/foundation` — always-on plumbing (dc-nexus + nexus-admin-jumpbox); zero-touch SSH smoke green | §1c above |
-| 0.C.2 | 🔄 AD DS role overlay on dc-nexus (`Install-ADDSForest -DomainName nexus.lab`) + env-scoped dnsmasq forward — **scaffolded; first apply pending** | §1d above |
-| 0.C.3 | Add `nexus-admin-jumpbox` to `nexus.lab` domain | *(pending)* |
+| 0.C.2 | ✅ AD DS role overlay on dc-nexus (`Install-ADDSForest -DomainName nexus.lab`) + env-scoped dnsmasq forward + post-promotion remediation (v4) | §1d above |
+| 0.C.3 | 🔄 `nexus-admin-jumpbox` domain-join to `nexus.lab` — **scaffolded; first apply pending** | §1e above |
 | 0.C.* | `envs/{data,ml,saas,microservices,demo-minimal}` — composing per-template clones into role fleets | *(pending)* |
 | 0.D   | Vault + SSH key rotation + KMIP for real vTPM + DSRM password rotation | *(pending)* |
 | 0.E   | Consul KV terraform backend (replaces local `.tfstate`) | *(pending)* |

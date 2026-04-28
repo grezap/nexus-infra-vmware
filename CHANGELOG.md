@@ -6,6 +6,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Phase 0.C.3 — `nexus-admin-jumpbox` domain-join to `nexus.lab`** —
+  `terraform/envs/foundation/role-overlay-jumpbox-domainjoin.tf` lays
+  three sequential top-level `null_resource`s that join the jumpbox
+  ws2025-desktop clone to the `nexus.lab` domain (Phase 0.C.2's forest):
+  `jumpbox_domain_join` (sshd_config patch + `Add-Computer -NewName -Restart`
+  in one base64-encoded SSH command) → `jumpbox_wait_rejoined` (poll
+  PartOfDomain over SSH for ~3-7 min) → `jumpbox_verify` (emit
+  Win32_ComputerSystem state + nltest /dsgetdc + Get-ADComputer).
+  After this overlay completes, Netlogon is auto-started on the jumpbox
+  and the cosmetic `nltest 1355` from §1d.6 disappears.
+  New variable `enable_jumpbox_domain_join` (bool, default true);
+  reuses existing `nexusadmin_password` for the join credential
+  (`NEXUS\nexusadmin`).
+  Implicitly depends on `enable_dc_promotion=true` via `depends_on
+  null_resource.dc_nexus_verify`.
+  Idempotent: skips if jumpbox is already joined to the domain.
+
+- `outputs.tf` — new `jumpbox_info` block (enabled, hostname, fqdn, ip,
+  domain_member). `next_step` HEREDOC extended with jumpbox smoke-gate
+  commands.
+
+- `docs/handbook.md` §1e (NEW) — full Phase 0.C.3 reproduce flow:
+  per-step description, selective-ops cheatsheet, smoke gate, scope
+  deferrals (OUs/GPOs = 0.C.4+, removing the local nexusadmin = 0.D).
+  §1d.3 cleaned up (jumpbox join no longer "NOT in scope" — moved
+  to 0.C.3).
+  §5 directory map + §6 phase table updated to reflect 0.C.2 ✅
+  and 0.C.3 🔄.
+
 ### Changed
 
 - **Phase 0.C.2 promote step `v3` -> `v4`** — bakes four post-promotion

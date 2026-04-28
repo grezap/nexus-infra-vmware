@@ -80,7 +80,15 @@ variable "nexusadmin_password" {
 }
 
 variable "dc_promotion_timeout_minutes" {
-  description = "Per-step timeout for waiting on rename-reboot and post-promotion AD DS bootstrap. Tune up if the build host is slow."
+  description = "Per-step timeout for waiting on rename-reboot and post-promotion AD DS bootstrap. Tune up if the build host is slow. Also reused by jumpbox-domain-join's wait_rejoined poll."
   type        = number
   default     = 15
+}
+
+# ─── Phase 0.C.3 — jumpbox domain-join overlay ───────────────────────────
+
+variable "enable_jumpbox_domain_join" {
+  description = "Toggle: domain-join nexus-admin-jumpbox to var.ad_domain via Add-Computer. Default true. Implicitly depends on enable_dc_promotion=true via depends_on null_resource.dc_nexus_verify -- if the DC isn't promoted, this is a no-op. Set to false to keep the jumpbox in workgroup mode (e.g. iterating on the DC overlay independently)."
+  type        = bool
+  default     = true
 }

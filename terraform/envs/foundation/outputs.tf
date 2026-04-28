@@ -27,6 +27,17 @@ output "domain_info" {
   }
 }
 
+output "jumpbox_info" {
+  description = "Jumpbox membership details (only meaningful when enable_jumpbox_domain_join=true)."
+  value = {
+    enabled       = var.enable_jumpbox_domain_join
+    hostname      = "nexus-admin-jumpbox"
+    fqdn          = var.enable_jumpbox_domain_join ? "nexus-admin-jumpbox.${var.ad_domain}" : null
+    ip            = "192.168.70.241"
+    domain_member = var.enable_jumpbox_domain_join
+  }
+}
+
 output "next_step" {
   value = <<-EOT
 
@@ -53,8 +64,13 @@ output "next_step" {
 
     Verify the AD DS overlay (Phase 0.C.2) -- runs only when var.enable_dc_promotion=true:
       ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-ADDomain | Format-List Forest, DomainMode, NetBIOSName"'
-      ssh nexusadmin@192.168.70.241 'powershell -NoProfile -Command "nltest /dsgetdc:${var.ad_domain}"'
+      ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "nltest /dsgetdc:${var.ad_domain}"'
       ssh nexusadmin@192.168.70.1   "dig @127.0.0.1 _ldap._tcp.${var.ad_domain} SRV +short"
+
+    Verify the jumpbox domain-join (Phase 0.C.3) -- runs only when var.enable_jumpbox_domain_join=true:
+      ssh nexusadmin@192.168.70.241 'powershell -NoProfile -Command "(Get-WmiObject Win32_ComputerSystem) | Format-List Name, Domain, PartOfDomain, DomainRole"'
+      ssh nexusadmin@192.168.70.241 'powershell -NoProfile -Command "nltest /dsgetdc:${var.ad_domain}"'
+      ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-ADComputer nexus-admin-jumpbox | Format-List Name, DNSHostName, DistinguishedName, Enabled"'
 
     Selective ops -- per memory/feedback_selective_provisioning.md, every piece of
     foundation is independently controllable. Examples:
