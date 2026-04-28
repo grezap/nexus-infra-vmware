@@ -27,3 +27,46 @@ variable "mac_nexus_admin_jumpbox" {
   type        = string
   default     = "00:50:56:3F:00:26"
 }
+
+# ─── Phase 0.C.2 — AD DS role overlay on dc-nexus ────────────────────────
+
+variable "enable_dc_promotion" {
+  description = "Toggle: run the dc-nexus AD DS role overlay (rename + Install-ADDSForest). True by default because foundation = always-on plumbing. Set to false to land bare clones only (e.g. iterating on the VM clone path without re-running multi-minute promotion)."
+  type        = bool
+  default     = true
+}
+
+variable "enable_gateway_dns_forward" {
+  description = "Toggle: write a `server=<ad_domain>/<dc-nexus-ip>` entry to nexus-gateway's dnsmasq.d/ at apply time. Required for VMnet11 hosts to resolve the AD domain. Defaults to true; depends on dc_nexus_wait_promoted, so this becomes a no-op when enable_dc_promotion=false."
+  type        = bool
+  default     = true
+}
+
+variable "ad_domain" {
+  description = "Active Directory FQDN for the foundation forest. RFC-2606 friendly default (`.lab` is reserved). Only meaningful when enable_dc_promotion=true."
+  type        = string
+  default     = "nexus.lab"
+}
+
+variable "ad_netbios" {
+  description = "NetBIOS name for the AD forest. Must be <=15 chars, uppercase by convention. Only meaningful when enable_dc_promotion=true."
+  type        = string
+  default     = "NEXUS"
+  validation {
+    condition     = length(var.ad_netbios) <= 15
+    error_message = "NetBIOS name must be 15 characters or fewer."
+  }
+}
+
+variable "dsrm_password" {
+  description = "Directory Services Restore Mode (DSRM) administrator password used by Install-ADDSForest. Pre-Phase-0.D this lives plaintext in tfvars / defaults; Vault-backed in Phase 0.D. Does not need to match the build-time nexusadmin password."
+  type        = string
+  default     = "NexusDSRM!1"
+  sensitive   = true
+}
+
+variable "dc_promotion_timeout_minutes" {
+  description = "Per-step timeout for waiting on rename-reboot and post-promotion AD DS bootstrap. Tune up if the build host is slow."
+  type        = number
+  default     = 15
+}

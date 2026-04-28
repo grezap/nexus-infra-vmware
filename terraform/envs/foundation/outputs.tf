@@ -14,6 +14,19 @@ output "mac_addresses" {
   }
 }
 
+output "domain_info" {
+  description = "AD DS forest details (only meaningful when enable_dc_promotion=true)."
+  value = {
+    enabled            = var.enable_dc_promotion
+    domain             = var.ad_domain
+    netbios            = var.ad_netbios
+    dc_hostname        = "dc-nexus"
+    dc_fqdn            = var.enable_dc_promotion ? "dc-nexus.${var.ad_domain}" : null
+    dc_ip              = "192.168.70.240"
+    dns_forward_active = var.enable_gateway_dns_forward
+  }
+}
+
 output "next_step" {
   value = <<-EOT
 
@@ -38,13 +51,23 @@ output "next_step" {
       ssh nexusadmin@<dc-nexus-ip>   'powershell -NoProfile -Command "hostname; (Get-Service sshd).Status"'
       ssh nexusadmin@<jumpbox-ip>    'powershell -NoProfile -Command "hostname; (Get-Service sshd).Status"'
 
-    Verify dc-nexus is ready for AD DS promotion (RSAT shipped by ws2025-desktop):
-      ssh nexusadmin@<dc-nexus-ip> 'powershell -NoProfile -Command "Get-WindowsFeature AD-Domain-Services, RSAT-AD-Tools, GPMC | Format-Table Name, InstallState"'
+    Verify the AD DS overlay (Phase 0.C.2) -- runs only when var.enable_dc_promotion=true:
+      ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-ADDomain | Format-List Forest, DomainMode, NetBIOSName"'
+      ssh nexusadmin@192.168.70.241 'powershell -NoProfile -Command "nltest /dsgetdc:${var.ad_domain}"'
+      ssh nexusadmin@192.168.70.1   "dig @127.0.0.1 _ldap._tcp.${var.ad_domain} SRV +short"
 
-    Verify nexus-admin-jumpbox has the operator toolset:
-      ssh nexusadmin@<jumpbox-ip> 'powershell -NoProfile -Command "Get-WindowsFeature RSAT-AD-Tools, RSAT-DNS-Server, RSAT-DHCP, GPMC | Format-Table Name, InstallState"'
+    Selective ops -- per memory/feedback_selective_provisioning.md, every piece of
+    foundation is independently controllable. Examples:
+      terraform apply -target=module.dc_nexus -auto-approve              # dc-nexus only, no jumpbox
+      terraform apply -target=module.nexus_admin_jumpbox -auto-approve   # jumpbox only
+      terraform apply -var enable_dc_promotion=false -auto-approve       # bare clones, no AD DS
+      terraform apply -target=null_resource.dc_nexus_promote -auto-approve  # iterate on the promotion step
+      terraform taint null_resource.dc_nexus_promote && terraform apply -target=null_resource.dc_nexus_promote -auto-approve
 
-    Tear down with:
+    Tear down (whole env):
       make foundation-destroy
+
+    Tear down just the role overlay (keeps the bare clones running):
+      terraform apply -var enable_dc_promotion=false -var enable_gateway_dns_forward=false -auto-approve
   EOT
 }

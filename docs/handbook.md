@@ -350,7 +350,7 @@ Subsequent envs will draw from the appropriate tier nibble (`:30-3F` data, `:40-
 
 - **Local `.tfstate`** — `envs/foundation/` writes state under its own dir. Migration to a Consul KV backend is Phase 0.E.
 - **Bootstrap creds** — both clones inherit `nexusadmin` / `NexusPackerBuild!1` from the Packer template; post-clone rotation lives in Phase 0.D when Vault lands.
-- **No role-overlay yet** — `dc-nexus` is a bare ws2025-desktop clone. AD DS promotion (`Install-ADDSForest -DomainName nexus.lab`), DNS configuration, and jumpbox tooling reservations are downstream 0.C tickets.
+- **AD DS DSRM password** (Phase 0.C.2) — `var.dsrm_password` defaults to `NexusDSRM!1` in `variables.tf`. Same Vault-rotation horizon (Phase 0.D).
 
 ### 1c.5 Smoke-time gotcha — pre-`dc5c588` Windows templates
 
@@ -427,6 +427,93 @@ ssh nexusadmin@<jumpbox-ip>  'powershell -NoProfile -Command "hostname"'
 ```
 
 **Forward implication for `_shared/` discipline:** any change to `packer/_shared/powershell/scripts/*.ps1` creates an "obsolete template" footprint. Every Windows template that consumes the modified script needs a rebuild before its clones can be relied on. Consider this when the next shared-script edit lands — flag affected templates in the commit message and rebuild them in the same effort.
+
+---
+
+## 1d. Phase 0.C.2 — AD DS role overlay on `dc-nexus`
+
+Layered on top of 0.C.1's bare-clone foundation. Promotes the `dc-nexus` ws2025-desktop clone into a real domain controller for `nexus.lab` and adds an env-scoped DNS forward on `nexus-gateway` so VMnet11 hosts can resolve domain queries.
+
+**Files (all under `terraform/envs/foundation/`):**
+
+| File | Purpose |
+|---|---|
+| `role-overlay-dc-nexus.tf` | 5 sequential `null_resource`s: rename → wait_renamed → promote → wait_promoted → verify. Top-level (not nested in `module.dc_nexus`) so each step is independently `-target`-able. |
+| `role-overlay-gateway-dns.tf` | Single `null_resource` that writes `/etc/dnsmasq.d/foundation-nexus-lab.conf` on the gateway + reloads dnsmasq. Idempotent + has a destroy-time provisioner that cleanly removes the conf. |
+| `variables.tf` (extended) | `enable_dc_promotion`, `enable_gateway_dns_forward`, `ad_domain`, `ad_netbios`, `dsrm_password`, `dc_promotion_timeout_minutes`. |
+
+**Selective ops** (per [`memory/feedback_selective_provisioning.md`](https://github.com/grezap/nexus-infra-vmware) — every piece is independently controllable):
+
+```powershell
+cd terraform\envs\foundation
+
+# Default: clones + AD DS overlay + DNS forward (the always-on plumbing posture)
+terraform apply -auto-approve
+
+# Bare clones only -- skip the multi-minute promotion, useful when iterating
+# on the VM clone path or testing module/vm changes.
+terraform apply -var enable_dc_promotion=false -auto-approve
+
+# Just dc-nexus, no jumpbox (saves ~1.5 GB RAM during single-VM iteration)
+terraform apply -target=module.dc_nexus -auto-approve
+
+# Iterate on the promotion step without re-cloning the VM
+terraform apply -target=null_resource.dc_nexus_promote -auto-approve
+
+# Re-run a specific overlay step after fixing something
+terraform taint null_resource.dc_nexus_promote
+terraform apply -target=null_resource.dc_nexus_promote -auto-approve
+
+# Tear down just the role overlay (keeps bare clones running)
+terraform apply -var enable_dc_promotion=false -var enable_gateway_dns_forward=false -auto-approve
+```
+
+**Smoke gate:**
+
+```powershell
+# DC's own view of the forest
+ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-ADDomain | Format-List Forest, DomainMode, NetBIOSName"'
+
+# Jumpbox (or any VMnet11 client) can locate the DC via DNS SRV
+ssh nexusadmin@192.168.70.241 'powershell -NoProfile -Command "nltest /dsgetdc:nexus.lab"'
+
+# Gateway forwards nexus.lab queries to dc-nexus
+ssh nexusadmin@192.168.70.1 "dig @127.0.0.1 _ldap._tcp.nexus.lab SRV +short"
+# Expect lines like: 0 100 389 dc-nexus.nexus.lab.
+```
+
+### 1d.1 Timing expectations
+
+| Step | Wall-clock |
+|---|---|
+| `module.dc_nexus` + `module.nexus_admin_jumpbox` (bare clones) | 15-30 sec |
+| `null_resource.dc_nexus_rename` (Rename-Computer + reboot trigger) | 5 sec |
+| `null_resource.dc_nexus_wait_renamed` (poll until hostname == `dc-nexus`) | 60-180 sec |
+| `null_resource.dc_nexus_promote` (`Install-ADDSForest`, kicks reboot) | 2-5 min |
+| `null_resource.dc_nexus_wait_promoted` (poll until `Get-ADDomain.Forest` matches) | 3-6 min after the promotion reboot |
+| `null_resource.dc_nexus_verify` | 2-3 sec |
+| `null_resource.gateway_dns_forward` | 2-3 sec |
+| **Total cold path** | **~8-15 min** |
+
+`var.dc_promotion_timeout_minutes` defaults to 15 per step; bump it if the build host is slow.
+
+### 1d.2 Idempotency
+
+Each overlay step is idempotent on re-apply:
+
+- **Rename** — checks `hostname` first; no-op if already `dc-nexus`.
+- **Promote** — checks `(Get-ADDomain).Forest` first; no-op if `nexus.lab` already exists.
+- **DNS forward** — looks for the marker comment in `/etc/dnsmasq.d/foundation-nexus-lab.conf`; no-op if present.
+
+Bumping the `*_v` field in any `triggers` block forces re-execution (use this when iterating on the script content, since terraform can't detect heredoc string changes).
+
+### 1d.3 NOT in scope for 0.C.2
+
+- **Adding the jumpbox to the domain** (`Add-Computer -DomainName nexus.lab -Restart`) — separate role overlay, e.g. `role-overlay-jumpbox-domainjoin.tf`. Easier to scope as 0.C.3 since it depends on dc-nexus being live.
+- **OUs / GPOs / service accounts** — start trivial in this phase; lab DC promotion only.
+- **Second DC for replication** — Phase 0.G (or whenever HA is needed).
+- **Vault-backed DSRM password** — Phase 0.D.
+- **Renaming the `nexusadmin` workgroup user → domain user** — Phase 0.D once Vault can issue domain creds.
 
 ---
 
@@ -626,7 +713,12 @@ nexus-infra-vmware/
     ├── ws2025-desktop-smoke/   # Phase 0.B.5 — smoke harness for ws2025-desktop
     ├── win11ent-smoke/         # Phase 0.B.6 — smoke harness for win11ent
     └── envs/
-        └── foundation/         # Phase 0.C.1 — always-on plumbing (dc-nexus + nexus-admin-jumpbox)
+        └── foundation/                       # Phase 0.C.1 — always-on plumbing (dc-nexus + nexus-admin-jumpbox)
+            ├── main.tf                       # 2 modules/vm/ instances
+            ├── variables.tf                  # MAC + AD DS + selective-toggle vars
+            ├── outputs.tf                    # vm_paths, mac_addresses, domain_info, next_step
+            ├── role-overlay-dc-nexus.tf      # Phase 0.C.2 — rename + Install-ADDSForest
+            └── role-overlay-gateway-dns.tf   # Phase 0.C.2 — env-scoped dnsmasq forward for nexus.lab
 ```
 
 Template VMs live at `H:\VMS\NexusPlatform\_templates\<name>\<name>.vmx`.
@@ -644,9 +736,11 @@ Running instances at `H:\VMS\NexusPlatform\<tier>\<name>\<name>.vmx` (tier = `00
 | 0.B.4 | ✅ Windows Server 2025 Core template (first Windows image; WinRM-build / OpenSSH-runtime; PowerShell provisioners parallel to the Linux shared roles) | [ws2025-core.md](ws2025-core.md) |
 | 0.B.5 | ✅ Windows Server 2025 Desktop template + DRY `_shared/powershell/` extraction | [ws2025-desktop.md](ws2025-desktop.md) |
 | 0.B.6 | ✅ Windows 11 Enterprise template (vTPM bypass via LabConfig; LATFP + elevated_user; pinned Win32-OpenSSH v9.5) | [win11ent.md](win11ent.md) |
-| 0.C.1 | 🔄 `envs/foundation` — always-on plumbing (dc-nexus + nexus-admin-jumpbox) — **scaffolded; AD DS role overlay deferred** | §1c above |
+| 0.C.1 | ✅ `envs/foundation` — always-on plumbing (dc-nexus + nexus-admin-jumpbox); zero-touch SSH smoke green | §1c above |
+| 0.C.2 | 🔄 AD DS role overlay on dc-nexus (`Install-ADDSForest -DomainName nexus.lab`) + env-scoped dnsmasq forward — **scaffolded; first apply pending** | §1d above |
+| 0.C.3 | Add `nexus-admin-jumpbox` to `nexus.lab` domain | *(pending)* |
 | 0.C.* | `envs/{data,ml,saas,microservices,demo-minimal}` — composing per-template clones into role fleets | *(pending)* |
-| 0.D   | Vault + SSH key rotation + KMIP for real vTPM | *(pending)* |
+| 0.D   | Vault + SSH key rotation + KMIP for real vTPM + DSRM password rotation | *(pending)* |
 | 0.E   | Consul KV terraform backend (replaces local `.tfstate`) | *(pending)* |
 
 Keep this file in sync as phases land — each new VM gets a per-VM doc under `docs/` and a section added here under §1.

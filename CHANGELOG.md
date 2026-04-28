@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 0.C.2 — AD DS role overlay on `dc-nexus`** —
+  `terraform/envs/foundation/role-overlay-dc-nexus.tf` lays five
+  sequential top-level `null_resource`s that promote the bare
+  `ws2025-desktop` clone into a real domain controller for `nexus.lab`:
+  rename → wait_renamed → promote (`Install-ADDSForest`) → wait_promoted
+  → verify. Top-level (not nested in `module.dc_nexus`) so each step is
+  independently `-target`-able for iteration.
+  `terraform/envs/foundation/role-overlay-gateway-dns.tf` writes
+  `/etc/dnsmasq.d/foundation-nexus-lab.conf` to `nexus-gateway`
+  at apply-time + reloads dnsmasq, with a destroy-time provisioner
+  that cleanly removes the conf. Env-scoped so the 0.B.1
+  `nexus-gateway` template stays frozen.
+  Toggles: `enable_dc_promotion` (bool, default true) +
+  `enable_gateway_dns_forward` (bool, default true) gate the entire
+  overlay surface, per `memory/feedback_selective_provisioning.md`.
+  New vars: `ad_domain` (default `nexus.lab`),
+  `ad_netbios` (default `NEXUS`, validated <=15 chars),
+  `dsrm_password` (sensitive, default `NexusDSRM!1` pre-Phase-0.D),
+  `dc_promotion_timeout_minutes` (default 15).
+  All overlay steps are idempotent on re-apply.
+- `outputs.tf` — new `domain_info` block (forest name, NetBIOS,
+  dc_fqdn, dns_forward_active). `next_step` HEREDOC extended with
+  AD DS smoke-gate commands + selective-ops examples
+  (`-target=`, `-var enable_*=false`, `terraform taint`).
+- `docs/handbook.md` §1d (NEW) — full Phase 0.C.2 reproduce flow:
+  file inventory, selective-ops cheatsheet, smoke gate commands,
+  per-step timing expectations, idempotency notes, scope deferrals
+  (jumpbox domain-join, OUs/GPOs, second DC, Vault rotation).
+  §1c.4 + §6 phase table updated.
+  §5 directory map expanded with the new `envs/foundation/` files.
+
 - **Phase 0.C.1 — `terraform/envs/foundation/`** — first env composing
   multiple `modules/vm/` instances. Lands two `ws2025-desktop` clones on
   VMnet11: `dc-nexus` (MAC `00:50:56:3F:00:25`) and `nexus-admin-jumpbox`
