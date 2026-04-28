@@ -66,12 +66,14 @@ make ws2025-core-smoke
 # VM lands at H:\VMS\NexusPlatform\90-smoke\ws2025-core-smoke\ws2025-core-smoke.vmx
 
 # 3. Find its DHCP lease (from nexus-gateway's dnsmasq)
+#    Assumes handbook §0.4 SSH client setup; otherwise prepend `-i $HOME\.ssh\nexus_gateway_ed25519`.
 ssh nexusadmin@192.168.70.1 "awk '\$2==\"00:50:56:3f:00:22\" {print \$3}' /var/lib/misc/dnsmasq.leases"
 
 # 4. Probe it
 Test-NetConnection <ip> -Port 22      # OpenSSH
 Test-NetConnection <ip> -Port 9182    # windows_exporter
-ssh nexusadmin@<ip>                    # key-only
+# Win32-OpenSSH default remote shell is cmd.exe -- wrap PowerShell-style commands explicitly.
+ssh nexusadmin@<ip> 'powershell -NoProfile -Command "hostname; (Get-Service sshd, windows_exporter).Status"'
 
 # 5. Tear down
 make ws2025-core-smoke-destroy

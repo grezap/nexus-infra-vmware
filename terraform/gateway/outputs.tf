@@ -23,8 +23,11 @@ output "next_step" {
       Test-NetConnection 192.168.70.1 -Port 9100
       nslookup one.one.one.one 192.168.70.1
 
-    SSH in (build-time credentials; rotated in Phase 0.D):
+    SSH in (assumes handbook §0.4 client setup is done; otherwise prepend
+    `-i $HOME\.ssh\nexus_gateway_ed25519`):
       ssh nexusadmin@192.168.70.1
+
+    Build-time credentials inherited from the Packer template; rotated in Phase 0.D.
 
     You may now proceed to Phase 0.B.2 — Debian 13 base template.
 

@@ -19,24 +19,30 @@ output "next_step" {
 
     foundation env is deployed (dc-nexus + nexus-admin-jumpbox).
 
+    All ssh commands below assume handbook docs/handbook.md §0.4 SSH client
+    setup is complete (~/.ssh/config + ssh-agent loaded). If not, prepend
+    `-i $HOME\.ssh\nexus_gateway_ed25519` to every ssh invocation.
+
     Find each VM's DHCP lease on nexus-gateway:
       ssh nexusadmin@192.168.70.1 "grep -iE '${module.dc_nexus.mac_address}|${module.nexus_admin_jumpbox.mac_address}' /var/lib/misc/dnsmasq.leases"
 
-    Or scan VMnet11 for reachable hosts:
+    Or scan VMnet11 from the Windows host:
       200..250 | ForEach-Object { $ip="192.168.70.$_"; if (Test-Connection -Quiet -Count 1 $ip) { "UP: $ip" } }
 
     Probe each VM directly (from the Windows host):
       Test-NetConnection <vm-ip> -Port 22      # OpenSSH
       Test-NetConnection <vm-ip> -Port 9182    # windows_exporter
-      ssh nexusadmin@<vm-ip>                    # key-only, no password
+
+    SSH into each clone (Windows OpenSSH defaults its remote shell to cmd.exe;
+    wrap PowerShell commands in `'powershell -NoProfile -Command "..."'`):
+      ssh nexusadmin@<dc-nexus-ip>   'powershell -NoProfile -Command "hostname; (Get-Service sshd).Status"'
+      ssh nexusadmin@<jumpbox-ip>    'powershell -NoProfile -Command "hostname; (Get-Service sshd).Status"'
 
     Verify dc-nexus is ready for AD DS promotion (RSAT shipped by ws2025-desktop):
-      ssh nexusadmin@192.168.70.1 ssh nexusadmin@<dc-nexus-ip> `
-        "Get-WindowsFeature AD-Domain-Services, RSAT-AD-Tools, GPMC | ft Name, InstallState"
+      ssh nexusadmin@<dc-nexus-ip> 'powershell -NoProfile -Command "Get-WindowsFeature AD-Domain-Services, RSAT-AD-Tools, GPMC | Format-Table Name, InstallState"'
 
     Verify nexus-admin-jumpbox has the operator toolset:
-      ssh nexusadmin@192.168.70.1 ssh nexusadmin@<jumpbox-ip> `
-        "Get-WindowsFeature RSAT-AD-Tools, RSAT-DNS-Server, RSAT-DHCP, GPMC | ft Name, InstallState"
+      ssh nexusadmin@<jumpbox-ip> 'powershell -NoProfile -Command "Get-WindowsFeature RSAT-AD-Tools, RSAT-DNS-Server, RSAT-DHCP, GPMC | Format-Table Name, InstallState"'
 
     Tear down with:
       make foundation-destroy

@@ -33,9 +33,10 @@ Both `packer/ws2025-core/ws2025-core.pkr.hcl` and `packer/ws2025-desktop/ws2025-
 
 `terraform/ws2025-desktop-smoke/` clones the template onto VMnet11 with MAC `00:50:56:3F:00:23` (one above ws2025-core-smoke's `:22`). Exit gate is the same as ws2025-core-smoke (SSH + windows_exporter responding) plus a check that the Desktop Experience delta features are present:
 
-```pwsh
-ssh nexusadmin@192.168.70.1 ssh nexusadmin@<vm-ip> `
-  "Get-WindowsFeature RSAT-AD-Tools, RSAT-DNS-Server, RSAT-DHCP, GPMC | ft Name, InstallState"
+```powershell
+# Assumes handbook §0.4 SSH client setup; otherwise prepend `-i $HOME\.ssh\nexus_gateway_ed25519`.
+# Win32-OpenSSH default remote shell is cmd.exe -- wrap PowerShell-style commands explicitly.
+ssh nexusadmin@<vm-ip> 'powershell -NoProfile -Command "Get-WindowsFeature RSAT-AD-Tools, RSAT-DNS-Server, RSAT-DHCP, GPMC | Format-Table Name, InstallState"'
 ```
 
 All four should report `Installed`.

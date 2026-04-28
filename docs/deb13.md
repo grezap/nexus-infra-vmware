@@ -48,12 +48,13 @@ make deb13-smoke
 # VM lands at H:\VMS\NexusPlatform\90-smoke\deb13-smoke\deb13-smoke.vmx
 
 # 3. Find its DHCP lease (issued by nexus-gateway's dnsmasq)
+#    Assumes handbook §0.4 SSH client setup; otherwise prepend `-i $HOME\.ssh\nexus_gateway_ed25519`.
 ssh nexusadmin@192.168.70.1 "awk '\$2==\"00:50:56:3f:00:20\" {print \$3}' /var/lib/misc/dnsmasq.leases"
 
 # 4. Probe it directly (replace <ip> with the lease from step 3)
 Test-NetConnection <ip> -Port 22
 Test-NetConnection <ip> -Port 9100
-ssh nexusadmin@<ip>
+ssh nexusadmin@<ip>     # Linux remote shell defaults to bash -- no wrapper needed
 
 # 5. Tear down
 make deb13-smoke-destroy

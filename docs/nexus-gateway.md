@@ -105,7 +105,8 @@ nslookup debian.org     192.168.70.1
 nslookup nexus.local    192.168.70.1
 nslookup 192.168.70.1   192.168.70.1
 
-# SSH in (build credentials — rotated in Phase 0.D)
+# SSH in (build credentials inherited from Packer template; rotated in Phase 0.D).
+# Assumes handbook §0.4 SSH client setup; otherwise prepend `-i $HOME\.ssh\nexus_gateway_ed25519`.
 ssh nexusadmin@192.168.70.1
 ```
 

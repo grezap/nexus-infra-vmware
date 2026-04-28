@@ -52,6 +52,61 @@ cd nexus-infra-vmware
 make init   # runs packer init + terraform init for gateway
 ```
 
+### 0.4 SSH client setup on the build host (one-time)
+
+Every Packer-built VM in this repo bakes the same owner pubkey into its `authorized_keys`:
+
+- Linux: `packer/nexus-gateway/ansible/roles/nexus_gateway/files/nexusadmin.pub` (consumed by the gateway build) + the `_shared/ansible/roles/nexus_identity/` role for downstream Linux templates.
+- Windows: `packer/_shared/powershell/files/nexusadmin-authorized_keys` (consumed by every Windows template via `_shared/powershell/scripts/01-nexus-identity.ps1`).
+
+**Replace both files with your own pubkey** *before* building any template. Both files must contain the same `ssh-ed25519 …` line (the matching private key lives only on this host).
+
+After templates are built and a gateway is deployed, configure the SSH client so subsequent `ssh nexusadmin@…` commands in this handbook (and in every `terraform apply` `next_step` output) Just Work without `-i` flags or passphrase prompts:
+
+```powershell
+# 1. Persistent ~/.ssh/config so `ssh nexusadmin@<lab-ip>` picks the right key automatically.
+@'
+Host 192.168.70.1
+    User nexusadmin
+    IdentityFile ~/.ssh/nexus_gateway_ed25519
+
+# Lab VMs on VMnet11 (foundation env, smoke harnesses, future role overlays)
+Host 192.168.70.*
+    User nexusadmin
+    IdentityFile ~/.ssh/nexus_gateway_ed25519
+    StrictHostKeyChecking accept-new
+'@ | Add-Content $HOME\.ssh\config
+
+# 2. ssh-agent service: persistent, auto-starts at boot.
+Set-Service -Name ssh-agent -StartupType Automatic
+Start-Service ssh-agent
+
+# 3. Strip any passphrase from the key (one-off; the lab key is non-secret pre-Phase-0.D).
+#    If `ssh-keygen -p` rejects the empty passphrase, type ""  (two double-quote chars) — known
+#    Windows-OpenSSH-on-Win11 quirk where literal `""` got set as the passphrase during key gen.
+ssh-keygen -p -f $HOME\.ssh\nexus_gateway_ed25519
+# Old passphrase: <Enter>  (or  ""  +  <Enter>  if rejected)
+# New passphrase: <Enter>
+# Confirm:        <Enter>
+
+# 4. Load the key into the agent (one prompt-free shot now, persists across reboots once config is in place).
+ssh-add $HOME\.ssh\nexus_gateway_ed25519
+ssh-add -l                      # must list nexus_gateway_ed25519 + the comment 'nexusadmin@nexus-gateway'
+
+# 5. Verify zero-touch SSH against the gateway.
+ssh nexusadmin@192.168.70.1 "echo ok"     # expect: ok
+```
+
+After this section, **every SSH command in this handbook (and in every `terraform apply` `next_step` output) is bare `ssh nexusadmin@<host>`** — no `-i`, no passphrase. If you skipped §0.4 (or are on a freshly imaged build host), prepend `-i $HOME\.ssh\nexus_gateway_ed25519` to any `ssh` invocation as the inline fallback.
+
+**Windows remote shell quirk:** Win32-OpenSSH on the lab's Windows VMs defaults to `cmd.exe` as the remote shell. PowerShell-style commands (`Get-Service`, `Format-Table`, `;` separators, etc.) get mangled by cmd. Wrap them explicitly:
+
+```powershell
+ssh nexusadmin@<vm-ip> 'powershell -NoProfile -Command "hostname; (Get-Service sshd).Status"'
+```
+
+The `'…'` outer single quotes preserve the inner `"…"` for PowerShell's argument parsing.
+
 ---
 
 ## 1. Phase 0.B.1 — nexus-gateway (VM #0)
@@ -109,11 +164,12 @@ make deb13-smoke
 # Clone lands at H:\VMS\NexusPlatform\90-smoke\deb13-smoke\deb13-smoke.vmx
 # It will DHCP from nexus-gateway in 192.168.70.200-.250.
 
-# Find its lease + probe
+# Find its lease + probe (assumes §0.4 SSH client setup; otherwise prepend `-i $HOME\.ssh\nexus_gateway_ed25519`)
+ssh nexusadmin@192.168.70.1 "grep '00:50:56:3f:00:20' /var/lib/misc/dnsmasq.leases"
 200..250 | ForEach-Object { $ip="192.168.70.$_"; if (Test-Connection -Quiet -Count 1 $ip) { "UP: $ip" } }
 Test-NetConnection <ip> -Port 22
 Test-NetConnection <ip> -Port 9100
-ssh nexusadmin@<ip>
+ssh nexusadmin@<ip>     # Linux remote shell defaults to bash — no wrapper needed
 
 # Tear down
 make deb13-smoke-destroy
@@ -180,11 +236,12 @@ make ws2025-core-msdn
 make ws2025-core-smoke
 # VM lands at H:/VMS/NexusPlatform/90-smoke/ws2025-core-smoke/*.vmx
 
-# Find its lease + SSH in
+# Find its lease + SSH in (assumes §0.4 SSH client setup; otherwise prepend `-i $HOME\.ssh\nexus_gateway_ed25519`)
 ssh nexusadmin@192.168.70.1 "awk '\$2==\"00:50:56:3f:00:22\" {print \$3}' /var/lib/misc/dnsmasq.leases"
 Test-NetConnection <ip> -Port 22      # OpenSSH (key-only)
 Test-NetConnection <ip> -Port 9182    # windows_exporter
-ssh nexusadmin@<ip>                    # logs in via owner ed25519 pubkey
+# Wrap PowerShell commands in `'powershell -NoProfile -Command "..."'` -- Win32-OpenSSH default remote shell is cmd.exe.
+ssh nexusadmin@<ip> 'powershell -NoProfile -Command "hostname; (Get-Service sshd, windows_exporter).Status"'
 
 make ws2025-core-smoke-destroy
 ```
@@ -225,14 +282,17 @@ make foundation-destroy
 
 ### 1c.1 Lease discovery + smoke probe
 
+> All `ssh` commands in this section assume §0.4 SSH client setup is done (`~/.ssh/config` + `ssh-add`). Otherwise prepend `-i $HOME\.ssh\nexus_gateway_ed25519` to each invocation.
+
 Both VMs DHCP on first boot. Find leases via `nexus-gateway`'s dnsmasq:
 
 ```powershell
 ssh nexusadmin@192.168.70.1 "grep -iE '00:50:56:3f:00:25|00:50:56:3f:00:26' /var/lib/misc/dnsmasq.leases"
 ```
 
-```bash
-# Or scan VMnet11 from the Windows host:
+Or scan VMnet11 from the Windows host:
+
+```powershell
 200..250 | ForEach-Object { $ip="192.168.70.$_"; if (Test-Connection -Quiet -Count 1 $ip) { "UP: $ip" } }
 ```
 
@@ -241,21 +301,20 @@ Probe each VM directly:
 ```powershell
 Test-NetConnection <vm-ip> -Port 22      # OpenSSH (key-only)
 Test-NetConnection <vm-ip> -Port 9182    # windows_exporter
-ssh nexusadmin@<vm-ip>
+# Win32-OpenSSH default remote shell is cmd.exe -- wrap PowerShell-style commands explicitly.
+ssh nexusadmin@<vm-ip> 'powershell -NoProfile -Command "hostname; (Get-Service sshd).Status"'
 ```
 
 Verify dc-nexus is ready for AD DS promotion (the role-overlay step lives in a later 0.C ticket — this stage just lands the bare clone):
 
 ```powershell
-ssh nexusadmin@192.168.70.1 ssh nexusadmin@<dc-nexus-ip> `
-  "Get-WindowsFeature AD-Domain-Services, RSAT-AD-Tools, GPMC | ft Name, InstallState"
+ssh nexusadmin@<dc-nexus-ip> 'powershell -NoProfile -Command "Get-WindowsFeature AD-Domain-Services, RSAT-AD-Tools, GPMC | Format-Table Name, InstallState"'
 ```
 
 Verify nexus-admin-jumpbox has the operator toolset:
 
 ```powershell
-ssh nexusadmin@192.168.70.1 ssh nexusadmin@<jumpbox-ip> `
-  "Get-WindowsFeature RSAT-AD-Tools, RSAT-DNS-Server, RSAT-DHCP, GPMC | ft Name, InstallState"
+ssh nexusadmin@<jumpbox-ip> 'powershell -NoProfile -Command "Get-WindowsFeature RSAT-AD-Tools, RSAT-DNS-Server, RSAT-DHCP, GPMC | Format-Table Name, InstallState"'
 ```
 
 ### 1c.2 Why `envs/foundation/` and not just another `*-smoke/`
@@ -283,7 +342,7 @@ Subsequent envs will draw from the appropriate tier nibble (`:30-3F` data, `:40-
 
 ### 1c.5 Smoke-time gotcha — pre-`dc5c588` Windows templates
 
-**Symptom:** `ssh -i $HOME\.ssh\nexus_gateway_ed25519 nexusadmin@<clone-ip>` returns `Connection reset by <ip> port 22` immediately after host-key acceptance. `Test-NetConnection -Port 22` succeeds (sshd is listening), the host key exchange completes, but every userauth attempt resets the connection.
+**Symptom:** `ssh nexusadmin@<clone-ip>` (or `ssh -i $HOME\.ssh\nexus_gateway_ed25519 …` if you skipped §0.4) returns `Connection reset by <ip> port 22` immediately after host-key acceptance. `Test-NetConnection -Port 22` succeeds (sshd is listening), the host key exchange completes, but every userauth attempt resets the connection.
 
 **Root cause:** Lesson #8 from 0.B.6 dropped `Match Group administrators` + `KerberosAuthentication`/`GSSAPIAuthentication`/`ChallengeResponseAuthentication` from `_shared/powershell/scripts/01-nexus-identity.ps1` because they crash sshd-children on userauth-request reprocess. The cleanup is only baked into a template at Packer build time. Any Windows template last built **before commit `dc5c588`** (where the cleanup landed) still ships the old `sshd_config` and reproduces the bug — even though lesson #8's narrative said Server SKUs were unaffected. The clone's event log will show `sshd: rexec line N: Unsupported option KerberosAuthentication` per failed connection.
 
@@ -331,10 +390,10 @@ Set-Content -Path 'C:\ProgramData\ssh\sshd_config' -Value $config -Encoding asci
 Restart-Service sshd -Force
 ```
 
-Then verify from the Windows host (note: Windows OpenSSH defaults to `cmd.exe` as the remote shell, so wrap PowerShell-style commands explicitly):
+Then verify from the Windows host (Win32-OpenSSH defaults its remote shell to `cmd.exe`, so wrap PowerShell-style commands explicitly):
 
 ```powershell
-ssh -i $HOME\.ssh\nexus_gateway_ed25519 nexusadmin@<clone-ip> 'powershell -NoProfile -Command "hostname; whoami; (Get-Service sshd).Status"'
+ssh nexusadmin@<clone-ip> 'powershell -NoProfile -Command "hostname; whoami; (Get-Service sshd).Status"'
 ```
 
 **Permanent fix — rebuild affected templates against current `_shared/powershell/`:**
@@ -351,8 +410,8 @@ terraform destroy -auto-approve
 terraform apply -auto-approve
 
 # Re-smoke (should now succeed zero-touch, no hot-fix needed)
-ssh -i $HOME\.ssh\nexus_gateway_ed25519 nexusadmin@<dc-nexus-ip> 'powershell -NoProfile -Command "hostname"'
-ssh -i $HOME\.ssh\nexus_gateway_ed25519 nexusadmin@<jumpbox-ip>  'powershell -NoProfile -Command "hostname"'
+ssh nexusadmin@<dc-nexus-ip> 'powershell -NoProfile -Command "hostname"'
+ssh nexusadmin@<jumpbox-ip>  'powershell -NoProfile -Command "hostname"'
 ```
 
 **Forward implication for `_shared/` discipline:** any change to `packer/_shared/powershell/scripts/*.ps1` creates an "obsolete template" footprint. Every Windows template that consumes the modified script needs a rebuild before its clones can be relied on. Consider this when the next shared-script edit lands — flag affected templates in the commit message and rebuild them in the same effort.
@@ -364,11 +423,12 @@ ssh -i $HOME\.ssh\nexus_gateway_ed25519 nexusadmin@<jumpbox-ip>  'powershell -No
 ### 2.1 SSH in
 
 ```powershell
+# Assumes §0.4 SSH client setup is done (~/.ssh/config + ssh-add).
+# Otherwise: ssh -i $HOME\.ssh\nexus_gateway_ed25519 nexusadmin@192.168.70.1
 ssh nexusadmin@192.168.70.1
-# Prefer key auth — nexusadmin.pub is baked into the template's authorized_keys.
-# Build-time password is set via packer/nexus-gateway/variables.pkr.hcl `ssh_password`
-# default; rotated / removed in Phase 0.D when Vault comes up.
 ```
+
+Key auth uses the pubkey baked into the gateway template at build time (`packer/nexus-gateway/ansible/roles/nexus_gateway/files/nexusadmin.pub`). Build-time password (`packer/nexus-gateway/variables.pkr.hcl` `ssh_password = "nexus-packer-build-only"`) is still enabled on the running gateway as a fallback — Phase 0.D will rotate it out when Vault comes up.
 
 ### 2.2 Add the VM to Workstation's GUI sidebar (cosmetic)
 
