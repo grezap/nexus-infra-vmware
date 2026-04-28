@@ -33,6 +33,15 @@ jobs:
 
       - name: packer init
         working-directory: packer/${{ matrix.template }}
+        # PACKER_GITHUB_API_TOKEN: authenticate the GitHub API calls that
+        # `packer init` makes when resolving plugin versions (matching-refs
+        # /tags etc.). Without it, `packer init` uses GitHub's anonymous
+        # quota (60/hr per IP) and fails sporadically with 403 rate-limit
+        # because GitHub Actions runners share IPs. The default GITHUB_TOKEN
+        # secret bumps the quota to 5000/hr per repo and reliably clears
+        # this failure mode (saw it once on commit dc5c588's CI run).
+        env:
+          PACKER_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: packer init .
 
       - name: packer fmt -check
