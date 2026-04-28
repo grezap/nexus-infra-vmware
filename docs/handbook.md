@@ -65,16 +65,28 @@ After templates are built and a gateway is deployed, configure the SSH client so
 
 ```powershell
 # 1. Persistent ~/.ssh/config so `ssh nexusadmin@<lab-ip>` picks the right key automatically.
+#
+# The 192.168.70.1 stanza keeps default StrictHostKeyChecking (the gateway is
+# pinned and its host keys only rotate when you rebuild it -- we want a real
+# warning if they change unexpectedly).
+#
+# The 192.168.70.* stanza covers the volatile lab clones (foundation env,
+# smoke harnesses, future role overlays). Their host keys regenerate on every
+# clone-mini-OOBE (sysprep) and `terraform destroy + apply` cycle, which makes
+# the default known_hosts behavior fight you. Disable strict checking and
+# discard known_hosts state entirely for this range -- the trust boundary is
+# VMnet11 itself (host-only, isolated).
 @'
 Host 192.168.70.1
     User nexusadmin
     IdentityFile ~/.ssh/nexus_gateway_ed25519
 
-# Lab VMs on VMnet11 (foundation env, smoke harnesses, future role overlays)
 Host 192.168.70.*
     User nexusadmin
     IdentityFile ~/.ssh/nexus_gateway_ed25519
-    StrictHostKeyChecking accept-new
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    LogLevel ERROR
 '@ | Add-Content $HOME\.ssh\config
 
 # 2. ssh-agent service: persistent, auto-starts at boot.
