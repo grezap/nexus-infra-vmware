@@ -6,6 +6,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Foundation tier directory canon-compliance.** Foundation env's
+  `vm_output_dir_root` default was `H:/VMS/NexusPlatform/10-core/` but
+  `nexus-platform-plan/docs/infra/vms.yaml` lines 51-57 specify the canonical
+  foundation tier as `01-foundation/`. Corrected the default to
+  `H:/VMS/NexusPlatform/01-foundation/` and updated handbook §1c references
+  (per `memory/feedback_master_plan_authority.md` -- canon is authoritative,
+  deviations must be enhancements or bug fixes, not convenience).
+
+  **Operator action required:** to migrate dc-nexus + jumpbox to the new path,
+  run a destroy-then-apply cycle:
+  ```powershell
+  pwsh -File scripts\foundation.ps1 cycle
+  ```
+  This destroys the VMs at `10-core/`, re-clones at `01-foundation/`, and
+  re-runs the smoke gate. ~17-18 min wall-clock.
+
 ### Added
 
 - **Phase 0.C.4 — AD DS hardening overlays on `dc-nexus`.** Four independent

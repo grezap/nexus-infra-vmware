@@ -5,9 +5,9 @@ variable "template_vmx_path" {
 }
 
 variable "vm_output_dir_root" {
-  description = "Tier directory under which each foundation VM gets its own subdir. Tier convention: 10-core/ holds always-on infrastructure (foundation + later Vault, Consul)."
+  description = "Tier directory under which each foundation VM gets its own subdir. Canonical per nexus-platform-plan/docs/infra/vms.yaml: foundation tier = `01-foundation/` (always-on plumbing — DC, Vault, observability). Earlier scaffolding used `10-core/` which deviated from canon; corrected 2026-04-29 per memory/feedback_master_plan_authority.md."
   type        = string
-  default     = "H:/VMS/NexusPlatform/10-core"
+  default     = "H:/VMS/NexusPlatform/01-foundation"
 }
 
 variable "vnet" {

@@ -274,8 +274,8 @@ First Phase 0.C env. Lands the always-on support fleet that every other env (`da
 
 | VM                    | Template          | MAC                 | Tier path                                      | Role                                   |
 |-----------------------|-------------------|---------------------|------------------------------------------------|----------------------------------------|
-| `dc-nexus`            | `ws2025-desktop`  | `00:50:56:3F:00:25` | `H:/VMS/NexusPlatform/10-core/dc-nexus`        | Domain controller (AD DS promotion = role overlay, deferred) |
-| `nexus-jumpbox` | `ws2025-desktop`  | `00:50:56:3F:00:26` | `H:/VMS/NexusPlatform/10-core/nexus-jumpbox` | Operator jump host (RSAT / GPMC / DNS tools) |
+| `dc-nexus`            | `ws2025-desktop`  | `00:50:56:3F:00:25` | `H:/VMS/NexusPlatform/01-foundation/dc-nexus`        | Domain controller (AD DS promotion = role overlay, deferred) |
+| `nexus-jumpbox` | `ws2025-desktop`  | `00:50:56:3F:00:26` | `H:/VMS/NexusPlatform/01-foundation/nexus-jumpbox` | Operator jump host (RSAT / GPMC / DNS tools) |
 
 Both clones DHCP from `nexus-gateway` on VMnet11 (192.168.70.0/24, .200–.250 range).
 
@@ -384,7 +384,7 @@ Subsequent envs will draw from the appropriate tier nibble (`:30-3F` data, `:40-
 
 **Hot-fix on a running clone (~30 seconds; per-clone, doesn't fix the template):**
 
-Open the VM in Workstation GUI (`File → Open → H:\VMS\NexusPlatform\10-core\<vm>\<vm>.vmx`), login as `nexusadmin` (build-time password from `packer/ws2025-desktop/variables.pkr.hcl`), launch elevated PowerShell, then:
+Open the VM in Workstation GUI (`File → Open → H:\VMS\NexusPlatform\01-foundation\<vm>\<vm>.vmx`), login as `nexusadmin` (build-time password from `packer/ws2025-desktop/variables.pkr.hcl`), launch elevated PowerShell, then:
 
 ```powershell
 Copy-Item 'C:\ProgramData\ssh\sshd_config' 'C:\ProgramData\ssh\sshd_config.bak' -Force
@@ -988,7 +988,7 @@ nexus-infra-vmware/
 ```
 
 Template VMs live at `H:\VMS\NexusPlatform\_templates\<name>\<name>.vmx`.
-Running instances at `H:\VMS\NexusPlatform\<tier>\<name>\<name>.vmx` (tier = `00-edge`, `10-core`, `20-apps`, …).
+Running instances at `H:\VMS\NexusPlatform\<tier>\<name>\<name>.vmx` (tier = `00-edge`, `01-foundation`, `20-apps`, …; tiers per `nexus-platform-plan/docs/infra/vms.yaml`).
 
 ---
 
