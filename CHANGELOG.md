@@ -6,6 +6,118 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Phase 0.D.1 — 3-node Vault Raft cluster)
+
+- **`packer/vault/`** — new Packer template for Vault cluster nodes. Debian 13
+  base (same ISO + preseed pattern as deb13), Vault binary version-pinned via
+  `var.vault_version` (default `1.18.4`), systemd units for `vault.service`
+  and `vault-firstboot.service`, base config TEMPLATE rendered per-clone at
+  first-boot via `vault-firstboot.sh`. Self-signed bootstrap TLS regenerated
+  per-clone with the clone's actual hostname + IPs in SAN. Phase 0.D.2 will
+  reissue from Vault PKI. Strips ethernet entries (`vmx_remove_ethernet_interfaces
+  = true`) so Terraform's modules/vm clones with the canonical dual-NIC
+  config (VMnet11 service + VMnet10 backplane).
+
+- **`packer/vault/ansible/roles/vault_node/`** — per-template Ansible role
+  installing the Vault binary (download + sha256 verify + install with
+  `cap_ipc_lock=+ep`), creating vault user + group, deploying systemd units,
+  installing the firstboot script. Runs after the four shared `nexus_*` roles
+  (identity, network, firewall, observability) inside the vault Packer build.
+
+- **`terraform/envs/security/`** — new env, 3 `module "vault_N"` blocks
+  composed via the now-dual-NIC-capable `terraform/modules/vm/`. Per
+  `nexus-platform-plan/docs/infra/vms.yaml` lines 55-57: VMnet11 IPs
+  `.121/.122/.123`, VMnet10 IPs `192.168.10.121/.122/.123`, foundation tier
+  directory (`H:\VMS\NexusPlatform\01-foundation\vault-N\`), MAC scheme
+  `00:50:56:3F:00:40-42` (primary, VMnet11) and `00:50:56:3F:01:40-42`
+  (secondary, VMnet10).
+
+- **`terraform/envs/security/role-overlay-vault-cluster.tf`** — 4 sequential
+  null_resources orchestrating cluster bring-up:
+  1. `vault_ready_probe` — SSH echo probe + `vault.service` health check on
+     all 3 nodes (echoes the canonical SSH transit pattern from Phase 0.C
+     -- echo probe + retry loop)
+  2. `vault_init_leader` — `vault operator init` on vault-1 (5 keys, threshold
+     3 -- both var-overridable), persists JSON to `$HOME/.nexus/vault-init.json`
+     on the build host, unseals leader. Idempotent via `vault status` JSON
+     parse: skip init if already initialized + unsealed; unseal-from-keys if
+     initialized + sealed; full init if uninitialized.
+  3. `vault_join_followers` — vault-2 and vault-3: `vault operator raft join`
+     to vault-1's API addr, then unseal with same keys. Verifies cluster has
+     exactly 3 peers via `vault operator raft list-peers`.
+  4. `vault_post_init` — KV-v2 mounted at `nexus/` (per MASTER-PLAN line 145),
+     userpass auth enabled with `nexusadmin` operator user, AppRole auth
+     enabled with `nexus-bootstrap` role, smoke secret written to
+     `nexus/smoke/canary`. All idempotent via state probes (`vault secrets
+     list`, `vault auth list`).
+
+- **`terraform/envs/foundation/role-overlay-gateway-vault-reservations.tf`** —
+  dnsmasq `dhcp-host` reservations on nexus-gateway pinning vault-1/2/3 MACs
+  to canonical VMnet11 IPs `.121/.122/.123`. Works WITHOUT extending the
+  dynamic DHCP pool (`.200-.250`) because dnsmasq honors `dhcp-host` entries
+  regardless of `dhcp-range`. Toggleable via `var.enable_vault_dhcp_reservations`
+  (default `false`); Vault deploys require `pwsh -File scripts\foundation.ps1
+  apply -Vars enable_vault_dhcp_reservations=true` BEFORE bringing up the
+  security env. Mirrors the Phase 0.C.2 `gateway-dns` overlay shape.
+
+- **`terraform/modules/vm/` extended for dual-NIC.** Optional `var.vnet_secondary`
+  + `var.mac_secondary` parameters, both default `null` (single-NIC mode --
+  unchanged for foundation env's existing dc-nexus/jumpbox callers). When
+  both are non-null, the post-clone `configure-vm-nic.ps1` writes ethernet1
+  alongside ethernet0. README documents both modes with examples; `cpus` and
+  `memory_mb` inputs remain reserved-for-future. Limitation note: dual-NIC
+  mode does NOT configure the secondary NIC's IP at the OS level -- the
+  consuming Packer template owns that (vault's first-boot script
+  reads /etc/hostname and maps to canonical VMnet10 IP).
+
+- **`scripts/configure-vm-nic.ps1`** updated with optional `-SecondaryVnet` /
+  `-SecondaryMac` parameters. Backward compatible: existing single-NIC callers
+  pass nothing and get the same single-NIC output. XOR validation ensures
+  both secondary args are provided together or neither.
+
+- **`scripts/smoke-0.D.1.ps1`** — Phase 0.D.1 smoke gate. ~24 checks:
+  build-host reachability (SSH/22 + Vault API/8200 to all 3 nodes, runs
+  first), canonical IPs (VMnet10 IPs configured on nic1), `vault.service`
+  health (active + initialized + unsealed on all nodes), raft cluster
+  topology (exactly 3 peers, exactly 1 leader, vault-1 is the leader
+  post-init), KV-v2 mount + auth methods (userpass with nexusadmin user,
+  approle with nexus-bootstrap role), smoke secret readability from leader
+  AND both followers (cross-node consistency). Parameterized; exits non-zero
+  on any failure. Requires `$HOME/.nexus/vault-init.json` for the
+  root-token-required checks.
+
+- **`scripts/security.ps1`** — pwsh-native operator wrapper for envs/security/,
+  same shape as `scripts/foundation.ps1`. Six verbs: `apply`, `destroy`,
+  `smoke`, `cycle` (destroy → apply → smoke), `plan`, `validate`. Forwards
+  `-Vars` to terraform `-var` flags and `-SmokeArgs` to the smoke script.
+
+- **CI matrix extension** — `packer-validate.yml` gains `vault` template +
+  `envs/security` env entries + `packer/vault/ansible/` for ansible-lint.
+
+- **Memory entries (saved 2026-04-29)** — three feedback rules canonized
+  alongside this commit:
+  - `feedback_master_plan_authority.md` — `nexus-platform-plan/MASTER-PLAN.md`
+    + `docs/infra/vms.yaml` + ADRs are authoritative; deviations must be
+    enhancements or bug fixes only, never convenience; every phase summary
+    needs a Canon-mapping table citing source lines.
+  - `feedback_prefer_less_memory.md` — default to the smallest RAM that
+    runs the workload smoothly; build-host RAM is finite; when canon
+    over-specs RAM, log deviation + update vms.yaml to match observed-
+    sufficient sizing.
+  - (already saved Phase 0.C.4) `feedback_lab_host_reachability.md` and
+    `feedback_build_host_pwsh_native.md` continue to apply.
+
+- **Documentation** — handbook §1g (Phase 0.D.1) covers Canon mapping,
+  files, operator order (mandatory -- foundation reservations BEFORE security
+  apply), selective ops, build-host reachability, initial credentials,
+  operating Vault from the build host, scope-out list (0.D.2-5), and RAM
+  budget arithmetic. `packer/vault/README.md` is the per-template reference
+  with all Canon citations + role file map.
+
+- **Approved deviation logged**: Vault VM RAM = 2 GB (canon vms.yaml says
+  4 GB). Approved 2026-04-29 per `feedback_prefer_less_memory.md`. vms.yaml
+  to be updated post-0.D.1 to match observed-sufficient sizing.
+
 ### Fixed
 
 - **Foundation tier directory canon-compliance.** Foundation env's

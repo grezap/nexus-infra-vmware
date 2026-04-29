@@ -35,6 +35,7 @@ jobs:
           - ws2025-core    # Phase 0.B.4
           - ws2025-desktop # Phase 0.B.5
           - win11ent       # Phase 0.B.6
+          - vault          # Phase 0.D.1
     steps:
       - uses: actions/checkout@v4
 
@@ -86,6 +87,7 @@ jobs:
           - ws2025-desktop-smoke
           - win11ent-smoke
           - envs/foundation       # Phase 0.C.1
+          - envs/security         # Phase 0.D.1
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
@@ -107,7 +109,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ansible-lint ansible
-      - run: ansible-lint packer/nexus-gateway/ansible/ packer/deb13/ansible/ packer/ubuntu24/ansible/ packer/_shared/ansible/
+      - run: ansible-lint packer/nexus-gateway/ansible/ packer/deb13/ansible/ packer/ubuntu24/ansible/ packer/vault/ansible/ packer/_shared/ansible/
 
   shell-lint:
     name: ShellCheck + PSScriptAnalyzer

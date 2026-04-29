@@ -782,6 +782,168 @@ Per the last entry in [`memory/feedback_addsforest_post_promotion.md`](memory/fe
 
 ---
 
+## 1g. Phase 0.D.1 — `envs/security` (3-node Vault Raft cluster)
+
+First step of Phase 0.D — bootstraps a 3-node Vault Raft cluster on the foundation tier. Concrete services (data env, ml env, etc.) past this point can read credentials from Vault instead of plaintext Terraform vars; AD-DS bootstrap creds (DSRM, local Administrator, nexusadmin) migrate into Vault KV at 0.D.4.
+
+**Canon mapping** (per [`memory/feedback_master_plan_authority.md`](memory/feedback_master_plan_authority.md) — every implementation choice cites canonical source):
+
+| Choice | Source |
+|---|---|
+| 3-node Vault Raft cluster | `MASTER-PLAN.md` Phase 0.D (line 145) |
+| Hostnames `vault-1`, `vault-2`, `vault-3` | `nexus-platform-plan/docs/infra/vms.yaml` lines 55-57 |
+| OS = Debian 13 | `vms.yaml` lines 55-57 |
+| 2 vCPU per node | `vms.yaml` lines 55-57 |
+| 40 GB disk per node | `vms.yaml` lines 55-57 |
+| Tier directory `01-foundation/vault-N` | `vms.yaml` lines 55-57 |
+| VMnet11 IPs `.121/.122/.123` | `vms.yaml` lines 55-57 |
+| VMnet10 IPs `192.168.10.121/.122/.123` | `vms.yaml` lines 55-57 |
+| Dual-NIC (VMnet10 backplane + VMnet11 service) | `MASTER-PLAN.md` line 188 |
+| AppRole + KV-v2 at `nexus/*` | `MASTER-PLAN.md` Phase 0.D (line 145) |
+| MAC tier `:40-4F` (core services) | handbook §1a |
+| **Approved deviation: 2 GB RAM** (canon says 4 GB) | user-approved 2026-04-29 per [`memory/feedback_prefer_less_memory.md`](memory/feedback_prefer_less_memory.md); will update vms.yaml to match observed-sufficient sizing |
+| **Org choice: `envs/security/`** (canon-silent) | user-approved 2026-04-29 — canon specifies tier directory but not env name; security keeps Vault iteration isolated from foundation env's AD plumbing |
+
+**Files:**
+
+| Path | Purpose |
+|---|---|
+| `packer/vault/` | Packer template — Debian 13 + Vault binary (`var.vault_version`, default 1.18.4) + systemd units + `vault-firstboot.sh` (per-clone NIC config + TLS cert + render `vault.hcl`) |
+| `terraform/envs/security/main.tf` | Three `module "vault_N"` blocks (dual-NIC) |
+| `terraform/envs/security/role-overlay-vault-cluster.tf` | 4 sequential null_resources: ready_probe → init_leader → join_followers → post_init (KV-v2 + userpass + AppRole + smoke secret) |
+| `terraform/envs/foundation/role-overlay-gateway-vault-reservations.tf` | dnsmasq `dhcp-host` reservations on nexus-gateway pinning Vault MACs to canonical `.121/.122/.123` (gated on `var.enable_vault_dhcp_reservations`, default `false`) |
+| `terraform/modules/vm/` | Extended for **dual-NIC** mode — optional `vnet_secondary` + `mac_secondary` vars; `scripts/configure-vm-nic.ps1` writes ethernet1 alongside ethernet0 |
+| `scripts/foundation.ps1` / `scripts/security.ps1` | pwsh-native operator wrappers (canonical on Windows per [`memory/feedback_build_host_pwsh_native.md`](memory/feedback_build_host_pwsh_native.md)) |
+| `scripts/smoke-0.D.1.ps1` | 24+ check smoke gate — cluster up, raft peers = 3, KV-v2 mounted, auth methods enabled, smoke secret readable from leader + both followers, build-host SSH/22 + 8200 reachable for all 3 nodes |
+
+### 1g.1 Operator order (must follow)
+
+The Vault clones depend on the gateway's `dhcp-host` reservations being live BEFORE they DHCP, otherwise they land in the dynamic `.200-.250` pool and get the wrong IPs. Operator sequence:
+
+```powershell
+# 1. Build the vault Packer template (one-time, ~10-15 min)
+cd packer\vault
+packer init .
+packer build .
+
+# 2. Apply foundation env WITH the Vault dhcp-host reservations enabled
+cd ..\..
+pwsh -File scripts\foundation.ps1 apply -Vars enable_vault_dhcp_reservations=true
+
+# 3. Apply security env (clones boot, get canonical .121/.122/.123 via the reservations,
+#    cluster bring-up overlay runs init/unseal/raft-join/KV/auth)
+pwsh -File scripts\security.ps1 apply
+
+# 4. Verify
+pwsh -File scripts\security.ps1 smoke
+```
+
+Or as a chained cycle once the template + foundation reservations are in place:
+
+```powershell
+pwsh -File scripts\security.ps1 cycle      # destroy -> apply -> smoke
+```
+
+### 1g.2 Selective ops
+
+```powershell
+# Bare clones, no init (iterate on the vault Packer template without re-running cluster bring-up)
+pwsh -File scripts\security.ps1 apply -Vars enable_vault_init=false
+
+# Single-node iteration
+terraform -chdir=terraform\envs\security apply -target=module.vault_1
+
+# Iterate on a single overlay step
+terraform -chdir=terraform\envs\security apply -target=null_resource.vault_init_leader
+
+# Re-fire a step after fixing something
+terraform -chdir=terraform\envs\security taint null_resource.vault_post_init
+terraform -chdir=terraform\envs\security apply -target=null_resource.vault_post_init
+
+# Tear down whole env (clones go away; gateway dhcp-host reservations stay
+# until you also disable enable_vault_dhcp_reservations on foundation)
+pwsh -File scripts\security.ps1 destroy
+```
+
+### 1g.3 Build-host reachability invariant
+
+Per [`memory/feedback_lab_host_reachability.md`](memory/feedback_lab_host_reachability.md), every Vault node must remain SSH/22 + Vault API/8200 reachable from the build host:
+
+```powershell
+foreach ($ip in @('192.168.70.121', '192.168.70.122', '192.168.70.123')) {
+    foreach ($port in @(22, 8200)) {
+        Test-NetConnection $ip -Port $port -InformationLevel Quiet
+    }
+}
+```
+
+Six True results = invariant intact. The smoke gate runs these as its first checks.
+
+### 1g.4 Initial credentials
+
+Init keys + root token land in `$HOME\.nexus\vault-init.json` on the build host (mode 0600 equivalent — NTFS owner-only ACL). **This is the only copy** — back it up before destroying the env. Rotation flow lands in 0.D.4 alongside foundation env's bootstrap creds.
+
+```powershell
+# Operator quick-access
+$initJson = Get-Content $HOME\.nexus\vault-init.json | ConvertFrom-Json
+$initJson.root_token            # for direct vault CLI use
+$initJson.unseal_keys_b64       # 5 keys, threshold 3
+
+# Default userpass (post-Phase 0.D.4 rotated to a Vault-managed cred)
+# user: nexusadmin
+# pass: NexusVaultOps!1 (per terraform/envs/security/variables.tf default)
+```
+
+### 1g.5 Operating Vault from the build host
+
+Until 0.D.2 issues PKI certs, Vault uses self-signed bootstrap TLS. To use the Vault CLI from the build host:
+
+```powershell
+# Install Vault CLI (one-time):
+# Download https://releases.hashicorp.com/vault/<version>/vault_<ver>_windows_amd64.zip,
+# extract to $HOME\bin, add to $PATH
+
+$env:VAULT_ADDR = 'https://192.168.70.121:8200'
+$env:VAULT_SKIP_VERIFY = 'true'
+$env:VAULT_TOKEN = (Get-Content $HOME\.nexus\vault-init.json | ConvertFrom-Json).root_token
+
+vault status
+vault secrets list
+vault kv get nexus/smoke/canary
+vault operator raft list-peers
+
+# Phase 0.D.2 replaces VAULT_SKIP_VERIFY with proper VAULT_CACERT pointing at
+# the PKI root.
+```
+
+### 1g.6 NOT in scope for 0.D.1 (deferred to 0.D.2-5)
+
+Per the 0.D scope tracking commitment in [`memory/project_nexus_infra_phase.md`](memory/project_nexus_infra_phase.md):
+
+- **0.D.2** — PKI mount + intermediate CA + Vault re-issues its own TLS cert from PKI; CA distribution to build host + future templates
+- **0.D.3** — AD/LDAP auth method (Vault binds to dc-nexus on TCP/389) + AD secret engine for AD svc account password rotation
+- **0.D.4** — Migrate foundation env's plaintext bootstrap creds (DSRM, local Administrator, nexusadmin) into Vault KV at `nexus/foundation/...`; refactor 0.C.* role overlays to read via `vault_kv_secret_v2` data sources
+- **0.D.5** — Vault Transit auto-unseal + GMSA managed-service-accounts + tighten foundation `MinPasswordLength=14` + Vault Agent on member servers
+- **Tail housekeeping** — update `nexus-platform-plan/docs/infra/vms.yaml` with the 2 GB RAM correction so canon matches observed-sufficient sizing
+
+### 1g.7 RAM budget
+
+| Component | Allocation | Cumulative |
+|---|---|---|
+| nexus-gateway | 512 MB | 0.5 GB |
+| dc-nexus | 4 GB (ws2025-desktop default) | 4.5 GB |
+| nexus-jumpbox | 4 GB (skippable via `enable_jumpbox_domain_join=false`) | 8.5 GB (or 4.5 GB if jumpbox skipped) |
+| vault-1, vault-2, vault-3 | 2 GB × 3 = 6 GB | 14.5 GB (or 10.5 GB if jumpbox skipped) |
+
+Skipping jumpbox during Vault iteration is the recommended default (jumpbox is operator UX; not needed for 0.D.1 itself):
+
+```powershell
+pwsh -File scripts\foundation.ps1 apply -Vars enable_jumpbox_domain_join=false,enable_vault_dhcp_reservations=true
+pwsh -File scripts\security.ps1 cycle
+```
+
+---
+
 ## 2. Working with the running gateway
 
 ### 2.1 SSH in

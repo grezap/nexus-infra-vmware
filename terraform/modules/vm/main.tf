@@ -81,22 +81,33 @@ resource "null_resource" "clone_vm" {
   }
 }
 
-# ─── NIC configuration ───────────────────────────────────────────────────
+# ─── NIC configuration (single-NIC or dual-NIC) ──────────────────────────
+# When var.vnet_secondary + var.mac_secondary are both non-null, configure-vm-nic.ps1
+# writes ethernet1 in addition to ethernet0. Default: single-NIC.
 resource "null_resource" "configure_nic" {
   triggers = {
-    target_vmx  = local.target_vmx
-    vnet        = var.vnet
-    mac_address = var.mac_address
+    target_vmx     = local.target_vmx
+    vnet           = var.vnet
+    mac_address    = var.mac_address
+    vnet_secondary = var.vnet_secondary == null ? "" : var.vnet_secondary
+    mac_secondary  = var.mac_secondary == null ? "" : var.mac_secondary
   }
 
   provisioner "local-exec" {
     when        = create
     interpreter = ["pwsh", "-NoProfile", "-Command"]
     command     = <<-PWSH
-      & '${local.scripts_dir}/configure-vm-nic.ps1' `
-          -VmxPath '${local.target_vmx}' `
-          -Vnet    '${var.vnet}' `
-          -Mac     '${var.mac_address}'
+      $nicArgs = @(
+        '-VmxPath', '${local.target_vmx}',
+        '-Vnet',    '${var.vnet}',
+        '-Mac',     '${var.mac_address}'
+      )
+      $secondaryVnet = '${var.vnet_secondary == null ? "" : var.vnet_secondary}'
+      $secondaryMac  = '${var.mac_secondary == null ? "" : var.mac_secondary}'
+      if ($secondaryVnet -and $secondaryMac) {
+        $nicArgs += @('-SecondaryVnet', $secondaryVnet, '-SecondaryMac', $secondaryMac)
+      }
+      & '${local.scripts_dir}/configure-vm-nic.ps1' @nicArgs
     PWSH
   }
 

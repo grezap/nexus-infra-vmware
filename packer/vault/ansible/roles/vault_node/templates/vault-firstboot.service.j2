@@ -1,0 +1,17 @@
+[Unit]
+Description=Vault first-boot configuration (VMnet10 static IP + per-clone TLS cert + render vault.hcl)
+After=systemd-networkd-wait-online.service
+Wants=systemd-networkd-wait-online.service
+Before=vault.service
+ConditionPathExists=!/var/lib/vault-firstboot-done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/vault-firstboot.sh
+RemainAfterExit=true
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

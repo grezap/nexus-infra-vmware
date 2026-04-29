@@ -1,0 +1,47 @@
+// vault.hcl.tpl — Vault server config TEMPLATE for NexusPlatform Phase 0.D.1
+//
+// Rendered to /etc/vault.d/vault.hcl by vault-firstboot.sh on first clone
+// boot. The script substitutes:
+//   @HOSTNAME@   -> /etc/hostname (vault-1, vault-2, vault-3)
+//   @VMNET11_IP@ -> primary NIC IP (DHCP'd, dnsmasq dhcp-host reservation)
+//   @VMNET10_IP@ -> secondary NIC IP (static per hostname mapping)
+
+ui            = true
+disable_mlock = false
+cluster_name  = "nexus-vault"
+
+// Integrated Raft storage (Vault default since 1.4; canonical per
+// architecture.md + MASTER-PLAN.md s 0.D)
+storage "raft" {
+  path    = "{{ vault_data_dir }}"
+  node_id = "@HOSTNAME@"
+}
+
+// Single listener bound to all interfaces. The nftables ruleset enforces
+// per-NIC access (VMnet11 = service clients; VMnet10 = raft peers).
+// Self-signed TLS bootstrap; Phase 0.D.2 reissues from Vault PKI.
+listener "tcp" {
+  address       = "0.0.0.0:8200"
+  tls_cert_file = "{{ vault_tls_dir }}/vault.crt"
+  tls_key_file  = "{{ vault_tls_dir }}/vault.key"
+}
+
+// Raft cluster RPC advertised on VMnet10 (backplane).
+cluster_addr = "https://@VMNET10_IP@:8201"
+
+// Client API advertised on VMnet11 (service network).
+api_addr     = "https://@VMNET11_IP@:8200"
+
+// Telemetry — Prometheus pull mode via /v1/sys/metrics (the metrics
+// endpoint enabled per-token in 0.D.1 init script).
+telemetry {
+  prometheus_retention_time = "24h"
+  disable_hostname          = true
+}
+
+// Audit logging is enabled post-init via `vault audit enable file ...`
+// from the role-overlay-vault-cluster.tf init step. Not configured in this
+// template because audit destinations are operator-time decisions.
+
+log_level  = "info"
+log_format = "json"

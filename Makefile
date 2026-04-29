@@ -20,6 +20,7 @@ OUTPUT_ROOT ?= H:/VMS/NexusPlatform/_templates
         ws2025-desktop ws2025-desktop-msdn ws2025-desktop-smoke ws2025-desktop-smoke-destroy \
         win11ent win11ent-msdn win11ent-smoke win11ent-smoke-destroy \
         foundation-apply foundation-destroy foundation-smoke \
+        vault security-apply security-destroy security-smoke \
         all-templates clean
 
 help:
@@ -51,8 +52,14 @@ help:
 	@echo "  make foundation-apply   - Phase 0.C.1+: deploy envs/foundation (dc-nexus + nexus-jumpbox + AD DS overlays + 0.C.4 hardening)"
 	@echo "  make foundation-destroy - Tear down the foundation env"
 	@echo "  make foundation-smoke   - Phase 0.C.4 smoke gate: verify hardening overlays + reachability invariant"
-	@echo "  *** Windows operators: prefer `pwsh -File scripts/foundation.ps1 <apply|destroy|smoke|cycle|plan|validate>` -- ***"
-	@echo "  *** GNU make is not installed on the build host; see memory/feedback_build_host_pwsh_native.md.                ***"
+	@echo ""
+	@echo "  make vault              - Phase 0.D.1: Build the vault Packer template (3-node Raft cluster source)"
+	@echo "  make security-apply     - Phase 0.D.1: deploy envs/security (3-node Vault Raft cluster + KV-v2 + auth)"
+	@echo "  make security-destroy   - Tear down the security env"
+	@echo "  make security-smoke     - Phase 0.D.1 smoke gate: cluster up, KV mounted, auth enabled, smoke secret readable"
+	@echo ""
+	@echo "  *** Windows operators: prefer `pwsh -File scripts/<env>.ps1 <apply|destroy|smoke|cycle|plan|validate>` -- ***"
+	@echo "  *** GNU make is not installed on the build host; see memory/feedback_build_host_pwsh_native.md.            ***"
 	@echo ""
 	@echo "  make all-templates    - Build every template in order"
 	@echo ""
@@ -66,6 +73,7 @@ init:
 	@cd packer/ws2025-core      && $(PACKER) init ws2025-core.pkr.hcl
 	@cd packer/ws2025-desktop   && $(PACKER) init ws2025-desktop.pkr.hcl
 	@cd packer/win11ent         && $(PACKER) init win11ent.pkr.hcl
+	@cd packer/vault            && $(PACKER) init vault.pkr.hcl
 	@cd terraform/gateway              && $(TERRAFORM) init
 	@cd terraform/deb13-smoke          && $(TERRAFORM) init
 	@cd terraform/ubuntu24-smoke       && $(TERRAFORM) init
@@ -73,6 +81,7 @@ init:
 	@cd terraform/ws2025-desktop-smoke && $(TERRAFORM) init
 	@cd terraform/win11ent-smoke       && $(TERRAFORM) init
 	@cd terraform/envs/foundation      && $(TERRAFORM) init
+	@cd terraform/envs/security        && $(TERRAFORM) init
 
 validate:
 	@echo "→ packer validate nexus-gateway"
@@ -87,6 +96,8 @@ validate:
 	@cd packer/ws2025-desktop && $(PACKER) validate .
 	@echo "→ packer validate win11ent"
 	@cd packer/win11ent       && $(PACKER) validate .
+	@echo "→ packer validate vault"
+	@cd packer/vault          && $(PACKER) validate .
 	@echo "→ terraform fmt -check (all)"
 	@cd terraform                    && $(TERRAFORM) fmt -check -recursive
 	@echo "→ terraform validate (gateway)"
@@ -103,6 +114,8 @@ validate:
 	@cd terraform/win11ent-smoke       && $(TERRAFORM) init -backend=false && $(TERRAFORM) validate
 	@echo "→ terraform validate (envs/foundation)"
 	@cd terraform/envs/foundation      && $(TERRAFORM) init -backend=false && $(TERRAFORM) validate
+	@echo "→ terraform validate (envs/security)"
+	@cd terraform/envs/security        && $(TERRAFORM) init -backend=false && $(TERRAFORM) validate
 
 # ─── Phase 0.B.1 — nexus-gateway (VM #0) ─────────────────────────────────
 
@@ -208,7 +221,24 @@ foundation-destroy:
 foundation-smoke:
 	@pwsh -NoProfile -File scripts/smoke-0.C.4.ps1
 
-all-templates: gateway deb13 ubuntu24 ws2025-core ws2025-desktop win11ent
+# ─── Phase 0.D.1 — vault template + envs/security/ (3-node Raft) ─────────
+
+vault:
+	@cd packer/vault && $(PACKER) build .
+
+security-apply:
+	@cd terraform/envs/security && $(TERRAFORM) apply -auto-approve
+
+security-destroy:
+	@cd terraform/envs/security && $(TERRAFORM) destroy -auto-approve
+
+# Phase 0.D.1 smoke gate -- 3-node Vault Raft cluster verification
+# (see scripts/smoke-0.D.1.ps1, docs/handbook.md s 2). Pre-flight: foundation
+# must have enable_vault_dhcp_reservations=true applied first.
+security-smoke:
+	@pwsh -NoProfile -File scripts/smoke-0.D.1.ps1
+
+all-templates: gateway deb13 ubuntu24 ws2025-core ws2025-desktop win11ent vault
 
 clean:
 	@echo "Cleaning packer output + terraform caches..."

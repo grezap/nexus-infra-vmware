@@ -176,3 +176,39 @@ variable "dc_time_external_peers" {
   type        = string
   default     = "time.cloudflare.com,time.nist.gov,pool.ntp.org,time.windows.com"
 }
+
+# ─── Phase 0.D.1 — Vault cluster gateway dnsmasq dhcp-host reservations ───
+# When the security env (Vault cluster) is being deployed, the gateway needs
+# per-MAC reservations so vault-1/2/3 DHCP into canonical IPs .121/.122/.123
+# (per nexus-platform-plan/docs/infra/vms.yaml lines 55-57). Default false
+# so existing foundation-only deploys don't touch the gateway. Set true via
+# `pwsh -File scripts\foundation.ps1 apply -Vars enable_vault_dhcp_reservations=true`
+# OR drop into terraform.tfvars, OR set a default override via -var.
+
+variable "enable_vault_dhcp_reservations" {
+  description = "Toggle: write dhcp-host reservations on nexus-gateway pinning vault-1/2/3 MACs to canonical VMnet11 IPs (192.168.70.121/.122/.123 per nexus-platform-plan/docs/infra/vms.yaml). MUST be true before applying envs/security/, otherwise the Vault clones DHCP into the dynamic pool and the cluster's canonical IPs are wrong. Default false to avoid surprising existing foundation-only deploys."
+  type        = bool
+  default     = false
+}
+
+# Vault MAC variables -- defaults match envs/security/'s defaults so changes
+# stay in sync. If you ever need to change the Vault MAC scheme, update both
+# this env's variables.tf AND envs/security/variables.tf.
+
+variable "mac_vault_1_primary" {
+  description = "vault-1 primary NIC MAC (VMnet11). Used for the dnsmasq dhcp-host reservation pinning vault-1 to 192.168.70.121."
+  type        = string
+  default     = "00:50:56:3F:00:40"
+}
+
+variable "mac_vault_2_primary" {
+  description = "vault-2 primary NIC MAC (VMnet11). Used for the dnsmasq dhcp-host reservation pinning vault-2 to 192.168.70.122."
+  type        = string
+  default     = "00:50:56:3F:00:41"
+}
+
+variable "mac_vault_3_primary" {
+  description = "vault-3 primary NIC MAC (VMnet11). Used for the dnsmasq dhcp-host reservation pinning vault-3 to 192.168.70.123."
+  type        = string
+  default     = "00:50:56:3F:00:42"
+}
