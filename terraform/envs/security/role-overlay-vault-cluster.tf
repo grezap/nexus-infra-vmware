@@ -59,7 +59,7 @@ resource "null_resource" "vault_ready_probe" {
     vault_1_id      = module.vault_1[0].vm_name
     vault_2_id      = module.vault_2[0].vm_name
     vault_3_id      = module.vault_3[0].vm_name
-    ready_overlay_v = "1"
+    ready_overlay_v = "2" # v2 = `$${ip}:` instead of `$ip:` in log messages -- PS parses `$ip:` as scope qualifier (like $env:, $script:) and errors "Variable reference is not valid". Affects 6 lines. v1 = initial implementation.
   }
 
   depends_on = [module.vault_1, module.vault_2, module.vault_3]
@@ -82,23 +82,23 @@ resource "null_resource" "vault_ready_probe" {
           Start-Sleep -Seconds 15
         }
         if (-not $sshReady) {
-          throw "[vault ready] $ip: ssh echo probe never succeeded after $timeout min"
+          throw "[vault ready] $${ip}: ssh echo probe never succeeded after $timeout min"
         }
-        Write-Host "[vault ready] $ip: SSH ready"
+        Write-Host "[vault ready] $${ip}: SSH ready"
 
-        Write-Host "[vault ready] $ip: probing vault.service..."
+        Write-Host "[vault ready] $${ip}: probing vault.service..."
         $vaultDeadline = (Get-Date).AddMinutes($timeout)
         $vaultReady = $false
         while ((Get-Date) -lt $vaultDeadline) {
           $status = (ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "systemctl is-active vault.service" 2>&1 | Out-String).Trim()
           if ($status -eq 'active') { $vaultReady = $true; break }
-          Write-Host "[vault ready] $ip: vault.service status='$status', retrying..."
+          Write-Host "[vault ready] $${ip}: vault.service status='$status', retrying..."
           Start-Sleep -Seconds 10
         }
         if (-not $vaultReady) {
-          throw "[vault ready] $ip: vault.service never became active after $timeout min"
+          throw "[vault ready] $${ip}: vault.service never became active after $timeout min"
         }
-        Write-Host "[vault ready] $ip: vault.service active"
+        Write-Host "[vault ready] $${ip}: vault.service active"
       }
 
       Write-Host "[vault ready] all 3 nodes ready -- SSH + vault.service active"
