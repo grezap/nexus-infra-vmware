@@ -1,10 +1,12 @@
 ---
 # vault_node — defaults
-# Overridable via Packer's --extra-vars (set from var.vault_version etc.)
-vault_version: "1.18.4"
-vault_arch: "linux_amd64"
-vault_data_dir: /opt/vault/data
-vault_config_dir: /etc/vault.d
-vault_tls_dir: /etc/vault.d/tls
-vault_user: vault
-vault_group: vault
+# Variables prefixed `vault_node_` per ansible-lint var-naming[no-role-prefix].
+# Overridable via Packer's --extra-vars (mapped from playbook-level
+# user-friendly names like `vault_version` to role-internal names below).
+vault_node_version: "1.18.4"
+vault_node_arch: "linux_amd64"
+vault_node_data_dir: /opt/vault/data
+vault_node_config_dir: /etc/vault.d
+vault_node_tls_dir: /etc/vault.d/tls
+vault_node_user: vault
+vault_node_group: vault

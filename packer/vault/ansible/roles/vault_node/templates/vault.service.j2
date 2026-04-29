@@ -3,11 +3,11 @@ Description=HashiCorp Vault
 Documentation=https://www.vaultproject.io/docs
 Requires=network-online.target vault-firstboot.service
 After=network-online.target vault-firstboot.service
-ConditionFileNotEmpty={{ vault_config_dir }}/vault.hcl
+ConditionFileNotEmpty={{ vault_node_config_dir }}/vault.hcl
 
 [Service]
-User={{ vault_user }}
-Group={{ vault_group }}
+User={{ vault_node_user }}
+Group={{ vault_node_group }}
 ProtectSystem=full
 ProtectHome=read-only
 PrivateTmp=yes
@@ -16,7 +16,7 @@ SecureBits=keep-caps
 AmbientCapabilities=CAP_IPC_LOCK
 CapabilityBoundingSet=CAP_SYSLOG CAP_IPC_LOCK
 NoNewPrivileges=yes
-ExecStart=/usr/local/bin/vault server -config={{ vault_config_dir }}/vault.hcl
+ExecStart=/usr/local/bin/vault server -config={{ vault_node_config_dir }}/vault.hcl
 ExecReload=/bin/kill --signal HUP $MAINPID
 KillMode=process
 KillSignal=SIGINT

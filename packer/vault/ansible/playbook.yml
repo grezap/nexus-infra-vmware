@@ -17,8 +17,10 @@
 
   vars:
     target_user: "{{ target_user | default('nexusadmin') }}"
-    vault_version: "{{ vault_version | default('1.18.4') }}"
-    vault_arch: "{{ vault_arch | default('linux_amd64') }}"
+    # Pass-through from Packer extra-vars (user-friendly names) to the
+    # role-internal names that satisfy ansible-lint's var-naming rule.
+    vault_node_version: "{{ vault_version | default('1.18.4') }}"
+    vault_node_arch: "{{ vault_arch | default('linux_amd64') }}"
 
   roles:
     - nexus_identity

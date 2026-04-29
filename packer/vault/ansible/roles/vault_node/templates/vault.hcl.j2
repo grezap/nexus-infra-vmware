@@ -13,7 +13,7 @@ cluster_name  = "nexus-vault"
 // Integrated Raft storage (Vault default since 1.4; canonical per
 // architecture.md + MASTER-PLAN.md s 0.D)
 storage "raft" {
-  path    = "{{ vault_data_dir }}"
+  path    = "{{ vault_node_data_dir }}"
   node_id = "@HOSTNAME@"
 }
 
@@ -22,8 +22,8 @@ storage "raft" {
 // Self-signed TLS bootstrap; Phase 0.D.2 reissues from Vault PKI.
 listener "tcp" {
   address       = "0.0.0.0:8200"
-  tls_cert_file = "{{ vault_tls_dir }}/vault.crt"
-  tls_key_file  = "{{ vault_tls_dir }}/vault.key"
+  tls_cert_file = "{{ vault_node_tls_dir }}/vault.crt"
+  tls_key_file  = "{{ vault_node_tls_dir }}/vault.key"
 }
 
 // Raft cluster RPC advertised on VMnet10 (backplane).
