@@ -35,15 +35,21 @@
     - { path: "{{ vault_node_tls_dir }}", owner: "{{ vault_node_user }}", group: "{{ vault_node_group }}", mode: '0750' }
 
 - name: Download + verify + install Vault binary
+  # Keep the original filenames (vault_<ver>_<arch>.zip and SHA256SUMS) on
+  # disk so the SHA256SUMS file's `<hash>  vault_<ver>_<arch>.zip` line
+  # resolves to a real path when piped to `sha256sum -c -`. Renaming the
+  # zip via `curl -o vault.zip` breaks that lookup.
   ansible.builtin.shell: |
     set -euo pipefail
     cd /tmp
-    curl -fsSL "https://releases.hashicorp.com/vault/{{ vault_node_version }}/vault_{{ vault_node_version }}_{{ vault_node_arch }}.zip" -o vault.zip
-    curl -fsSL "https://releases.hashicorp.com/vault/{{ vault_node_version }}/vault_{{ vault_node_version }}_SHA256SUMS" -o vault.SHA256SUMS
-    grep "vault_{{ vault_node_version }}_{{ vault_node_arch }}.zip" vault.SHA256SUMS | sha256sum -c -
-    unzip -o vault.zip
+    zip="vault_{{ vault_node_version }}_{{ vault_node_arch }}.zip"
+    sums="vault_{{ vault_node_version }}_SHA256SUMS"
+    curl -fsSL "https://releases.hashicorp.com/vault/{{ vault_node_version }}/${zip}"  -o "${zip}"
+    curl -fsSL "https://releases.hashicorp.com/vault/{{ vault_node_version }}/${sums}" -o "${sums}"
+    grep "${zip}" "${sums}" | sha256sum -c -
+    unzip -o "${zip}"
     install -m 755 -o root -g root vault /usr/local/bin/vault
-    rm -f vault.zip vault.SHA256SUMS vault
+    rm -f "${zip}" "${sums}" vault
   args:
     creates: /usr/local/bin/vault
 
