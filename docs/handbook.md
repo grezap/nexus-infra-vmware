@@ -285,11 +285,25 @@ cd "F:\_CODING_\Repos\Local Development And Test\Portfolio_Project_Ideas\workspa
 # Pre-req: ws2025-desktop template must exist (Phase 0.B.5).
 ls H:\VMS\NexusPlatform\_templates\ws2025-desktop\ws2025-desktop.vmx
 
-# Deploy both VMs (~20 sec; 2 sequential clones)
-make foundation-apply
+# Deploy the env (clones + AD DS overlay + jumpbox join + 0.C.4 hardening)
+pwsh -File scripts\foundation.ps1 apply
 
-# Tear down (stops both, deletes both)
-make foundation-destroy
+# Tear down (stops + deletes all foundation VMs)
+pwsh -File scripts\foundation.ps1 destroy
+
+# Full reproducibility cycle: destroy -> apply -> smoke (~17-18 min on
+# the current build host; halts on first failure)
+pwsh -File scripts\foundation.ps1 cycle
+
+# Smoke-only (after apply already succeeded)
+pwsh -File scripts\foundation.ps1 smoke
+
+# Equivalent Makefile targets exist (`make foundation-apply`,
+# `make foundation-destroy`, `make foundation-smoke`) but require GNU make,
+# which is not installed on the current Windows pwsh build host. The
+# pwsh wrapper above is canonical on Windows; the Makefile remains
+# functional in Linux/WSL/CI contexts -- see
+# memory/feedback_build_host_pwsh_native.md.
 ```
 
 ### 1c.1 Lease discovery + smoke probe
@@ -680,7 +694,7 @@ terraform apply -target=null_resource.dc_password_policy -auto-approve
 terraform apply -var dc_password_min_length=14 -auto-approve
 ```
 
-**Smoke gate:** the canonical end-to-end check is `make foundation-smoke` (or `pwsh -File scripts/smoke-0.C.4.ps1` directly). It runs all 24 checks below + summarizes pass/fail with a non-zero exit on any failure -- wire it into CI or run it manually after every `terraform apply`. The individual commands below are useful for ad-hoc debugging when a check fails:
+**Smoke gate:** the canonical end-to-end check on Windows is `pwsh -File scripts\foundation.ps1 smoke` (which delegates to `scripts\smoke-0.C.4.ps1`). It runs 28 checks + summarizes pass/fail with a non-zero exit on any failure -- wire it into CI or run it manually after every apply. The Makefile equivalent is `make foundation-smoke` (Linux/WSL only; see `memory/feedback_build_host_pwsh_native.md` for why pwsh is canonical on the build host). The individual commands below are useful for ad-hoc debugging when a check fails:
 
 ```powershell
 # OU layout + jumpbox move

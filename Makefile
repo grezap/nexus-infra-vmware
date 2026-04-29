@@ -1,5 +1,12 @@
 # nexus-infra-vmware — top-level make targets
-# Run from a pwsh (Windows) or bash (WSL) shell. Windows targets use pwsh.
+#
+# *** Windows operators: GNU make is NOT installed on the canonical build host. ***
+# *** The pwsh-native wrapper at scripts/foundation.ps1 is canonical for the   ***
+# *** foundation env: `pwsh -File scripts\foundation.ps1 <verb>`. The targets   ***
+# *** below remain functional in Linux/WSL/CI contexts. See                    ***
+# *** memory/feedback_build_host_pwsh_native.md for the rationale.             ***
+#
+# Run from a pwsh (Windows) or bash (WSL/Linux) shell. Windows targets use pwsh.
 
 PACKER      ?= packer
 TERRAFORM   ?= terraform
@@ -44,6 +51,8 @@ help:
 	@echo "  make foundation-apply   - Phase 0.C.1+: deploy envs/foundation (dc-nexus + nexus-jumpbox + AD DS overlays + 0.C.4 hardening)"
 	@echo "  make foundation-destroy - Tear down the foundation env"
 	@echo "  make foundation-smoke   - Phase 0.C.4 smoke gate: verify hardening overlays + reachability invariant"
+	@echo "  *** Windows operators: prefer `pwsh -File scripts/foundation.ps1 <apply|destroy|smoke|cycle|plan|validate>` -- ***"
+	@echo "  *** GNU make is not installed on the build host; see memory/feedback_build_host_pwsh_native.md.                ***"
 	@echo ""
 	@echo "  make all-templates    - Build every template in order"
 	@echo ""

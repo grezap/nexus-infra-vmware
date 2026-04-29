@@ -104,6 +104,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   domain-joined + Netlogon still live) is included so a hardening apply
   that regresses 0.C.2/0.C.3 surfaces in the same gate.
 
+- **`scripts/foundation.ps1` operator wrapper** — pwsh-native equivalent of
+  the bash-shaped `make foundation-*` targets, since GNU make is not
+  installed on the canonical Windows pwsh build host (see
+  `memory/feedback_build_host_pwsh_native.md`). Six verbs:
+  `apply` / `destroy` / `smoke` / `cycle` (destroy → apply → smoke chained,
+  halts on first failure) / `plan` / `validate`. Forwards `-Vars
+  key=value,key=value` to terraform's `-var` flags; forwards `-SmokeArgs
+  @{...}` to the smoke script. Resolves repo root from `$PSScriptRoot` so it
+  works from any cwd. Validated end-to-end against the Phase 0.C.4 cycle:
+  `pwsh -File scripts\foundation.ps1 cycle` reproduces the ~17-18 min
+  destroy → apply → 28-check smoke flow that proved 0.C.4 reproducibility.
+
+  Documentation: handbook §1c now leads with the pwsh wrapper as canonical;
+  §1f's smoke gate also references the wrapper. Makefile gains a top-of-file
+  comment + help-block notice pointing Windows operators at the wrapper. The
+  Makefile targets remain functional in Linux/WSL/CI contexts.
+
 ### Changed
 
 - **Phase 0.C.3 unattended end-to-end validated 2026-04-29** — Five iterations
