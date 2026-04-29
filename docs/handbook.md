@@ -638,6 +638,136 @@ If you're writing a new overlay that touches Windows over SSH, bake all five in 
 
 ---
 
+## 1f. Phase 0.C.4 — AD DS hardening on `dc-nexus`
+
+Layered on top of 0.C.3's promoted DC + domain-joined jumpbox. Adds the always-on plumbing that makes `nexus.lab` a real, manageable forest rather than just a promoted DC + computer objects sitting in the default Containers. Four independent overlays, each with its own `enable_dc_*` toggle (default `true`) and its own role-overlay file under `terraform/envs/foundation/`.
+
+**Files (all under `terraform/envs/foundation/`):**
+
+| File | Purpose | Toggle |
+|---|---|---|
+| `role-overlay-dc-ous.tf` | Create OU=Servers, OU=Workstations, OU=ServiceAccounts, OU=Groups under DC=nexus,DC=lab + move `nexus-jumpbox` from CN=Computers into OU=Servers. dc-nexus stays at the built-in CN=Domain Controllers (Microsoft hard rule). | `enable_dc_ous` |
+| `role-overlay-dc-password-policy.tf` | Default Domain Password + Lockout Policy via `Set-ADDefaultDomainPasswordPolicy`. NIST SP 800-63B-aligned defaults. | `enable_dc_password_policy` |
+| `role-overlay-dc-reverse-dns.tf` | AD-integrated reverse DNS zone `70.168.192.in-addr.arpa.` (VMnet11 only — `192.168.70.0/24`) + PTR records for dc-nexus (.240) and nexus-jumpbox (.241). | `enable_dc_reverse_dns` |
+| `role-overlay-dc-time.tf` | Configure dc-nexus (PDC) as authoritative time source via `w32tm /config /reliable:YES`; sync from public NTP peers. | `enable_dc_time_authoritative` |
+
+All four `depends_on null_resource.dc_nexus_verify` (and `dc_ous` also depends on `null_resource.jumpbox_verify` for the jumpbox-move phase). When `enable_dc_promotion=false`, all four are no-ops.
+
+**Selective ops** (per [`memory/feedback_selective_provisioning.md`](https://github.com/grezap/nexus-infra-vmware) — every hardening overlay independently controllable):
+
+```powershell
+cd terraform\envs\foundation
+
+# Default — everything (AD DS overlay + jumpbox join + 4 hardening overlays)
+terraform apply -auto-approve
+
+# Skip a single overlay
+terraform apply -var enable_dc_ous=false -auto-approve
+terraform apply -var enable_dc_password_policy=false -auto-approve
+terraform apply -var enable_dc_reverse_dns=false -auto-approve
+terraform apply -var enable_dc_time_authoritative=false -auto-approve
+
+# Skip ALL 0.C.4 hardening — keep DC + jumpbox + domain-join only
+terraform apply -var enable_dc_ous=false -var enable_dc_password_policy=false `
+                -var enable_dc_reverse_dns=false -var enable_dc_time_authoritative=false `
+                -auto-approve
+
+# Iterate on a single overlay (e.g. tune password policy values)
+terraform taint null_resource.dc_password_policy
+terraform apply -target=null_resource.dc_password_policy -auto-approve
+
+# Tune a specific value (overrides the default)
+terraform apply -var dc_password_min_length=14 -auto-approve
+```
+
+**Smoke gate:**
+
+```powershell
+# OU layout + jumpbox move
+ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-ADOrganizationalUnit -Filter * | Format-Table Name, DistinguishedName -AutoSize"'
+# Expect: Servers, Workstations, ServiceAccounts, Groups (plus the built-in Domain Controllers)
+ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-ADComputer nexus-jumpbox | Format-List Name, DistinguishedName"'
+# Expect: DistinguishedName = CN=NEXUS-JUMPBOX,OU=Servers,DC=nexus,DC=lab
+
+# Default Domain Password Policy
+ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-ADDefaultDomainPasswordPolicy | Format-List MinPasswordLength, LockoutThreshold, LockoutDuration, MaxPasswordAge, ComplexityEnabled"'
+# Expect: MinPasswordLength=12, LockoutThreshold=5, LockoutDuration=00:15:00, MaxPasswordAge=00:00:00 (= never), ComplexityEnabled=True
+
+# Reverse DNS zone + PTR records
+ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-DnsServerZone -Name 70.168.192.in-addr.arpa | Format-List ZoneName, ZoneType, IsDsIntegrated"'
+ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-DnsServerResourceRecord -ZoneName 70.168.192.in-addr.arpa -RRType Ptr | Format-Table HostName, RecordData -AutoSize"'
+# Expect: PTRs at 240 (dc-nexus.nexus.lab.) and 241 (nexus-jumpbox.nexus.lab.)
+ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Resolve-DnsName -Name 192.168.70.241 -Server 192.168.70.240"'
+# Expect: nexus-jumpbox.nexus.lab.
+
+# W32Time PDC config
+ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "w32tm /query /configuration | Select-String NtpServer"'
+# Expect: NtpServer: time.cloudflare.com,0x8 time.nist.gov,0x8 pool.ntp.org,0x8 time.windows.com,0x8
+ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "w32tm /query /status"'
+# Expect: Source = one of the configured peers (not Local CMOS Clock); Stratum < 16
+```
+
+**Build-host reachability invariant** (per [`memory/feedback_lab_host_reachability.md`](memory/feedback_lab_host_reachability.md)) — verify after every hardening apply:
+
+```powershell
+# SSH/22 + RDP/3389 from the build host to every fleet VM must remain reachable
+Test-NetConnection 192.168.70.240 -Port 22    # dc-nexus SSH
+Test-NetConnection 192.168.70.240 -Port 3389  # dc-nexus RDP
+Test-NetConnection 192.168.70.241 -Port 22    # jumpbox SSH
+Test-NetConnection 192.168.70.241 -Port 3389  # jumpbox RDP
+```
+
+A `False` on any of these is a critical regression — every fleet VM stays manageable from the build host (Greg has no out-of-band path).
+
+### 1f.1 Timing expectations
+
+| Overlay | Wall-clock |
+|---|---|
+| `null_resource.dc_ous` (4 OUs + jumpbox move) | 5-10 sec |
+| `null_resource.dc_password_policy` (Set-ADDefaultDomainPasswordPolicy + verify) | 3-5 sec |
+| `null_resource.dc_reverse_dns` (Add-DnsServerPrimaryZone + 2 PTRs) | 3-5 sec |
+| `null_resource.dc_time_authoritative` (w32tm /config + restart + resync) | 8-12 sec (the `/resync /force` waits for an NTP round-trip) |
+| **Total 0.C.4 hardening incremental cost** | **~30-60 sec** added to the foundation env apply |
+
+The four overlays could in principle run in parallel (they have no inter-dependencies beyond `dc_nexus_verify`), but Terraform's default graph parallelism handles that automatically — no special config needed.
+
+### 1f.2 Idempotency
+
+Every overlay's first action is a state probe; only mutate if state differs from desired:
+
+| Overlay | Probe | Mutation guard |
+|---|---|---|
+| `dc_ous` | `Get-ADOrganizationalUnit -Identity ...` (per OU); `Get-ADComputer nexus-jumpbox` for the move | Skip OU if already present; skip move if jumpbox is already in `OU=Servers` (or absent entirely when `enable_jumpbox_domain_join=false`) |
+| `dc_password_policy` | `Get-ADDefaultDomainPasswordPolicy` | Skip if all 8 fields match desired values; otherwise `Set-` once and verify |
+| `dc_reverse_dns` | `Get-DnsServerZone`, `Get-DnsServerResourceRecord` | Skip zone create if present; skip each PTR if present |
+| `dc_time_authoritative` | `w32tm /query /configuration` parsed for `NtpServer` and `Type` | Skip reconfigure if both match desired; otherwise apply once |
+
+`terraform apply` is safe to re-run mid-lab; bumping the `*_overlay_v` field in any `triggers` block forces re-execution (use this when iterating on the script content).
+
+### 1f.3 NOT in scope for 0.C.4
+
+- **Second DC for replication HA** → Phase 0.C.5 or its own phase (Phase 0.G in original architecture roadmap). Substantial scope (FSMO transfer test, Sysvol replication via DFSR, separate IP/MAC, /etc/hosts on gateway, etc.).
+- **Service accounts** (`svc-postgres`, `svc-mongo`, etc.) → Phase 0.C.6+ when those services exist.
+- **GMSA / managed service accounts** → Phase 0.D (requires Vault for rotation policy).
+- **Login banner GPO** → cosmetic; fold in later when there are more GPOs to manage.
+- **`OU=Users`** → premature; no human users beyond `nexusadmin` yet.
+- **GPOs beyond what the Default Domain Policy provides** (CIS hardening baselines, AppLocker, Defender ASR, Windows Firewall lockdown) → Phase 0.C.5+. The build-host reachability invariant ([`memory/feedback_lab_host_reachability.md`](memory/feedback_lab_host_reachability.md)) constrains all future GPO baselines: any baseline that restricts inbound TCP/22 or TCP/3389 must default-allow `10.0.70.0/24` (the build-host LAN).
+- **Tightening `MinPasswordLength` to 14** → Phase 0.D once Vault generates compliant creds. Setting it earlier strands the existing 12-char bootstrap creds at the next rotation.
+- **VMnet10 reverse DNS** (`70.0.10.in-addr.arpa.`) → not AD-relevant; the build-host LAN doesn't need PTRs from dc-nexus.
+- **Pivoting time sync to gateway-as-NTP-server** → separate ticket post-0.C.4. Requires verifying nexus-gateway's chrony exposes server mode (it currently runs in client posture per `_shared/ansible/roles/nexus_network`).
+
+### 1f.4 Why this layered shape (and not one big hardening overlay)
+
+Each concern is one file with one toggle, so a future iteration on (e.g.) the password policy doesn't force a re-apply of OU layout, reverse DNS, and time config. Per [`memory/feedback_selective_provisioning.md`](memory/feedback_selective_provisioning.md), bundled-only operations are a design defect — and "AD hardening" is exactly the kind of bundle that grows without bound (CIS baselines, Defender ASR, AppLocker, audit policy, Kerberos armoring, …). Establishing the one-concern-per-overlay shape now sets the canonical pattern for Phase 0.C.5+ and beyond.
+
+The four overlays also each pay the canonical SSH transit cost (echo probe + base64 + retry, per `feedback_windows_ssh_automation.md`). The redundancy is worth it: an iteration loop that taints just one overlay never has to re-run the others, and the SSH probes within each overlay are short (~5-15 sec vs the multi-minute promotion).
+
+### 1f.5 AD-cmdlet run point — always from the DC, never from the jumpbox
+
+Per the last entry in [`memory/feedback_addsforest_post_promotion.md`](memory/feedback_addsforest_post_promotion.md): SSH to a domain member runs as the **local** SAM `nexusadmin`, which has no AD-authenticated context — `Get-ADOrganizationalUnit`, `Get-ADComputer`, `Set-ADDefaultDomainPasswordPolicy`, etc. would fail "Unable to contact the server" even when ADWS is healthy on the DC. All four overlays SSH directly to the DC (`192.168.70.240`); the jumpbox isn't a participant in the hardening flow. (The jumpbox's role is post-deployment operator UX — RSAT MMC consoles, GPMC — not automation transit.)
+
+---
+
 ## 2. Working with the running gateway
 
 ### 2.1 SSH in

@@ -15,7 +15,7 @@ output "mac_addresses" {
 }
 
 output "domain_info" {
-  description = "AD DS forest details (only meaningful when enable_dc_promotion=true)."
+  description = "AD DS forest details (only meaningful when enable_dc_promotion=true). Includes hardening_state showing which Phase 0.C.4 overlays are active."
   value = {
     enabled            = var.enable_dc_promotion
     domain             = var.ad_domain
@@ -24,6 +24,21 @@ output "domain_info" {
     dc_fqdn            = var.enable_dc_promotion ? "dc-nexus.${var.ad_domain}" : null
     dc_ip              = "192.168.70.240"
     dns_forward_active = var.enable_gateway_dns_forward
+    hardening_state = {
+      ous_enabled                = var.enable_dc_ous
+      password_policy_enabled    = var.enable_dc_password_policy
+      reverse_dns_enabled        = var.enable_dc_reverse_dns
+      time_authoritative_enabled = var.enable_dc_time_authoritative
+      password_policy_summary = var.enable_dc_password_policy ? {
+        min_length         = var.dc_password_min_length
+        lockout_threshold  = var.dc_lockout_threshold
+        lockout_duration_m = var.dc_lockout_duration_minutes
+        max_age_days       = var.dc_max_password_age_days
+        min_age_days       = var.dc_min_password_age_days
+        history_count      = var.dc_password_history_count
+      } : null
+      time_peers = var.enable_dc_time_authoritative ? var.dc_time_external_peers : null
+    }
   }
 }
 
@@ -72,6 +87,28 @@ output "next_step" {
       ssh nexusadmin@192.168.70.241 'powershell -NoProfile -Command "nltest /dsgetdc:${var.ad_domain}"'
       ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-ADComputer nexus-jumpbox | Format-List Name, DNSHostName, DistinguishedName, Enabled"'
 
+    Verify the AD DS hardening overlays (Phase 0.C.4) -- toggleable per overlay:
+      # OU layout + jumpbox move (var.enable_dc_ous)
+      ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-ADOrganizationalUnit -Filter * | Format-Table Name, DistinguishedName -AutoSize"'
+      ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-ADComputer nexus-jumpbox | Format-List Name, DistinguishedName"'
+
+      # Default Domain Password Policy (var.enable_dc_password_policy)
+      ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-ADDefaultDomainPasswordPolicy | Format-List MinPasswordLength, LockoutThreshold, LockoutDuration, LockoutObservationWindow, MaxPasswordAge, MinPasswordAge, PasswordHistoryCount, ComplexityEnabled"'
+
+      # Reverse DNS zone + PTR records (var.enable_dc_reverse_dns)
+      ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-DnsServerZone -Name 70.168.192.in-addr.arpa | Format-List ZoneName, ZoneType, IsDsIntegrated, DynamicUpdate"'
+      ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-DnsServerResourceRecord -ZoneName 70.168.192.in-addr.arpa -RRType Ptr | Format-Table HostName, RecordData -AutoSize"'
+
+      # W32Time PDC authoritative config (var.enable_dc_time_authoritative)
+      ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "w32tm /query /configuration | Select-String NtpServer; w32tm /query /status"'
+
+    Verify the build-host reachability invariant (per memory/feedback_lab_host_reachability.md)
+    -- every fleet VM must remain SSH/22 + RDP/3389 reachable from the build host:
+      Test-NetConnection 192.168.70.240 -Port 22    # dc-nexus SSH
+      Test-NetConnection 192.168.70.240 -Port 3389  # dc-nexus RDP
+      Test-NetConnection 192.168.70.241 -Port 22    # jumpbox SSH
+      Test-NetConnection 192.168.70.241 -Port 3389  # jumpbox RDP
+
     Selective ops -- per memory/feedback_selective_provisioning.md, every piece of
     foundation is independently controllable. Examples:
       terraform apply -target=module.dc_nexus -auto-approve              # dc-nexus only, no jumpbox
@@ -80,10 +117,21 @@ output "next_step" {
       terraform apply -target=null_resource.dc_nexus_promote -auto-approve  # iterate on the promotion step
       terraform taint null_resource.dc_nexus_promote && terraform apply -target=null_resource.dc_nexus_promote -auto-approve
 
+      # 0.C.4 hardening: each overlay independently togglable
+      terraform apply -var enable_dc_ous=false -auto-approve             # skip OU layout
+      terraform apply -var enable_dc_password_policy=false -auto-approve # skip password policy
+      terraform apply -var enable_dc_reverse_dns=false -auto-approve     # skip reverse DNS zone
+      terraform apply -var enable_dc_time_authoritative=false -auto-approve # skip w32tm PDC config
+      terraform apply -target=null_resource.dc_ous -auto-approve         # iterate on a single overlay
+
     Tear down (whole env):
       make foundation-destroy
 
     Tear down just the role overlay (keeps the bare clones running):
       terraform apply -var enable_dc_promotion=false -var enable_gateway_dns_forward=false -auto-approve
+
+    Tear down just the 0.C.4 hardening (keeps DC + jumpbox + domain join):
+      terraform apply -var enable_dc_ous=false -var enable_dc_password_policy=false ``
+                      -var enable_dc_reverse_dns=false -var enable_dc_time_authoritative=false -auto-approve
   EOT
 }

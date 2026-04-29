@@ -6,6 +6,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Phase 0.C.4 — AD DS hardening overlays on `dc-nexus`.** Four independent
+  role-overlay files under `terraform/envs/foundation/`, each with its own
+  `enable_dc_*` toggle (default `true`) and independently `-target`-able per
+  the selective-provisioning rule in `memory/feedback_selective_provisioning.md`:
+
+  - `role-overlay-dc-ous.tf` — creates OU=Servers, OU=Workstations,
+    OU=ServiceAccounts, OU=Groups under DC=nexus,DC=lab and moves
+    `nexus-jumpbox` from CN=Computers into OU=Servers. dc-nexus stays at the
+    built-in CN=Domain Controllers (Microsoft hard rule). Idempotent
+    (`Get-ADOrganizationalUnit` probe per OU; jumpbox-move is a no-op when
+    `enable_jumpbox_domain_join=false` or when already in OU=Servers).
+
+  - `role-overlay-dc-password-policy.tf` — applies the Default Domain Password
+    + Lockout Policy via `Set-ADDefaultDomainPasswordPolicy`. NIST
+    SP 800-63B-aligned defaults: `MinPasswordLength=12`, `LockoutThreshold=5`
+    (≥5 enforced via `validation` block per `memory/feedback_lab_host_reachability.md`
+    so an automated probe loop can't lock out `nexusadmin` and break SSH/RDP),
+    `LockoutDuration=15min`, `MaxPasswordAge=0` (never expire — modern NIST
+    stance pre-Vault), `MinPasswordAge=0`, `PasswordHistoryCount=24`. Each
+    field is its own variable; idempotent (compare-then-set, no-op when state
+    matches).
+
+  - `role-overlay-dc-reverse-dns.tf` — adds AD-integrated reverse DNS zone
+    `70.168.192.in-addr.arpa.` (VMnet11 only, `192.168.70.0/24`) + PTR
+    records for dc-nexus (.240) and nexus-jumpbox (.241). `DynamicUpdate=Secure`,
+    `ReplicationScope=Domain`. VMnet10 / 10.0.70.0/24 (build-host LAN) is
+    intentionally NOT included — not AD-relevant. Idempotent (`Get-DnsServerZone`
+    + `Get-DnsServerResourceRecord` probes).
+
+  - `role-overlay-dc-time.tf` — configures dc-nexus (the PDC) as authoritative
+    time source for nexus.lab via `w32tm /config /reliable:YES`. Default peer
+    list (`var.dc_time_external_peers`): `time.cloudflare.com,time.nist.gov,
+    pool.ntp.org,time.windows.com` — four mixed-provider public NTP peers,
+    each with `0x8` SpecialInterval flag per Microsoft KB 939322. Domain
+    members inherit time from the PDC; no client-side configuration needed.
+    Idempotent (parses `w32tm /query /configuration` for `NtpServer` + `Type`,
+    reconfigures only if either differs).
+
+  All four overlays:
+  - Run AD-authenticated cmdlets **on the DC** (`192.168.70.240`), per the
+    last entry in `memory/feedback_addsforest_post_promotion.md` — SSH to a
+    domain member runs as the local SAM `nexusadmin` with no AD context.
+  - Follow the canonical SSH transit pattern from
+    `memory/feedback_windows_ssh_automation.md`: SSH echo probe + base64-encoded
+    multi-token PowerShell + retry loop with stderr capture.
+  - Add a corresponding `enable_dc_*` variable to `variables.tf` (with
+    validation blocks where reachability is at stake), and a
+    `hardening_state` block to the `domain_info` output so consumers can
+    inspect which overlays are active and what values were applied.
+  - Do NOT touch Windows Firewall, sshd_config, or RDP settings — preserving
+    the build-host reachability invariant from
+    `memory/feedback_lab_host_reachability.md` (every fleet VM stays
+    SSH/22 + RDP/3389 reachable from `10.0.70.0/24`).
+
+  Total incremental wall-clock: ~30-60 sec on top of the existing 0.C.3 cycle.
+
+  **Deferred to later phases (mentioned for context, not built now):**
+  - Second DC for replication HA → Phase 0.C.5 / Phase 0.G
+  - Service accounts (`svc-postgres`, `svc-mongo`, …) → Phase 0.C.6+
+  - GMSA / managed service accounts → Phase 0.D (Vault rotation)
+  - Login banner GPO → cosmetic; fold in later
+  - `OU=Users` → premature; no human users beyond `nexusadmin` yet
+  - GPO baselines beyond Default Domain Policy (CIS, AppLocker, Defender ASR,
+    Windows Firewall lockdown) → Phase 0.C.5+ with the build-host
+    reachability carve-out baked in
+  - `MinPasswordLength=14` tightening → Phase 0.D when Vault generates creds
+  - Pivoting NTP source to gateway-as-NTP-server → separate ticket post-0.C.4
+
+  New variables (all defaults sensible — `terraform apply` works with no
+  `-var` overrides):
+  - `enable_dc_ous` (bool, default true)
+  - `enable_dc_password_policy` (bool, default true)
+  - `dc_password_min_length` (number, default 12, validated 8-128)
+  - `dc_lockout_threshold` (number, default 5, validated >=5)
+  - `dc_lockout_duration_minutes` (number, default 15)
+  - `dc_max_password_age_days` (number, default 0)
+  - `dc_min_password_age_days` (number, default 0)
+  - `dc_password_history_count` (number, default 24)
+  - `enable_dc_reverse_dns` (bool, default true)
+  - `enable_dc_time_authoritative` (bool, default true)
+  - `dc_time_external_peers` (string, default = 4 public NTP peers)
+
+  Documentation: new §1f in `docs/handbook.md` covers files, selective ops
+  examples, smoke gate, build-host reachability verification, timing, and
+  scope-out list. The `next_step` Terraform output also exposes per-overlay
+  smoke commands.
+
 ### Changed
 
 - **Phase 0.C.3 unattended end-to-end validated 2026-04-29** — Five iterations

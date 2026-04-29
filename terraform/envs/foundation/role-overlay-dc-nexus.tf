@@ -45,6 +45,11 @@ locals {
   ad_domain         = var.ad_domain
   ad_netbios        = var.ad_netbios
 
+  # Distinguished-name root for the AD forest -- e.g. "nexus.lab" -> "DC=nexus,DC=lab".
+  # Used by Phase 0.C.4 hardening overlays (OU layout, reverse DNS) to compose DNs
+  # without hard-coding the domain split.
+  ad_dn_root = "DC=${replace(var.ad_domain, ".", ",DC=")}"
+
   # Wrap a remote PowerShell command for Win32-OpenSSH (defaults to cmd.exe shell).
   # Caller passes the inner script; we pre-format the ssh argv so bare PowerShell
   # is invoked NoProfile + bypass execution policy.
