@@ -12,7 +12,7 @@ OUTPUT_ROOT ?= H:/VMS/NexusPlatform/_templates
         ws2025-core ws2025-core-msdn ws2025-core-smoke ws2025-core-smoke-destroy \
         ws2025-desktop ws2025-desktop-msdn ws2025-desktop-smoke ws2025-desktop-smoke-destroy \
         win11ent win11ent-msdn win11ent-smoke win11ent-smoke-destroy \
-        foundation-apply foundation-destroy \
+        foundation-apply foundation-destroy foundation-smoke \
         all-templates clean
 
 help:
@@ -41,8 +41,9 @@ help:
 	@echo "  make win11ent-smoke         - Instantiate win11ent via modules/vm (smoke test)"
 	@echo "  make win11ent-smoke-destroy - Tear down the win11ent smoke VM"
 	@echo ""
-	@echo "  make foundation-apply   - Phase 0.C.1: deploy envs/foundation (dc-nexus + nexus-jumpbox)"
+	@echo "  make foundation-apply   - Phase 0.C.1+: deploy envs/foundation (dc-nexus + nexus-jumpbox + AD DS overlays + 0.C.4 hardening)"
 	@echo "  make foundation-destroy - Tear down the foundation env"
+	@echo "  make foundation-smoke   - Phase 0.C.4 smoke gate: verify hardening overlays + reachability invariant"
 	@echo ""
 	@echo "  make all-templates    - Build every template in order"
 	@echo ""
@@ -191,6 +192,12 @@ foundation-apply:
 
 foundation-destroy:
 	@cd terraform/envs/foundation && $(TERRAFORM) destroy -auto-approve
+
+# Phase 0.C.4 smoke gate -- run after foundation-apply to verify hardening
+# overlays + the build-host reachability invariant
+# (see memory/feedback_lab_host_reachability.md). Exits 1 on any failure.
+foundation-smoke:
+	@pwsh -NoProfile -File scripts/smoke-0.C.4.ps1
 
 all-templates: gateway deb13 ubuntu24 ws2025-core ws2025-desktop win11ent
 

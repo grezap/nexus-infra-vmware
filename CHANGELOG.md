@@ -95,6 +95,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scope-out list. The `next_step` Terraform output also exposes per-overlay
   smoke commands.
 
+- **`scripts/smoke-0.C.4.ps1` + `make foundation-smoke`** — automated smoke
+  gate covering all four 0.C.4 hardening overlays (24 individual checks)
+  plus the build-host reachability invariant (SSH/22 + RDP/3389 from the
+  build host to dc-nexus and nexus-jumpbox). Parameterized with sensible
+  defaults; exits non-zero on any failure so it can wire into CI later.
+  Carry-forward sanity (DC's forest still healthy + jumpbox still
+  domain-joined + Netlogon still live) is included so a hardening apply
+  that regresses 0.C.2/0.C.3 surfaces in the same gate.
+
 ### Changed
 
 - **Phase 0.C.3 unattended end-to-end validated 2026-04-29** — Five iterations

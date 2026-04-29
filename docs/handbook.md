@@ -680,7 +680,7 @@ terraform apply -target=null_resource.dc_password_policy -auto-approve
 terraform apply -var dc_password_min_length=14 -auto-approve
 ```
 
-**Smoke gate:**
+**Smoke gate:** the canonical end-to-end check is `make foundation-smoke` (or `pwsh -File scripts/smoke-0.C.4.ps1` directly). It runs all 24 checks below + summarizes pass/fail with a non-zero exit on any failure -- wire it into CI or run it manually after every `terraform apply`. The individual commands below are useful for ad-hoc debugging when a check fails:
 
 ```powershell
 # OU layout + jumpbox move
