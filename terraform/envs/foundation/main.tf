@@ -10,7 +10,7 @@
  *                              role-overlay step, deferred; this stage just
  *                              lands the bare clone at a stable IP/MAC so
  *                              the overlay has a fixed target).
- *   - nexus-admin-jumpbox   -- operator jump host. ws2025-desktop ships RSAT
+ *   - nexus-jumpbox   -- operator jump host. ws2025-desktop ships RSAT
  *                              MMC tools + GPMC, which is exactly what an
  *                              admin-tier jumpbox needs.
  *
@@ -45,9 +45,9 @@ module "dc_nexus" {
 module "nexus_admin_jumpbox" {
   source = "../../modules/vm"
 
-  vm_name           = "nexus-admin-jumpbox"
+  vm_name           = "nexus-jumpbox"
   template_vmx_path = var.template_vmx_path
-  vm_output_dir     = "${var.vm_output_dir_root}/nexus-admin-jumpbox"
+  vm_output_dir     = "${var.vm_output_dir_root}/nexus-jumpbox"
   vnet              = var.vnet
   mac_address       = var.mac_nexus_admin_jumpbox
 }

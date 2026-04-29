@@ -6,9 +6,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Phase 0.C.3 unattended end-to-end validated 2026-04-29** — Five iterations
+  needed to peel off silent failure modes; final state validated via clean
+  `terraform destroy -auto-approve` + `terraform apply -auto-approve` cycle
+  in ~16 min from cold-clone to domain-joined fleet.
+
+  - `dc_nexus_rename` `rename_overlay_v` 1→4:
+    - v2: base64-encoded transit (cmd.exe quoting was mangling the rename
+      command; Rename-Computer never queued, NV Hostname stayed at WIN-XXX)
+    - v3: pre-flight `Test-NetConnection -Port 22` wait (vmrun start returns
+      in 2 sec but Windows boot+sysprep+sshd takes 1-3 min)
+    - v4: SSH **echo probe** (not Test-NetConnection) + retry loop on the
+      actual rename SSH (port-22-open ≠ sshd-ready; sshd flakes for ~30-60s
+      after the listening socket appears)
+
+  - `jumpbox_domain_join` `domainjoin_v` 1→5:
+    - v2: dropped inline `Restart-Service sshd` before Add-Computer (it was
+      killing the SSH session running our script; Add-Computer never fired)
+    - v3: hostname `nexus-admin-jumpbox` → `nexus-jumpbox` (the original
+      19-char name busted the NetBIOS 15-char limit, silently rejected)
+    - v4: pre-flight Test-NetConnection (same as rename v3)
+    - v5: SSH echo probe + retry loop (same as rename v4)
+
+  - `gateway_dns_forward` `dns_overlay_v` 2→7:
+    - v3-v6 chased a DNSSEC theory (domain-insecure, dnssec-check-unsigned)
+      that turned out to be irrelevant; v4 even broke gateway DNS by feeding
+      dnsmasq a directive its build doesn't recognize
+    - v7: `rebind-domain-ok=/<domain>/` was the actual fix. The gateway's
+      `stop-dns-rebind` was blocking responses where our internal nexus.lab
+      resolved to RFC1918 192.168.70.240 (the journal entry "possible
+      DNS-rebind attack detected" was the real signal). Per-zone allowlist;
+      keeps stop-dns-rebind active everywhere else.
+
+  - `jumpbox_verify` Get-ADComputer fix: query AD from the DC instead of
+    from the (now-domain-joined) jumpbox. SSH-to-jumpbox runs as the LOCAL
+    nexusadmin SAM account; that session has no AD-authenticated context,
+    so Get-ADComputer fails with "Unable to contact the server" even though
+    the DC's ADWS is healthy. Centralizing AD queries on the DC sidesteps
+    the credential-plumbing problem.
+
+  - Hostname rename across all files: `nexus-admin-jumpbox` →
+    `nexus-jumpbox` (NetBIOS limit). Affects main.tf, outputs.tf,
+    variables.tf, both role-overlay files, Makefile, handbook.md.
+
 ### Added
 
-- **Phase 0.C.3 — `nexus-admin-jumpbox` domain-join to `nexus.lab`** —
+- **`memory/feedback_windows_ssh_automation.md`** (new) — Five canonical
+  structural rules for any Terraform local-exec automation that drives
+  Windows VMs through OpenSSH. Lessons applicable to all future overlays
+  (data env, ml env, etc. that touch Windows boxes), not just NexusPlatform's
+  AD DS work.
+
+- `memory/feedback_addsforest_post_promotion.md` (extended) — added two
+  new sections: DNS-rebind blocks internal AD zones (use rebind-domain-ok),
+  and Get-ADComputer requires AD-authenticated session (run from DC).
+
+- **Phase 0.C.3 — `nexus-jumpbox` domain-join to `nexus.lab`** —
   `terraform/envs/foundation/role-overlay-jumpbox-domainjoin.tf` lays
   three sequential top-level `null_resource`s that join the jumpbox
   ws2025-desktop clone to the `nexus.lab` domain (Phase 0.C.2's forest):
@@ -105,7 +160,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Phase 0.C.1 — `terraform/envs/foundation/`** — first env composing
   multiple `modules/vm/` instances. Lands two `ws2025-desktop` clones on
-  VMnet11: `dc-nexus` (MAC `00:50:56:3F:00:25`) and `nexus-admin-jumpbox`
+  VMnet11: `dc-nexus` (MAC `00:50:56:3F:00:25`) and `nexus-jumpbox`
   (MAC `00:50:56:3F:00:26`), both under tier path `H:/VMS/NexusPlatform/10-core/`.
   Shape-template for the remaining 0.C envs (`data`, `ml`, `saas`,
   `microservices`, `demo-minimal`). AD DS promotion + jumpbox tooling

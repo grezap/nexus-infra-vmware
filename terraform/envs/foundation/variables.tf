@@ -23,7 +23,7 @@ variable "mac_dc_nexus" {
 }
 
 variable "mac_nexus_admin_jumpbox" {
-  description = "Static MAC for nexus-admin-jumpbox. Same smoke/lab range; :26 follows :25."
+  description = "Static MAC for nexus-jumpbox. Same smoke/lab range; :26 follows :25."
   type        = string
   default     = "00:50:56:3F:00:26"
 }
@@ -88,7 +88,7 @@ variable "dc_promotion_timeout_minutes" {
 # ─── Phase 0.C.3 — jumpbox domain-join overlay ───────────────────────────
 
 variable "enable_jumpbox_domain_join" {
-  description = "Toggle: domain-join nexus-admin-jumpbox to var.ad_domain via Add-Computer. Default true. Implicitly depends on enable_dc_promotion=true via depends_on null_resource.dc_nexus_verify -- if the DC isn't promoted, this is a no-op. Set to false to keep the jumpbox in workgroup mode (e.g. iterating on the DC overlay independently)."
+  description = "Toggle: domain-join nexus-jumpbox to var.ad_domain via Add-Computer. Default true. Implicitly depends on enable_dc_promotion=true via depends_on null_resource.dc_nexus_verify -- if the DC isn't promoted, this is a no-op. Set to false to keep the jumpbox in workgroup mode (e.g. iterating on the DC overlay independently)."
   type        = bool
   default     = true
 }

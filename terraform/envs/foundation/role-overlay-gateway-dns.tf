@@ -32,7 +32,7 @@ resource "null_resource" "gateway_dns_forward" {
     gateway_ip    = "192.168.70.1"
     dc_nexus_ip   = "192.168.70.240"
     ad_domain     = var.ad_domain
-    dns_overlay_v = "2" # v2 = systemctl restart (not reload) so DNS cache flushes; v1 cached NXDOMAIN survived the SIGHUP reload
+    dns_overlay_v = "7" # v7 = `rebind-domain-ok=/<domain>/` -- the actual fix. The block was NEVER DNSSEC; gateway dnsmasq has `stop-dns-rebind` from 0.B.1, which blocks DNS responses where any domain (treated as "public") resolves to a private IP. Our internal nexus.lab → 192.168.70.240 trips the filter. journal: "possible DNS-rebind attack detected". EDE 15 Blocked = server-policy block, not DNSSEC. v1-v6 chased the wrong root cause. v7 drops the bogus `dnssec-check-unsigned=no` from v6.
   }
 
   # The DNS forward only matters once dc-nexus is actually serving DNS. Wait for the
@@ -56,9 +56,71 @@ resource "null_resource" "gateway_dns_forward" {
         exit 0
       }
 
+      # Three-line forward + DNSSEC-bypass for the AD DS internal zone:
+      #
+      #   server=/nexus.lab/<dc-ip>           Forward all queries for nexus.lab
+      #                                       (and subdomains incl. _msdcs.) to
+      #                                       the DC's DNS service.
+      #   server=/_msdcs.nexus.lab/<dc-ip>    Belt-and-suspenders explicit forward
+      #                                       for AD's DC Locator zone -- dnsmasq
+      #                                       subdomain matching already covers
+      #                                       this, but it's the standard pattern
+      #                                       and no-op if redundant.
+      #   domain-insecure=/nexus.lab/         Bypass DNSSEC validation for this
+      #                                       zone. Gateway dnsmasq runs with
+      #                                       `dnssec-check-unsigned`, which
+      #                                       requires the parent zone (`.lab`)
+      #                                       to prove that nexus.lab is
+      #                                       intentionally unsigned. The .lab
+      #                                       TLD's DNSSEC chain has no
+      #                                       delegation record for our internal
+      #                                       nexus.lab, so dnsmasq returns
+      #                                       SERVFAIL on A-record lookups even
+      #                                       though SRV lookups (with their
+      #                                       additional-section glue) appear to
+      #                                       work. Add-Computer needs A-record
+      #                                       resolution of dc-nexus.nexus.lab,
+      #                                       which fails without this directive.
+      #                                       Discovered 2026-04-29 during
+      #                                       Phase 0.C.3 jumpbox domain-join.
+      # Two-line conf: forward + DNS-rebind allowlist for our internal AD zone.
+      #
+      #   server=/<domain>/<dc-ip>      Forward all queries for <domain> (and
+      #                                 subdomains incl. _msdcs.<domain>) to
+      #                                 the DC's DNS service. dnsmasq's `/X/`
+      #                                 forward matches subdomains by default.
+      #
+      #   rebind-domain-ok=/<domain>/   Bypass dnsmasq's `stop-dns-rebind`
+      #                                 protection for this specific zone.
+      #                                 The gateway's main dnsmasq.conf
+      #                                 (Phase 0.B.1) enables stop-dns-rebind
+      #                                 to block DNS responses that resolve
+      #                                 "public" domains to private IPs (a
+      #                                 well-known DNS-rebinding attack
+      #                                 mitigation). Our internal nexus.lab
+      #                                 isn't recognized as "private" and
+      #                                 resolves to 192.168.70.240 (RFC1918
+      #                                 space), so dnsmasq blocks the answer
+      #                                 with "possible DNS-rebind attack
+      #                                 detected" (visible in journalctl) and
+      #                                 returns EDE 15 Blocked. SRV lookups
+      #                                 still appeared to work via additional-
+      #                                 section glue, but A-record lookups
+      #                                 (which Add-Computer needs to find
+      #                                 dc-nexus.<domain>) fail.
+      #                                 `rebind-domain-ok=/<domain>/` is a
+      #                                 per-zone allowlist that keeps
+      #                                 stop-dns-rebind active for everything
+      #                                 else.
+      #
+      # Discovered 2026-04-29 during Phase 0.C.3 jumpbox domain-join.
+      # v1-v6 chased a DNSSEC theory; the journal `possible DNS-rebind attack
+      # detected` was the real signal. EDE 15 Blocked = server-policy block,
+      # not DNSSEC.
       $confLines = @(
         $marker
         "server=/$domain/$dc_ip"
+        "rebind-domain-ok=/$domain/"
         ""
       ) -join "`n"
 

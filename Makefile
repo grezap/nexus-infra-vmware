@@ -41,7 +41,7 @@ help:
 	@echo "  make win11ent-smoke         - Instantiate win11ent via modules/vm (smoke test)"
 	@echo "  make win11ent-smoke-destroy - Tear down the win11ent smoke VM"
 	@echo ""
-	@echo "  make foundation-apply   - Phase 0.C.1: deploy envs/foundation (dc-nexus + nexus-admin-jumpbox)"
+	@echo "  make foundation-apply   - Phase 0.C.1: deploy envs/foundation (dc-nexus + nexus-jumpbox)"
 	@echo "  make foundation-destroy - Tear down the foundation env"
 	@echo ""
 	@echo "  make all-templates    - Build every template in order"

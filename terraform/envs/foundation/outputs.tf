@@ -1,16 +1,16 @@
 output "vm_paths" {
   description = "Filesystem paths of each foundation VM's running .vmx, keyed by short name."
   value = {
-    dc-nexus            = module.dc_nexus.vm_path
-    nexus-admin-jumpbox = module.nexus_admin_jumpbox.vm_path
+    dc-nexus      = module.dc_nexus.vm_path
+    nexus-jumpbox = module.nexus_admin_jumpbox.vm_path
   }
 }
 
 output "mac_addresses" {
   description = "Pinned MAC per VM -- use these to find DHCP leases on nexus-gateway."
   value = {
-    dc-nexus            = module.dc_nexus.mac_address
-    nexus-admin-jumpbox = module.nexus_admin_jumpbox.mac_address
+    dc-nexus      = module.dc_nexus.mac_address
+    nexus-jumpbox = module.nexus_admin_jumpbox.mac_address
   }
 }
 
@@ -31,8 +31,8 @@ output "jumpbox_info" {
   description = "Jumpbox membership details (only meaningful when enable_jumpbox_domain_join=true)."
   value = {
     enabled       = var.enable_jumpbox_domain_join
-    hostname      = "nexus-admin-jumpbox"
-    fqdn          = var.enable_jumpbox_domain_join ? "nexus-admin-jumpbox.${var.ad_domain}" : null
+    hostname      = "nexus-jumpbox"
+    fqdn          = var.enable_jumpbox_domain_join ? "nexus-jumpbox.${var.ad_domain}" : null
     ip            = "192.168.70.241"
     domain_member = var.enable_jumpbox_domain_join
   }
@@ -41,7 +41,7 @@ output "jumpbox_info" {
 output "next_step" {
   value = <<-EOT
 
-    foundation env is deployed (dc-nexus + nexus-admin-jumpbox).
+    foundation env is deployed (dc-nexus + nexus-jumpbox).
 
     All ssh commands below assume handbook docs/handbook.md §0.4 SSH client
     setup is complete (~/.ssh/config + ssh-agent loaded). If not, prepend
@@ -70,7 +70,7 @@ output "next_step" {
     Verify the jumpbox domain-join (Phase 0.C.3) -- runs only when var.enable_jumpbox_domain_join=true:
       ssh nexusadmin@192.168.70.241 'powershell -NoProfile -Command "(Get-WmiObject Win32_ComputerSystem) | Format-List Name, Domain, PartOfDomain, DomainRole"'
       ssh nexusadmin@192.168.70.241 'powershell -NoProfile -Command "nltest /dsgetdc:${var.ad_domain}"'
-      ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-ADComputer nexus-admin-jumpbox | Format-List Name, DNSHostName, DistinguishedName, Enabled"'
+      ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-ADComputer nexus-jumpbox | Format-List Name, DNSHostName, DistinguishedName, Enabled"'
 
     Selective ops -- per memory/feedback_selective_provisioning.md, every piece of
     foundation is independently controllable. Examples:

@@ -59,7 +59,7 @@ resource "null_resource" "dc_nexus_rename" {
   triggers = {
     target_vmx       = module.dc_nexus.vm_path
     target_hostname  = local.dc_nexus_hostname
-    rename_overlay_v = "1" # bump to force re-rename
+    rename_overlay_v = "4" # v4 = pre-flight SSH ECHO probe (not just Test-NetConnection -Port 22) + retry loop on rename SSH. v3's TCP-port check returned True but actual SSH failed seconds later -- Windows opens listening port BEFORE sshd is fully ready. v4 probes with a real `ssh ... echo ok` until it succeeds end-to-end, then retries the rename SSH up to 5 times if it flakes. v3 = pre-flight Test-NetConnection. v2 = base64 transit. v1 = inline cmd.exe quoting.
   }
 
   depends_on = [module.dc_nexus]
@@ -71,17 +71,64 @@ resource "null_resource" "dc_nexus_rename" {
       $ip   = '${local.dc_nexus_ip}'
       $name = '${local.dc_nexus_hostname}'
 
-      # Idempotent: skip rename if the box already reports dc-nexus.
-      $current = (ssh nexusadmin@$ip 'powershell -NoProfile -Command "hostname"' 2>$null).Trim()
+      # ─── Pre-flight: wait for END-TO-END ssh to work ───────────────────
+      # Test-NetConnection -Port 22 returns True as soon as Windows opens
+      # the listening socket -- which happens BEFORE sshd is fully ready
+      # to accept sessions. v3 trusted Test-NetConnection and saw
+      # connections fail seconds later. v4 uses a real ssh echo probe.
+      Write-Host "[dc-nexus rename] probing ssh on $ip (echo ok)..."
+      $bootDeadline = (Get-Date).AddMinutes(10)
+      $sshReady = $false
+      while ((Get-Date) -lt $bootDeadline) {
+        $probe = (ssh -o ConnectTimeout=5 -o ConnectionAttempts=1 -o BatchMode=yes -o StrictHostKeyChecking=no nexusadmin@$ip "echo ok" 2>&1 | Out-String).Trim()
+        if ($probe -eq 'ok') { $sshReady = $true; break }
+        Start-Sleep -Seconds 15
+      }
+      if (-not $sshReady) {
+        throw "[dc-nexus rename] ssh echo probe never succeeded on $ip after 10m -- clone may have failed to boot"
+      }
+      Start-Sleep -Seconds 30  # grace for WMI/OS settling
+      Write-Host "[dc-nexus rename] ssh ready"
+
+      # ─── Idempotency: skip if hostname already matches ─────────────────
+      $checkScript = "hostname"
+      $checkBytes  = [System.Text.Encoding]::Unicode.GetBytes($checkScript)
+      $checkB64    = [Convert]::ToBase64String($checkBytes)
+      $rawCurrent  = ssh -o ConnectTimeout=15 nexusadmin@$ip "powershell -NoProfile -EncodedCommand $checkB64" 2>$null
+      $current     = if ($rawCurrent) { $rawCurrent.Trim() } else { '' }
       if ($current -eq $name) {
         Write-Host "[dc-nexus rename] already $name, skipping rename + reboot."
         exit 0
       }
 
-      Write-Host "[dc-nexus rename] current hostname: $current -> renaming to $name"
-      ssh nexusadmin@$ip "powershell -NoProfile -Command `"Rename-Computer -NewName '$name' -Force; Start-Sleep -Seconds 2; Restart-Computer -Force`""
-      # SSH connection drops as the box reboots; that's expected.
-      Write-Host "[dc-nexus rename] reboot triggered."
+      Write-Host "[dc-nexus rename] current hostname: '$current' -> renaming to $name"
+
+      # ─── Issue rename + reboot via base64-encoded transit ──────────────
+      # Build script once. Retry the SSH up to 5 times -- sshd may briefly
+      # be unavailable even after our probe succeeded (the connection that
+      # carried the rename script can race with internal sshd state).
+      $remote = "Rename-Computer -NewName '$name' -Force; Start-Sleep -Seconds 2; Restart-Computer -Force"
+      $bytes  = [System.Text.Encoding]::Unicode.GetBytes($remote)
+      $b64    = [Convert]::ToBase64String($bytes)
+
+      $maxAttempts = 5
+      $issued = $false
+      for ($i = 1; $i -le $maxAttempts; $i++) {
+        $sshOutput = ssh -o ConnectTimeout=15 nexusadmin@$ip "powershell -NoProfile -EncodedCommand $b64" 2>&1 | Out-String
+        $rc = $LASTEXITCODE
+        if ($sshOutput -notmatch "Connection (timed out|refused)" -and $sshOutput -notmatch "port 22:") {
+          Write-Host "[dc-nexus rename] attempt $i succeeded (ssh exit=$rc)"
+          if ($sshOutput.Trim()) { Write-Host "[dc-nexus rename] ssh output: $($sshOutput.Trim())" }
+          $issued = $true
+          break
+        }
+        Write-Host "[dc-nexus rename] attempt $i failed: $($sshOutput.Trim())"
+        Start-Sleep -Seconds 10
+      }
+      if (-not $issued) {
+        throw "[dc-nexus rename] all $maxAttempts attempts failed -- rename did not fire. Last output: $sshOutput"
+      }
+      Write-Host "[dc-nexus rename] rename command dispatched; reboot will follow."
     PWSH
   }
 }
