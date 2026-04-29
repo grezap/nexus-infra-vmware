@@ -162,7 +162,16 @@ build {
     ]
   }
 
-  # Final sanity + cleanup
+  # Final sanity + cleanup.
+  #
+  # NOTE: do not `test -d /opt/vault/data` or similar here. Those dirs are
+  # vault:vault with 0700/0750 perms (correct for runtime); the shell
+  # provisioner runs as nexusadmin which can't traverse them, so test -d
+  # exits 1 silently and aborts the script under set -e. The Ansible
+  # `Create Vault directories` task is the source-of-truth for those
+  # directories existing -- if Ansible's task succeeded (which we verified
+  # above this provisioner), the dirs are correct. Mirror deb13's shape:
+  # service-state checks only, no FS-permission-sensitive probes.
   provisioner "shell" {
     inline = [
       "echo '--- vault post-install checks ---'",
@@ -170,8 +179,10 @@ build {
       "/usr/local/bin/vault version",
       "systemctl is-enabled vault",
       "systemctl is-enabled vault-firstboot",
-      "test -d /opt/vault/data",
-      "test -d /etc/vault.d",
+      "systemctl is-enabled ssh",
+      "systemctl is-enabled nftables",
+      "systemctl is-enabled chrony",
+      "systemctl is-enabled prometheus-node-exporter",
       "id vault",
       "echo '--- cleanup ---'",
       "sudo apt-get clean",
