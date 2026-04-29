@@ -97,15 +97,22 @@ resource "null_resource" "configure_nic" {
     when        = create
     interpreter = ["pwsh", "-NoProfile", "-Command"]
     command     = <<-PWSH
-      $nicArgs = @(
-        '-VmxPath', '${local.target_vmx}',
-        '-Vnet',    '${var.vnet}',
-        '-Mac',     '${var.mac_address}'
-      )
+      # Use hashtable splat (NOT array splat) for named-parameter invocation.
+      # Array splat with `-Name`, value pairs treats `-Mac` as a value at
+      # positional bind time, leaving the MAC value with nowhere to go and
+      # erroring "A positional parameter cannot be found that accepts
+      # argument '00:50:56:...'". Discovered 2026-04-29 during foundation
+      # cycle after dual-NIC modules/vm extension landed.
+      $nicArgs = @{
+        VmxPath = '${local.target_vmx}'
+        Vnet    = '${var.vnet}'
+        Mac     = '${var.mac_address}'
+      }
       $secondaryVnet = '${var.vnet_secondary == null ? "" : var.vnet_secondary}'
       $secondaryMac  = '${var.mac_secondary == null ? "" : var.mac_secondary}'
       if ($secondaryVnet -and $secondaryMac) {
-        $nicArgs += @('-SecondaryVnet', $secondaryVnet, '-SecondaryMac', $secondaryMac)
+        $nicArgs.SecondaryVnet = $secondaryVnet
+        $nicArgs.SecondaryMac  = $secondaryMac
       }
       & '${local.scripts_dir}/configure-vm-nic.ps1' @nicArgs
     PWSH
