@@ -50,7 +50,7 @@ resource "null_resource" "dc_password_policy" {
     max_password_age_days     = var.dc_max_password_age_days
     min_password_age_days     = var.dc_min_password_age_days
     password_history_count    = var.dc_password_history_count
-    password_policy_overlay_v = "1"
+    password_policy_overlay_v = "2" # v2 = hoist `if`-as-expression for MaxPasswordAge=0/never out of inline string concat (Win PS 5.1 doesn't support `if` as expression inside larger expressions, only as RHS of assignment); also moved $maxAgeSpan if-then to a pre-computed value. Cosmetic only -- v1 set the policy correctly but emitted a parse error on the verify line. v1 = initial implementation.
   }
 
   depends_on = [null_resource.dc_nexus_verify]
@@ -93,7 +93,9 @@ resource "null_resource" "dc_password_policy" {
         } else {
           Write-Output ('changing password policy: ' + (`$diffs -join '; '));
           `$lockoutSpan = New-TimeSpan -Minutes $lockoutDuration;
-          `$maxAgeSpan  = if ($maxPasswordAge -eq 0) { New-TimeSpan -Days 0 } else { New-TimeSpan -Days $maxPasswordAge };
+          # MaxPasswordAge=0 means "never expire" -- represented as a zero TimeSpan.
+          # New-TimeSpan -Days 0 returns 00:00:00 which is what AD interprets as never.
+          `$maxAgeSpan  = New-TimeSpan -Days $maxPasswordAge;
           `$minAgeSpan  = New-TimeSpan -Days $minPasswordAge;
           Set-ADDefaultDomainPasswordPolicy -Identity (Get-ADDomain).DistinguishedName ``
             -ComplexityEnabled `$true ``
@@ -108,7 +110,12 @@ resource "null_resource" "dc_password_policy" {
           Write-Output 'password policy updated';
         };
         `$verify = Get-ADDefaultDomainPasswordPolicy;
-        Write-Output ('verify: MinPasswordLength=' + `$verify.MinPasswordLength + ', LockoutThreshold=' + `$verify.LockoutThreshold + ', LockoutDuration=' + [int]`$verify.LockoutDuration.TotalMinutes + 'min, MaxPasswordAge=' + (if (`$verify.MaxPasswordAge.Ticks -eq 0) { '0 (never)' } else { [int]`$verify.MaxPasswordAge.TotalDays.ToString() + 'd' }))
+        # Hoist if-as-expression to a separate statement -- Win PowerShell 5.1
+        # (Server 2025 default) doesn't support `if` as an inline expression
+        # inside a larger expression like 'foo' + (if ...). Compute the
+        # MaxPasswordAge string first, then concatenate.
+        `$maxAgeStr = if (`$verify.MaxPasswordAge.Ticks -eq 0) { '0 (never)' } else { ([int]`$verify.MaxPasswordAge.TotalDays).ToString() + 'd' };
+        Write-Output ('verify: MinPasswordLength=' + `$verify.MinPasswordLength + ', LockoutThreshold=' + `$verify.LockoutThreshold + ', LockoutDuration=' + [int]`$verify.LockoutDuration.TotalMinutes + 'min, MaxPasswordAge=' + `$maxAgeStr)
 "@
       $bytes = [System.Text.Encoding]::Unicode.GetBytes($remote)
       $b64   = [Convert]::ToBase64String($bytes)

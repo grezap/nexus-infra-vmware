@@ -56,7 +56,7 @@ resource "null_resource" "dc_ous" {
     ad_domain        = local.ad_domain
     ad_dn_root       = local.ad_dn_root
     jumpbox_hostname = local.jumpbox_hostname
-    ous_overlay_v    = "1"
+    ous_overlay_v    = "2" # v2 = wrap Get-ADOrganizationalUnit in try/catch (not -ErrorAction SilentlyContinue) -- on Server 2025 / Win PS 5.1, SilentlyContinue still leaks "Directory object not found" to stderr; try/catch suppresses cleanly. v1 = initial implementation.
   }
 
   depends_on = [
@@ -79,13 +79,21 @@ resource "null_resource" "dc_ous" {
       # Single PowerShell script combining BOTH phases. Idempotent across the board.
       # Phase A: ensure each OU exists. Phase B: move jumpbox if computer object
       # exists and is not already in OU=Servers.
+      # NOTE: Get-ADOrganizationalUnit is wrapped in try/catch (NOT
+      # -ErrorAction SilentlyContinue). On Win PS 5.1 (Server 2025 default)
+      # SilentlyContinue still leaks "Directory object not found" to
+      # stderr which then surfaces as cosmetic noise in terraform output.
+      # try/catch with -ErrorAction Stop converts to terminating, which
+      # the catch block silently swallows. Same trick used elsewhere in
+      # this repo for AD cmdlets.
       $remote = @"
         Import-Module ActiveDirectory;
         `$created = @();
         `$skipped = @();
         foreach (`$ou in @($ouNamesCsv)) {
           `$dn = "OU=`$ou,$dnRoot";
-          `$existing = Get-ADOrganizationalUnit -Identity `$dn -ErrorAction SilentlyContinue;
+          `$existing = `$null;
+          try { `$existing = Get-ADOrganizationalUnit -Identity `$dn -ErrorAction Stop } catch { `$existing = `$null };
           if (`$existing) {
             `$skipped += `$ou;
           } else {
@@ -95,7 +103,8 @@ resource "null_resource" "dc_ous" {
         };
         Write-Output ('OUs created: ' + (`$created -join ',' | Out-String).Trim());
         Write-Output ('OUs already present: ' + (`$skipped -join ',' | Out-String).Trim());
-        `$jb = Get-ADComputer -Filter "Name -eq '$jumpboxName'" -ErrorAction SilentlyContinue;
+        `$jb = `$null;
+        try { `$jb = Get-ADComputer -Filter "Name -eq '$jumpboxName'" -ErrorAction Stop } catch { `$jb = `$null };
         if (-not `$jb) {
           Write-Output 'jumpbox computer object not found (enable_jumpbox_domain_join=false?), skipping move';
         } else {

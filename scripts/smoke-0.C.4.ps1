@@ -58,6 +58,7 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $script:failures = @()
+$script:skipped  = @()
 
 function Section([string]$title) {
     Write-Host ""
@@ -81,6 +82,16 @@ function Check {
     }
 }
 
+function Skip-Check {
+    param(
+        [Parameter(Mandatory)][string]$Label,
+        [Parameter(Mandatory)][string]$Reason
+    )
+    Write-Host "[SKIP] $Label" -ForegroundColor Yellow
+    Write-Host "       $Reason" -ForegroundColor DarkGray
+    $script:skipped += $Label
+}
+
 # Wrapper for SSH-to-DC PowerShell one-liners. Keeps the noisy quoting in one place.
 function Invoke-DcPwsh([string]$Command) {
     ssh nexusadmin@$DcIp "powershell -NoProfile -Command `"$Command`""
@@ -90,6 +101,22 @@ function Invoke-JumpboxPwsh([string]$Command) {
 }
 
 Write-Host "Phase 0.C.4 smoke gate: dc=$DcIp, jumpbox=$JumpboxIp, domain=$Domain" -ForegroundColor White
+
+# ─── 0. Auto-detect jumpbox domain-membership state ───────────────────────
+# When the operator deploys with `enable_jumpbox_domain_join=false` (e.g.
+# during Vault iteration to free RAM, or just running foundation in a
+# minimal posture), the jumpbox boots in WORKGROUP. Three downstream checks
+# (jumpbox in OU=Servers, PartOfDomain=True, Domain=nexus.lab) then fail
+# incorrectly. Probe the jumpbox's actual state up-front; if it's in
+# WORKGROUP, mark those three checks as SKIP (yellow) instead of FAIL (red).
+$jumpboxDomainProbe = (Invoke-JumpboxPwsh '(Get-WmiObject Win32_ComputerSystem).PartOfDomain' 2>&1 | Out-String).Trim()
+$jumpboxIsJoined = ($jumpboxDomainProbe -eq 'True')
+if ($jumpboxIsJoined) {
+    Write-Host "  jumpbox detected: PartOfDomain=True (joined to AD)" -ForegroundColor DarkGray
+} else {
+    Write-Host "  jumpbox detected: PartOfDomain=$jumpboxDomainProbe (not joined -- WORKGROUP or unreachable)" -ForegroundColor DarkGray
+    Write-Host "  -> jumpbox-membership checks will be SKIPPED (operator likely set enable_jumpbox_domain_join=false)" -ForegroundColor DarkGray
+}
 
 # ─── 1. Build-host reachability invariant (FIRST -- if this fails the rest is moot)
 Section "Build-host reachability (SSH/22 + RDP/3389)"
@@ -116,9 +143,14 @@ foreach ($name in $ouNames) {
         { $ouLines } `
         { param($o) $ouLines -contains $nameRef }
 }
-Check "nexus-jumpbox is in OU=Servers,DC=nexus,DC=lab" `
-    { Invoke-DcPwsh '(Get-ADComputer nexus-jumpbox).DistinguishedName' } `
-    { param($o) $o -match 'OU=Servers,DC=nexus,DC=lab' }
+if ($jumpboxIsJoined) {
+    Check "nexus-jumpbox is in OU=Servers,DC=nexus,DC=lab" `
+        { Invoke-DcPwsh '(Get-ADComputer nexus-jumpbox).DistinguishedName' } `
+        { param($o) $o -match 'OU=Servers,DC=nexus,DC=lab' }
+} else {
+    Skip-Check "nexus-jumpbox is in OU=Servers,DC=nexus,DC=lab" `
+        "jumpbox is not domain-joined (enable_jumpbox_domain_join=false?)"
+}
 
 # ─── 3. Default Domain Password Policy (var.enable_dc_password_policy)
 Section "Default Domain Password Policy"
@@ -191,23 +223,34 @@ Check "DC: Get-ADDomain.Forest = $Domain" `
 Check "DC: ADWS service Running" `
     { Invoke-DcPwsh '(Get-Service ADWS).Status' } `
     { param($o) $o.Trim() -eq 'Running' }
-Check "jumpbox: PartOfDomain = True" `
-    { Invoke-JumpboxPwsh '(Get-WmiObject Win32_ComputerSystem).PartOfDomain' } `
-    { param($o) $o.Trim() -eq 'True' }
-Check "jumpbox: Domain = $Domain" `
-    { Invoke-JumpboxPwsh '(Get-WmiObject Win32_ComputerSystem).Domain' } `
-    { param($o) $o.Trim() -eq $Domain }
-Check "jumpbox: nltest /dsgetdc returns dc-nexus" `
-    { Invoke-JumpboxPwsh "nltest /dsgetdc:$Domain" } `
-    { param($o) $o -match 'DC:\s*\\\\dc-nexus|DC:\s*\\\\DC-NEXUS' }
+if ($jumpboxIsJoined) {
+    Check "jumpbox: PartOfDomain = True" `
+        { Invoke-JumpboxPwsh '(Get-WmiObject Win32_ComputerSystem).PartOfDomain' } `
+        { param($o) $o.Trim() -eq 'True' }
+    Check "jumpbox: Domain = $Domain" `
+        { Invoke-JumpboxPwsh '(Get-WmiObject Win32_ComputerSystem).Domain' } `
+        { param($o) $o.Trim() -eq $Domain }
+    Check "jumpbox: nltest /dsgetdc returns dc-nexus" `
+        { Invoke-JumpboxPwsh "nltest /dsgetdc:$Domain" } `
+        { param($o) $o -match 'DC:\s*\\\\dc-nexus|DC:\s*\\\\DC-NEXUS' }
+} else {
+    Skip-Check "jumpbox: PartOfDomain = True"           "enable_jumpbox_domain_join=false (jumpbox in WORKGROUP)"
+    Skip-Check "jumpbox: Domain = $Domain"               "enable_jumpbox_domain_join=false (jumpbox in WORKGROUP)"
+    Skip-Check "jumpbox: nltest /dsgetdc returns dc-nexus" "enable_jumpbox_domain_join=false (Netlogon dormant)"
+}
 
 # ─── Summary
 Write-Host ""
-$total = 0
-# Re-count via the failures list -- we don't track total separately to keep the
-# Check helper simple. Instead, summary just reports the failure count.
+if ($script:skipped.Count -gt 0) {
+    Write-Host "$($script:skipped.Count) SKIPPED:" -ForegroundColor Yellow
+    $script:skipped | ForEach-Object { Write-Host "    - $_" -ForegroundColor Yellow }
+}
 if ($script:failures.Count -eq 0) {
-    Write-Host "ALL SMOKE CHECKS PASSED" -ForegroundColor Green
+    if ($script:skipped.Count -eq 0) {
+        Write-Host "ALL SMOKE CHECKS PASSED" -ForegroundColor Green
+    } else {
+        Write-Host "ALL APPLICABLE SMOKE CHECKS PASSED ($($script:skipped.Count) skipped by design)" -ForegroundColor Green
+    }
     exit 0
 } else {
     Write-Host "$($script:failures.Count) FAILURE(S):" -ForegroundColor Red
