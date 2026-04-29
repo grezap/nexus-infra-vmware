@@ -139,6 +139,13 @@ build {
   }
 
   # Apply the shared nexus_* roles + the vault_node tail.
+  #
+  # extra_arguments quirk: multi-var extra_vars in a single string get
+  # unquoted by the shell layer between Packer and ansible-playbook, which
+  # then sees `vault_version=...` as a positional argument and errors out
+  # with "unrecognized arguments". Pass each var as its OWN --extra-vars
+  # pair instead (each arg is one argv element so no shell tokenization).
+  # Discovered 2026-04-29 during initial vault Packer build attempt.
   provisioner "ansible-local" {
     playbook_file = "ansible/playbook.yml"
     role_paths = [
@@ -149,8 +156,9 @@ build {
       "ansible/roles/vault_node",
     ]
     extra_arguments = [
-      "--extra-vars",
-      "target_user=${var.ssh_username} vault_version=${var.vault_version} vault_arch=${var.vault_arch}"
+      "--extra-vars", "target_user=${var.ssh_username}",
+      "--extra-vars", "vault_version=${var.vault_version}",
+      "--extra-vars", "vault_arch=${var.vault_arch}",
     ]
   }
 
