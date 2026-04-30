@@ -240,3 +240,113 @@ variable "vault_pki_ca_bundle_path" {
   type        = string
   default     = "$HOME/.nexus/vault-ca-bundle.crt"
 }
+
+# ─── Phase 0.D.3 LDAP overlay toggles ────────────────────────────────────
+#
+# Order: policies -> auth -> secret-engine -> rotate-role
+# All steps depend_on null_resource.vault_pki_distribute_root (PKI must
+# be live before LDAP overlays mount; future LDAPS work will share the PKI).
+# Each step has its own enable_vault_ldap_<thing> toggle defaulting true,
+# AND-composed with the master enable_vault_ldap.
+#
+# Cross-env coupling: this overlay reads the bind cred JSON written by
+# envs/foundation/role-overlay-dc-vault-ad-bind.tf at
+# var.vault_ad_bind_creds_file (default $HOME/.nexus/vault-ad-bind.json).
+# Foundation must apply with -Vars enable_vault_ad_integration=true BEFORE
+# the security env's LDAP overlays will succeed.
+
+variable "enable_vault_ldap" {
+  description = "Master toggle: configure Vault auth/ldap + secrets/ldap. Default true. Set false to land cluster + PKI without LDAP integration (e.g. iterating on PKI alone)."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_ldap_policies" {
+  description = "Toggle: write Vault policies (nexus-admin, nexus-operator, nexus-reader) referenced by LDAP group->policy mappings. Default true. Idempotent overwrite via `vault policy write`."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_ldap_auth" {
+  description = "Toggle: enable + configure auth/ldap method (URL, binddn, bindpass, userdn/groupdn) and write group->policy mappings. Default true. Reads bindpass from var.vault_ad_bind_creds_file."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_ldap_secret_engine" {
+  description = "Toggle: enable + configure secrets/ldap engine (the unified AD/OpenLDAP engine, GA in Vault 1.12+ -- replaces deprecated `ad` engine). Used by static rotate-role. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_ldap_rotate_role" {
+  description = "Toggle: define the static rotate-role for svc-demo-rotated. First apply rotates the AD password to a Vault-managed value; subsequent reads return the current pwd via `vault read ldap/static-cred/<name>`. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_ad_bind_creds_file" {
+  description = "Absolute path on the build host where envs/foundation/role-overlay-dc-vault-ad-bind.tf wrote the bind credentials JSON. envs/security reads { binddn, bindpass, smoke_username, smoke_password, ldap_url } from this file. Mirrors the foundation env's default."
+  type        = string
+  default     = "$HOME/.nexus/vault-ad-bind.json"
+}
+
+variable "vault_ldap_url" {
+  description = "LDAP URL for the Vault auth/ldap config. Plain ldap:// for 0.D.3 (LDAPS is a 0.D.5 tightening with the PKI-issued DC cert). Points at dc-nexus's VMnet11 IP."
+  type        = string
+  default     = "ldap://192.168.70.240:389"
+}
+
+variable "vault_ldap_user_dn" {
+  description = "userdn for Vault's LDAP user-search base. Wide root scope (entire forest tree); userattr scopes the actual lookup."
+  type        = string
+  default     = "DC=nexus,DC=lab"
+}
+
+variable "vault_ldap_group_dn" {
+  description = "groupdn for Vault's LDAP group-search base. Wide root scope; Vault filters by group-of-user membership at query time."
+  type        = string
+  default     = "DC=nexus,DC=lab"
+}
+
+variable "vault_ldap_userattr" {
+  description = "Vault auth/ldap userattr -- AD attribute used to match the login username. samAccountName is canonical for AD; alternatives are userPrincipalName or uid."
+  type        = string
+  default     = "samAccountName"
+}
+
+variable "vault_ldap_groupattr" {
+  description = "Vault auth/ldap groupattr -- AD attribute used as the group name in policy mappings. cn matches the AD security group name; alternatives are sAMAccountName."
+  type        = string
+  default     = "cn"
+}
+
+variable "vault_ldap_admin_group" {
+  description = "AD group whose members get the `nexus-admin` Vault policy. Must match the foundation env's var.vault_ad_group_admins."
+  type        = string
+  default     = "nexus-vault-admins"
+}
+
+variable "vault_ldap_operator_group" {
+  description = "AD group whose members get the `nexus-operator` Vault policy. Must match the foundation env's var.vault_ad_group_operators."
+  type        = string
+  default     = "nexus-vault-operators"
+}
+
+variable "vault_ldap_reader_group" {
+  description = "AD group whose members get the `nexus-reader` Vault policy. Must match the foundation env's var.vault_ad_group_readers."
+  type        = string
+  default     = "nexus-vault-readers"
+}
+
+variable "vault_ldap_demo_rotate_account" {
+  description = "samAccountName of the AD account that Vault's secrets/ldap static rotate-role manages. Must match the foundation env's var.vault_ad_demo_rotated_account_name."
+  type        = string
+  default     = "svc-demo-rotated"
+}
+
+variable "vault_ldap_demo_rotation_period" {
+  description = "Static rotate-role rotation_period for svc-demo-rotated. Format: Vault duration string (e.g. '24h', '7d'). Default 24h -- Vault rotates the AD password daily."
+  type        = string
+  default     = "24h"
+}

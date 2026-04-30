@@ -1099,6 +1099,126 @@ Per the 0.D scope tracking commitment in [`memory/project_nexus_infra_phase.md`]
 
 ---
 
+## 1i. Phase 0.D.3 — `envs/foundation` AD objects + `envs/security` LDAP overlay
+
+First phase that spans **both envs**. Foundation creates AD service accounts + groups for Vault to consume; security configures Vault `auth/ldap` (humans login with AD credentials) + `secrets/ldap` (Vault rotates AD svc account passwords). Cross-env state exchanges via `$HOME\.nexus\vault-ad-bind.json` on the build host (mirrors `vault-init.json` and `vault-ca-bundle.crt` shape).
+
+**Canon mapping** (per [`memory/feedback_master_plan_authority.md`](../memory/feedback_master_plan_authority.md)):
+
+| Choice | Source |
+|---|---|
+| Vault is the auth/secret-management plane | `MASTER-PLAN.md` Phase 0.D (line 145) |
+| AD DS forest `nexus.lab` exists on dc-nexus | foundation env 0.C.2 + [`memory/feedback_addsforest_post_promotion.md`](../memory/feedback_addsforest_post_promotion.md) |
+| OU=ServiceAccounts, OU=Groups already exist | foundation env 0.C.4 hardening (`role-overlay-dc-ous.tf`) |
+| Cross-env state via `$HOME\.nexus\*.json` | (canon-silent) — operator-private dir convention; mirrors `vault-init.json` (0.D.1) and `vault-ca-bundle.crt` (0.D.2) |
+| AD/LDAP integration specifics (group names, bind account name, policy shape) | (canon-silent) — extending the plan with conservative defaults that don't preclude future canon, per `feedback_master_plan_authority.md` rule 4 |
+| Plain LDAP/389 (not LDAPS/636) | user-approved 2026-05-01 — LDAPS is a 0.D.5 tightening, after the PKI-issued DC cert + AD-side cert configuration |
+
+**Files (added in 0.D.3):**
+
+| Path | Purpose |
+|---|---|
+| `terraform/envs/foundation/role-overlay-dc-vault-ad-bind.tf` | Create AD svc account `svc-vault-ldap` in `OU=ServiceAccounts`; generate strong random pwd locally; write `$HOME\.nexus\vault-ad-bind.json` (mode 0600 via icacls) |
+| `terraform/envs/foundation/role-overlay-dc-vault-groups.tf` | Create AD security groups `nexus-vault-admins`, `nexus-vault-operators`, `nexus-vault-readers` in `OU=Groups`; enroll `nexusadmin` into admins |
+| `terraform/envs/foundation/role-overlay-dc-vault-demo-rotated-account.tf` | Create `svc-demo-rotated` (target of Vault's static rotate-role); initial pwd is random; Vault owns it from first rotation onward |
+| `terraform/envs/foundation/role-overlay-dc-vault-smoke-account.tf` | Create `svc-vault-smoke` (read-only AD test account); enrol in `nexus-vault-readers`; persist plaintext smoke pwd in `vault-ad-bind.json` for the smoke gate's end-to-end LDAP login probe |
+| `terraform/envs/security/role-overlay-vault-ldap-policies.tf` | Define Vault policies `nexus-admin` (full sudo), `nexus-operator` (R/W on nexus/* + cert issuance via pki_int/issue/*), `nexus-reader` (read-only on nexus/*) |
+| `terraform/envs/security/role-overlay-vault-ldap-auth.tf` | Enable + configure `auth/ldap` (URL, binddn, bindpass from JSON, userdn/groupdn) + group→policy mappings |
+| `terraform/envs/security/role-overlay-vault-ldap-secret-engine.tf` | Enable `secrets/ldap` (unified AD/OpenLDAP engine, GA in Vault 1.12+) + define password policy `nexus-ad-rotated` (24-char, mixed) |
+| `terraform/envs/security/role-overlay-vault-ldap-rotate-role.tf` | Define static rotate-role for `svc-demo-rotated` with `rotation_period=24h` |
+| `scripts/smoke-0.D.3.ps1` | New smoke gate — chains 0.D.2 first, then ~12 LDAP checks (DC reachability, auth/ldap config, group mappings, policies, end-to-end LDAP login probe via `svc-vault-smoke`, secret engine config, static rotate-role + cred lookup) |
+
+### 1i.1 Operator order
+
+```powershell
+cd "F:\_CODING_\Repos\Local Development And Test\Portfolio_Project_Ideas\workspace\nexus-infra-vmware"
+
+# 1. Foundation env -- enable AD-side Vault objects (AD svc accounts + groups + demo + smoke account)
+pwsh -File scripts\foundation.ps1 apply `
+  -Vars enable_vault_dhcp_reservations=true,enable_vault_ad_integration=true,enable_jumpbox_domain_join=false
+
+# 2. Security env -- cycle including new LDAP overlays (auto-reads vault-ad-bind.json)
+pwsh -File scripts\security.ps1 cycle      # smoke now defaults to 0.D.3 (chains 0.D.2 -> 0.D.1)
+```
+
+### 1i.2 Selective ops
+
+```powershell
+# 0.D.1 cluster only (no PKI, no LDAP)
+pwsh -File scripts\security.ps1 apply -Vars enable_vault_pki=false,enable_vault_ldap=false
+pwsh -File scripts\security.ps1 smoke -Phase 0.D.1
+
+# 0.D.1 + 0.D.2 PKI (no LDAP)
+pwsh -File scripts\security.ps1 apply -Vars enable_vault_ldap=false
+pwsh -File scripts\security.ps1 smoke -Phase 0.D.2
+
+# Iterate on a single LDAP overlay
+terraform -chdir=terraform\envs\security taint  null_resource.vault_ldap_auth
+terraform -chdir=terraform\envs\security apply  -target=null_resource.vault_ldap_auth -auto-approve
+
+# Force-rotate the demo AD account's password (vault read returns the new pwd)
+ssh nexusadmin@192.168.70.121 "VAULT_TOKEN='<root>' VAULT_SKIP_VERIFY=true VAULT_ADDR=https://127.0.0.1:8200 vault write -f ldap/rotate-role/svc-demo-rotated"
+
+# Rotate the bind account password (use sparingly -- must re-apply security env after)
+pwsh -File scripts\foundation.ps1 apply -Vars enable_vault_ad_integration=true,enable_vault_ad_bind_rotate_password=true
+pwsh -File scripts\security.ps1 apply
+```
+
+### 1i.3 Operating Vault from the build host (post-LDAP)
+
+```powershell
+# Operator login via AD credentials -- replaces root token for daily use
+$env:VAULT_ADDR   = 'https://192.168.70.121:8200'
+$env:VAULT_CACERT = "$HOME\.nexus\vault-ca-bundle.crt"
+
+vault login -method=ldap -username=nexusadmin
+# Prompts for AD password (or pass -password='...'); returns a token whose
+# policies are derived from your AD group memberships.
+
+# Read the current Vault-managed password for the demo AD account
+vault read ldap/static-cred/svc-demo-rotated
+# Returns: { username, password, last_vault_rotation, ttl, ... }
+
+# Force-rotate (root or nexus-admin policy required)
+vault write -f ldap/rotate-role/svc-demo-rotated
+```
+
+### 1i.4 Adding a new AD-driven policy mapping
+
+```powershell
+# 1. Create the AD group (foundation env or manually via RSAT on jumpbox)
+ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "New-ADGroup -Name nexus-vault-pki-admins -GroupScope Global -GroupCategory Security -Path OU=Groups,DC=nexus,DC=lab"'
+
+# 2. Add an AD user to it
+ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Add-ADGroupMember -Identity nexus-vault-pki-admins -Members alice"'
+
+# 3. Define a Vault policy
+$policy = @"
+path "pki/*" { capabilities = ["create","read","update","delete","list"] }
+path "pki_int/*" { capabilities = ["create","read","update","delete","list"] }
+"@
+$policy | ssh nexusadmin@192.168.70.121 'cat > /tmp/p.hcl && VAULT_TOKEN=<root> VAULT_SKIP_VERIFY=true VAULT_ADDR=https://127.0.0.1:8200 vault policy write nexus-pki-admin /tmp/p.hcl && rm /tmp/p.hcl'
+
+# 4. Map the AD group -> policy
+ssh nexusadmin@192.168.70.121 "VAULT_TOKEN=<root> VAULT_SKIP_VERIFY=true VAULT_ADDR=https://127.0.0.1:8200 vault write auth/ldap/groups/nexus-vault-pki-admins policies=nexus-pki-admin"
+
+# Now alice can `vault login -method=ldap -username=alice` and get the nexus-pki-admin policy.
+```
+
+### 1i.5 NOT in scope for 0.D.3 (deferred)
+
+- **0.D.4** — migrate foundation plaintext bootstrap creds (DSRM, local Administrator, nexusadmin) into Vault KV; refactor 0.C.* role overlays to read via `vault_kv_secret_v2` data sources
+- **0.D.5** — Transit auto-unseal + GMSA + tighten foundation `MinPasswordLength=14` + Vault Agent on member servers (where short-TTL leaf cert auto-rotation lands; also where LDAPS replaces plain LDAP/389)
+- **mTLS Vault clients** — Phase 0.D.5+
+- **Multi-realm AD trust** — not in scope for a single-forest lab
+- **Tail housekeeping** — `vms.yaml` 2 GB RAM correction + `vault-firstboot.sh` /etc/hosts fix (committed; awaits next template rebuild)
+
+### 1i.6 RAM budget (unchanged)
+
+0.D.3 adds no VMs. RAM accounting identical to §1g.7.
+
+---
+
 ## 2. Working with the running gateway
 
 ### 2.1 SSH in

@@ -53,6 +53,25 @@ output "jumpbox_info" {
   }
 }
 
+output "vault_ad_state" {
+  description = "Phase 0.D.3 AD-side state -- AD service accounts + groups created for Vault LDAP integration. envs/security reads var.vault_ad_bind_creds_file at apply time."
+  value = {
+    ad_integration_enabled = var.enable_vault_ad_integration
+    bind_account_enabled   = var.enable_vault_ad_integration && var.enable_vault_ad_bind_account
+    groups_enabled         = var.enable_vault_ad_integration && var.enable_vault_ad_groups
+    demo_account_enabled   = var.enable_vault_ad_integration && var.enable_vault_ad_demo_rotated_account
+    smoke_account_enabled  = var.enable_vault_ad_integration && var.enable_vault_ad_smoke_account
+    bind_account_name      = var.vault_ad_bind_account_name
+    smoke_account_name     = var.vault_ad_smoke_account_name
+    demo_account_name      = var.vault_ad_demo_rotated_account_name
+    group_admins           = var.vault_ad_group_admins
+    group_operators        = var.vault_ad_group_operators
+    group_readers          = var.vault_ad_group_readers
+    bind_creds_file        = var.vault_ad_bind_creds_file
+    ldap_url               = "ldap://192.168.70.240:389"
+  }
+}
+
 output "next_step" {
   value = <<-EOT
 

@@ -25,9 +25,10 @@
   validate -- terraform fmt -check -recursive + terraform validate
 
 .PARAMETER Phase
-  Which smoke phase to run. '0.D.2' (default) runs the full PKI smoke gate
-  which chains 0.D.1 first. '0.D.1' runs the cluster-only gate (useful for
-  iterating with -Vars enable_vault_pki=false).
+  Which smoke phase to run. '0.D.3' (default) runs the full LDAP smoke gate
+  which chains 0.D.2 (which itself chains 0.D.1). '0.D.2' runs the PKI gate
+  alone (chains 0.D.1). '0.D.1' runs the cluster-only gate. Use older phases
+  when iterating with -Vars enable_vault_ldap=false / enable_vault_pki=false.
 
 .PARAMETER Vars
   Array of "key=value" pairs forwarded to terraform as -var flags. Applies
@@ -59,8 +60,8 @@ param(
     [ValidateSet('apply', 'destroy', 'smoke', 'cycle', 'plan', 'validate')]
     [string]$Verb,
 
-    [ValidateSet('0.D.1', '0.D.2')]
-    [string]$Phase = '0.D.2',
+    [ValidateSet('0.D.1', '0.D.2', '0.D.3')]
+    [string]$Phase = '0.D.3',
 
     [string[]]$Vars = @(),
 

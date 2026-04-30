@@ -212,3 +212,91 @@ variable "mac_vault_3_primary" {
   type        = string
   default     = "00:50:56:3F:00:42"
 }
+
+# ─── Phase 0.D.3 — Vault LDAP/AD integration (foundation side) ───────────
+# Foundation's role is to create the AD objects Vault needs:
+#   - svc-vault-ldap     : bind account for auth/ldap + secrets/ldap engines
+#   - svc-vault-smoke    : test account for end-to-end smoke login probe
+#   - svc-demo-rotated   : demo account whose pwd Vault will rotate
+#   - 3 AD groups for Vault role mapping (admins, operators, readers)
+# Bind credentials get written to $HOME/.nexus/vault-ad-bind.json on the
+# build host (mirrors vault-init.json shape) so envs/security can pick
+# them up without a shared state backend (pre-Phase-0.E Consul KV).
+
+variable "enable_vault_ad_integration" {
+  description = "Master toggle: create AD objects (svc accounts + groups) for Vault LDAP integration. Default false -- foundation-only deploys do not touch AD-for-Vault. Set true via -Vars when bringing up 0.D.3 alongside envs/security/."
+  type        = bool
+  default     = false
+}
+
+variable "enable_vault_ad_bind_account" {
+  description = "Toggle: create svc-vault-ldap in OU=ServiceAccounts and write bind cred JSON. Default true (gated under enable_vault_ad_integration)."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_ad_bind_rotate_password" {
+  description = "Toggle: rotate the svc-vault-ldap password on this apply (otherwise password is set ONLY on first creation, to avoid desyncing the bindpass that envs/security cached). Default false; set true for explicit operator-time rotation, then re-apply envs/security to pick up the new bindpass."
+  type        = bool
+  default     = false
+}
+
+variable "enable_vault_ad_groups" {
+  description = "Toggle: create AD security groups nexus-vault-admins, nexus-vault-operators, nexus-vault-readers in OU=Groups; add nexusadmin to nexus-vault-admins. Default true (gated under enable_vault_ad_integration)."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_ad_demo_rotated_account" {
+  description = "Toggle: create svc-demo-rotated in OU=ServiceAccounts (target of Vault's secrets/ldap static rotate-role). Default true (gated under enable_vault_ad_integration). The initial password is random; Vault rotates it to a Vault-managed value on first apply of the rotate-role overlay."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_ad_smoke_account" {
+  description = "Toggle: create svc-vault-smoke in OU=ServiceAccounts. The 0.D.3 smoke gate uses this account for end-to-end LDAP login probe (vault login -method=ldap), so its plaintext password lives next to the bind cred in $HOME/.nexus/vault-ad-bind.json. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_ad_bind_creds_file" {
+  description = "Absolute path on the build host where vault-ad-bind.json (binddn + bindpass + smoke cred) gets written. Mirrors vault-init.json under operator-private $HOME/.nexus/. envs/security/ reads from this same path."
+  type        = string
+  default     = "$HOME/.nexus/vault-ad-bind.json"
+}
+
+variable "vault_ad_bind_account_name" {
+  description = "samAccountName of the LDAP bind account Vault uses for auth/ldap and secrets/ldap. Lives in OU=ServiceAccounts."
+  type        = string
+  default     = "svc-vault-ldap"
+}
+
+variable "vault_ad_smoke_account_name" {
+  description = "samAccountName of the test account used by the 0.D.3 smoke gate's vault login -method=ldap probe. Plaintext pwd persists in vault-ad-bind.json on the build host."
+  type        = string
+  default     = "svc-vault-smoke"
+}
+
+variable "vault_ad_demo_rotated_account_name" {
+  description = "samAccountName of the demo account whose password Vault rotates via secrets/ldap static rotate-role. Lives in OU=ServiceAccounts."
+  type        = string
+  default     = "svc-demo-rotated"
+}
+
+variable "vault_ad_group_admins" {
+  description = "AD security group whose members get the Vault `nexus-admin` policy (full sudo on all paths)."
+  type        = string
+  default     = "nexus-vault-admins"
+}
+
+variable "vault_ad_group_operators" {
+  description = "AD security group whose members get the Vault `nexus-operator` policy (read/write on nexus/* + cert issuance via pki_int/issue/*; no sudo, no policy/auth/sys-mounts changes)."
+  type        = string
+  default     = "nexus-vault-operators"
+}
+
+variable "vault_ad_group_readers" {
+  description = "AD security group whose members get the Vault `nexus-reader` policy (read-only on nexus/*)."
+  type        = string
+  default     = "nexus-vault-readers"
+}

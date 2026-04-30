@@ -39,6 +39,30 @@ output "vault_cluster_state" {
   }
 }
 
+output "vault_ldap_state" {
+  description = "Phase 0.D.3 LDAP overlay state. Only meaningful when var.enable_vault_ldap=true. Cross-env coupling: bindpass is read from var.vault_ad_bind_creds_file at apply time -- foundation env must have written that file via enable_vault_ad_integration=true."
+  value = {
+    ldap_enabled          = var.enable_vault_ldap
+    policies_enabled      = var.enable_vault_ldap && var.enable_vault_ldap_policies
+    auth_enabled          = var.enable_vault_ldap && var.enable_vault_ldap_auth
+    secret_engine_enabled = var.enable_vault_ldap && var.enable_vault_ldap_secret_engine
+    rotate_role_enabled   = var.enable_vault_ldap && var.enable_vault_ldap_rotate_role
+    ldap_url              = var.vault_ldap_url
+    user_dn               = var.vault_ldap_user_dn
+    group_dn              = var.vault_ldap_group_dn
+    userattr              = var.vault_ldap_userattr
+    groupattr             = var.vault_ldap_groupattr
+    bind_creds_file       = var.vault_ad_bind_creds_file
+    admin_group           = var.vault_ldap_admin_group
+    operator_group        = var.vault_ldap_operator_group
+    reader_group          = var.vault_ldap_reader_group
+    demo_rotate_account   = var.vault_ldap_demo_rotate_account
+    demo_rotation_period  = var.vault_ldap_demo_rotation_period
+    policies_defined      = ["nexus-admin", "nexus-operator", "nexus-reader"]
+    password_policy_name  = "nexus-ad-rotated"
+  }
+}
+
 output "vault_pki_state" {
   description = "Phase 0.D.2 PKI overlay state. Only meaningful when var.enable_vault_pki=true. Per-step toggles surface here so operators can confirm which slices ran on this apply."
   value = {
@@ -66,20 +90,23 @@ output "vault_pki_state" {
 output "next_step" {
   value = <<-EOT
 
-    Phase 0.D.1 + 0.D.2 -- Vault cluster + PKI deployed.
+    Phase 0.D.1 + 0.D.2 + 0.D.3 -- Vault cluster + PKI + LDAP integration deployed.
 
     Pre-flight order (do NOT skip):
       1. Foundation env's gateway dnsmasq must have the Vault dhcp-host
-         reservations in place BEFORE the Vault clones DHCP. From the repo root:
-           pwsh -File scripts\foundation.ps1 apply -Vars enable_vault_dhcp_reservations=true
+         reservations in place AND the AD-side Vault objects (svc accounts +
+         groups) created. From the repo root:
+           pwsh -File scripts\foundation.ps1 apply ``
+             -Vars enable_vault_dhcp_reservations=true,enable_vault_ad_integration=true
       2. Vault Packer template must be built:
-           cd packer\vault; packer init .; packer build .
-      3. THIS env (security) -- both 0.D.1 cluster + 0.D.2 PKI in one apply:
+           Push-Location packer\vault; packer init .; packer build .; Pop-Location
+      3. THIS env (security) -- 0.D.1 cluster + 0.D.2 PKI + 0.D.3 LDAP in one apply:
            pwsh -File scripts\security.ps1 apply
 
-    Smoke gate (Phase 0.D.2 -- chains 0.D.1 first, then layers PKI checks):
+    Smoke gate (Phase 0.D.3 -- chains 0.D.2 -> 0.D.1, then layers LDAP checks):
       pwsh -File scripts\security.ps1 smoke
-      # Or run the older 0.D.1-only gate explicitly:
+      # Or run an earlier phase explicitly:
+      pwsh -File scripts\security.ps1 smoke -Phase 0.D.2
       pwsh -File scripts\security.ps1 smoke -Phase 0.D.1
 
     Verify the cluster manually (from the build host, post-PKI):
@@ -97,6 +124,15 @@ output "next_step" {
       KV-v2 mount:     ${var.vault_kv_mount_path}/
       AppRole name:    ${var.vault_approle_name}
       Root CA bundle:  ${var.vault_pki_ca_bundle_path}  (drop VAULT_SKIP_VERIFY; set VAULT_CACERT here)
+      LDAP bind cred:  ${var.vault_ad_bind_creds_file}  (binddn + bindpass + smoke creds; mode 0600 on build host)
+
+    LDAP login (Phase 0.D.3):
+      vault login -method=ldap -username=nexusadmin
+      # Member of ${var.vault_ldap_admin_group} -> nexus-admin policy (full sudo)
+
+      vault read ldap/static-cred/${var.vault_ldap_demo_rotate_account}
+      # Returns the current Vault-managed password for the demo AD account
+      # (rotated every ${var.vault_ldap_demo_rotation_period}).
 
     Build-host reachability invariant (per memory/feedback_lab_host_reachability.md)
     -- every Vault node must be SSH/22 + 8200 reachable from the build host:
