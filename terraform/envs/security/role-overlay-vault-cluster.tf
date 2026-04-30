@@ -220,7 +220,8 @@ resource "null_resource" "vault_join_followers" {
 
   triggers = {
     init_id        = null_resource.vault_init_leader[0].id
-    join_overlay_v = "4" # v4 = same as v3 + fix `$${ip}:` escape on the new "copying leader cert" log line (PS parses `$ip:` as scope qualifier; same bug pattern as ready_overlay_v=2). v3 = -leader-ca-cert. v2 = wrong flag. v1 = no peer cert.
+    join_overlay_v = "5" # v5 = install leader cert in follower's system CA trust store (`/usr/local/share/ca-certificates/` + `update-ca-certificates`), then run raft join WITHOUT `-leader-ca-cert`. v4's `-leader-ca-cert=/tmp/vault-leader.crt` did NOT actually work -- vault-1's logs showed `tls: bad certificate` and vault-2's logs showed `x509: certificate signed by unknown authority`. Either the flag isn't propagated CLI->server in 1.18, or the CRLF line endings PowerShell's Set-Content emits broke parsing. System trust store sidesteps both. Plus write cert with LF line endings explicitly.
+
   }
 
   depends_on = [null_resource.vault_init_leader]
@@ -257,10 +258,14 @@ resource "null_resource" "vault_join_followers" {
       }
       Write-Host "[vault join] leader cert fetched ($($leaderCertContent.Length) bytes)"
 
-      # Stage to a temp file on the build host so we can scp it to each
-      # follower. Cleanup at the end of the resource.
+      # Stage to a temp file on the build host with LF line endings (NOT
+      # PowerShell's default CRLF -- some CA cert parsers are strict about
+      # line endings, and the previous v4 with default CRLF was diagnosed
+      # to fail with "x509: certificate signed by unknown authority" even
+      # though the cert was correct).
       $tmpCertFile = [System.IO.Path]::GetTempFileName()
-      $leaderCertContent.Trim() | Set-Content -Path $tmpCertFile -Encoding ASCII
+      $certLF = ($leaderCertContent.Trim() -replace "`r`n", "`n") + "`n"
+      [System.IO.File]::WriteAllText($tmpCertFile, $certLF, [System.Text.UTF8Encoding]::new($false))
 
       foreach ($ip in $follower_ips) {
         Write-Host "[vault join] processing $ip..."
@@ -276,20 +281,34 @@ resource "null_resource" "vault_join_followers" {
         }
 
         if (-not $statusJson -or $statusJson.initialized -ne $true) {
-          # Fresh node -- copy leader's cert + run raft join with -leader-ca-cert.
-          # `vault operator raft join` does NOT have a -leader-tls-skip-verify
-          # flag (v2 of this overlay tried that and got "flag provided but not
-          # defined"). Pre-PKI, the supported path is -leader-ca-cert pointing
-          # at the leader's actual self-signed cert. We SCP'd it to the build
-          # host above; now SCP it to each follower at /tmp/vault-leader.crt.
-          Write-Host "[vault join] $${ip}: copying leader cert to /tmp/vault-leader.crt"
+          # Fresh node -- install leader's cert in the follower's system CA
+          # trust store, then run raft join WITHOUT -leader-ca-cert (Go's
+          # default TLS verification uses system trust at runtime, which
+          # picks up /etc/ssl/certs/ca-certificates.crt populated by
+          # update-ca-certificates).
+          #
+          # Why this approach (vs -leader-ca-cert): v4 passed the cert via
+          # the `-leader-ca-cert=<path>` flag and Vault failed with
+          # "x509: certificate signed by unknown authority" -- the flag
+          # either wasn't propagated CLI -> server correctly in 1.18 or
+          # the CRLF line endings broke parsing. System trust store
+          # sidesteps both, AND the cert stays installed on the follower
+          # so subsequent ops (like the post-init step's vault CLI calls)
+          # also benefit. Phase 0.D.2 PKI will replace this manual cert
+          # shuffle with a shared CA.
+          Write-Host "[vault join] $${ip}: copying leader cert + installing in system CA trust store"
           scp -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $tmpCertFile "$${user}@$${ip}:/tmp/vault-leader.crt" 2>&1 | Out-Null
           if ($LASTEXITCODE -ne 0) {
             throw "[vault join] scp of leader cert to $ip failed (rc=$LASTEXITCODE)"
           }
+          $installOut = ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip 'sudo cp /tmp/vault-leader.crt /usr/local/share/ca-certificates/vault-leader.crt && sudo update-ca-certificates 2>&1 | tail -3' 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) {
+            throw "[vault join] failed to install leader cert in $ip system trust store. Output:`n$installOut"
+          }
+          Write-Host "[vault join] $${ip}: trust store updated -- $($installOut.Trim())"
 
           Write-Host "[vault join] $ip joining raft cluster at $leaderApi..."
-          $joinOut = ssh -o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "VAULT_SKIP_VERIFY=true vault operator raft join -address=https://127.0.0.1:8200 -leader-ca-cert=/tmp/vault-leader.crt $leaderApi" 2>&1 | Out-String
+          $joinOut = ssh -o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "VAULT_SKIP_VERIFY=true vault operator raft join -address=https://127.0.0.1:8200 $leaderApi" 2>&1 | Out-String
           if ($LASTEXITCODE -ne 0) {
             throw "[vault join] raft join on $ip failed (rc=$LASTEXITCODE). Output:`n$joinOut"
           }
