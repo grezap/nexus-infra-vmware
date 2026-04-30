@@ -220,7 +220,7 @@ resource "null_resource" "vault_join_followers" {
 
   triggers = {
     init_id        = null_resource.vault_init_leader[0].id
-    join_overlay_v = "2" # v2 = `-leader-tls-skip-verify` on raft join. v1 failed with "failed to get raft challenge" Code 500 from the leader -- the follower's Vault makes an HTTPS callback to the leader's API to fetch the challenge, but each clone has its own self-signed TLS cert and nothing trusts anything else pre-PKI (0.D.2). The flag is the peer-side analog of VAULT_SKIP_VERIFY for the local API.
+    join_overlay_v = "3" # v3 = -leader-ca-cert with leader's actual cert SCP'd in. v2 used -leader-tls-skip-verify which doesn't exist in `vault operator raft join` (`flag provided but not defined`); the supported flag is -leader-ca-cert=<path>. v1 had no peer-cert handling and failed with "failed to get raft challenge".
   }
 
   depends_on = [null_resource.vault_init_leader]
@@ -234,6 +234,7 @@ resource "null_resource" "vault_join_followers" {
       $threshold       = ${var.vault_init_key_threshold}
       $keysFileRaw     = '${var.vault_init_keys_file}'
       $keysFile        = $ExecutionContext.InvokeCommand.ExpandString($keysFileRaw.Replace('$HOME', $env:USERPROFILE))
+      $leaderIp        = '${local.vault_1_ip}'
       $leaderApi       = '${local.vault_leader_api_addr}'
       $leaderCluster   = '${local.vault_leader_cluster_addr}'
 
@@ -242,6 +243,24 @@ resource "null_resource" "vault_join_followers" {
       }
       $initJson = Get-Content $keysFile | ConvertFrom-Json
       $keys = $initJson.unseal_keys_b64
+
+      # Fetch the leader's TLS cert ONCE -- each clone has its own self-signed
+      # bootstrap cert (per-clone via vault-firstboot.sh), and `vault operator
+      # raft join` needs to verify the leader's cert via -leader-ca-cert.
+      # Phase 0.D.2 will issue from a shared PKI and this cert-shuffle goes
+      # away. /etc/vault.d/tls/ is 0750 vault:vault so nexusadmin needs sudo
+      # to read; cert itself is 644 (public) but we still need dir traversal.
+      Write-Host "[vault join] fetching leader's TLS cert from vault-1..."
+      $leaderCertContent = ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no "$${user}@$${leaderIp}" 'sudo cat /etc/vault.d/tls/vault.crt' 2>&1 | Out-String
+      if ($LASTEXITCODE -ne 0 -or -not $leaderCertContent.Trim()) {
+        throw "[vault join] failed to fetch leader's TLS cert. Output:`n$leaderCertContent"
+      }
+      Write-Host "[vault join] leader cert fetched ($($leaderCertContent.Length) bytes)"
+
+      # Stage to a temp file on the build host so we can scp it to each
+      # follower. Cleanup at the end of the resource.
+      $tmpCertFile = [System.IO.Path]::GetTempFileName()
+      $leaderCertContent.Trim() | Set-Content -Path $tmpCertFile -Encoding ASCII
 
       foreach ($ip in $follower_ips) {
         Write-Host "[vault join] processing $ip..."
@@ -257,14 +276,20 @@ resource "null_resource" "vault_join_followers" {
         }
 
         if (-not $statusJson -or $statusJson.initialized -ne $true) {
-          # Fresh node -- run raft join.
-          # `-leader-tls-skip-verify` skips TLS verification when the follower's
-          # Vault calls the leader's API to fetch the raft challenge. Each clone
-          # has its own self-signed bootstrap TLS cert; nothing trusts anything
-          # else until Phase 0.D.2 issues from a shared PKI. v1 of this overlay
-          # omitted the flag and failed with "failed to get raft challenge" 500.
+          # Fresh node -- copy leader's cert + run raft join with -leader-ca-cert.
+          # `vault operator raft join` does NOT have a -leader-tls-skip-verify
+          # flag (v2 of this overlay tried that and got "flag provided but not
+          # defined"). Pre-PKI, the supported path is -leader-ca-cert pointing
+          # at the leader's actual self-signed cert. We SCP'd it to the build
+          # host above; now SCP it to each follower at /tmp/vault-leader.crt.
+          Write-Host "[vault join] $ip: copying leader cert to /tmp/vault-leader.crt"
+          scp -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $tmpCertFile "$${user}@$${ip}:/tmp/vault-leader.crt" 2>&1 | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "[vault join] scp of leader cert to $ip failed (rc=$LASTEXITCODE)"
+          }
+
           Write-Host "[vault join] $ip joining raft cluster at $leaderApi..."
-          $joinOut = ssh -o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "VAULT_SKIP_VERIFY=true vault operator raft join -address=https://127.0.0.1:8200 -leader-tls-skip-verify=true $leaderApi" 2>&1 | Out-String
+          $joinOut = ssh -o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "VAULT_SKIP_VERIFY=true vault operator raft join -address=https://127.0.0.1:8200 -leader-ca-cert=/tmp/vault-leader.crt $leaderApi" 2>&1 | Out-String
           if ($LASTEXITCODE -ne 0) {
             throw "[vault join] raft join on $ip failed (rc=$LASTEXITCODE). Output:`n$joinOut"
           }
@@ -291,9 +316,11 @@ resource "null_resource" "vault_join_followers" {
         Write-Host "[vault join] $ip joined + unsealed; ha_enabled=$($verifyJson.ha_enabled)"
       }
 
+      # Cleanup the local temp cert file
+      Remove-Item -Force $tmpCertFile -ErrorAction SilentlyContinue
+
       # Final cluster verification: leader's raft list-peers should show 3
       Start-Sleep -Seconds 5  # raft membership settles
-      $leaderIp     = '${local.vault_1_ip}'
       $rootToken    = $initJson.root_token
       $peersRaw = ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$leaderIp "VAULT_TOKEN=$rootToken VAULT_SKIP_VERIFY=true vault operator raft list-peers -format=json -address=https://127.0.0.1:8200" 2>&1 | Out-String
       $peersJson = $null
