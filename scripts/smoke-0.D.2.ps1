@@ -271,21 +271,18 @@ foreach ($node in @(
             ($o -match [regex]::Escape("$($nodeRef.Name).nexus.lab"))
         }
 
+    # Use openssl x509 -checkend SECONDS on the remote node to avoid culture-sensitive
+    # date parsing on the Windows build host (en-US format "Apr 30 20:34:50 2027 GMT"
+    # may not parse cleanly under non-en cultures). Returns 0 if cert is valid for
+    # at least N more seconds, non-zero otherwise. We echo a stable marker token
+    # for the predicate to grep, robust against any stderr noise.
+    $minSecs = $MinLeafTtlDays * 86400
     Test-Check "$($nodeRef.Name): listener cert >$MinLeafTtlDays days remaining" `
         {
             ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$($nodeRef.Ip) `
-                "echo Q | openssl s_client -connect 127.0.0.1:8200 -servername $($nodeRef.Name).nexus.lab 2>/dev/null | openssl x509 -noout -enddate"
+                "echo Q | openssl s_client -connect 127.0.0.1:8200 -servername $($nodeRef.Name).nexus.lab 2>/dev/null | openssl x509 -checkend $minSecs >/dev/null && echo TTL_OK || echo TTL_TOO_SHORT"
         } `
-        {
-            param($o)
-            try {
-                $endLine = ($o -split "`n" | Where-Object { $_ -match 'notAfter=' } | Select-Object -First 1)
-                if (-not $endLine) { return $false }
-                $endStr = $endLine -replace '^notAfter=', ''
-                $endDate = [DateTime]::Parse($endStr.Trim())
-                ($endDate - [DateTime]::UtcNow).TotalDays -gt $MinLeafTtlDays
-            } catch { $false }
-        }
+        { param($o) $o -match '\bTTL_OK\b' }
 }
 
 # ─── 5. Build-host CA bundle present + matches PKI root ───────────────────
@@ -315,18 +312,31 @@ foreach ($node in @(
         {
             try {
                 $caCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $CaBundlePath
+                $caThumb = $caCert.Thumbprint
                 $tcp = New-Object System.Net.Sockets.TcpClient
                 $tcp.Connect($nodeRef.Ip, 8200)
                 $stream = $tcp.GetStream()
+                # Custom validation: build a chain rooted in our supplied CA bundle.
+                # The TLS handshake's $chain parameter contains the certs the server
+                # supplied (leaf + any intermediates). We move those intermediates
+                # into ExtraStore so the custom builder can construct the full path
+                # leaf -> intermediate -> root, where the root is our trusted bundle.
                 $callback = {
                     param($sender, $cert, $chain, $errors)
-                    # Build a custom chain using only our bundle's root as anchor
+                    [System.Security.Cryptography.X509Certificates.X509Certificate2]$leaf = $cert
                     $custom = New-Object System.Security.Cryptography.X509Certificates.X509Chain
                     $custom.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
                     $custom.ChainPolicy.TrustMode = [System.Security.Cryptography.X509Certificates.X509ChainTrustMode]::CustomRootTrust
                     $custom.ChainPolicy.CustomTrustStore.Add($caCert) | Out-Null
-                    [System.Security.Cryptography.X509Certificates.X509Certificate2]$leaf = $cert
-                    $custom.Build($leaf)
+                    if ($chain -and $chain.ChainElements) {
+                        foreach ($el in $chain.ChainElements) {
+                            $thumb = $el.Certificate.Thumbprint
+                            if ($thumb -ne $leaf.Thumbprint -and $thumb -ne $caThumb) {
+                                $custom.ChainPolicy.ExtraStore.Add($el.Certificate) | Out-Null
+                            }
+                        }
+                    }
+                    return $custom.Build($leaf)
                 }
                 $ssl = New-Object System.Net.Security.SslStream($stream, $false, $callback)
                 $ssl.AuthenticateAsClient("$($nodeRef.Name).nexus.lab")
@@ -347,12 +357,18 @@ foreach ($node in @(
         @{ Name = 'vault-3'; Ip = $Vault3Ip }
     )) {
     $nodeRef = $node
+    # NB: sudo on the node emits "unable to resolve host vault-N: Temporary failure
+    # in name resolution" to stderr because vault-firstboot.sh sets the hostname via
+    # hostnamectl but doesn't add a 127.0.1.1 entry to /etc/hosts. The warning is
+    # harmless but lands in the SSH output; predicates use -match on a marker token
+    # instead of strict equality so they tolerate the noise. Root-cause fix tracked
+    # for a vault-firstboot.sh patch (template rebuild).
     Test-Check "$($nodeRef.Name): /usr/local/share/ca-certificates/vault-leader.crt absent (0.D.1 hack retired)" `
         {
             ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$($nodeRef.Ip) `
-                "if sudo test -f /usr/local/share/ca-certificates/vault-leader.crt; then echo PRESENT; else echo ABSENT; fi"
+                "if sudo test -f /usr/local/share/ca-certificates/vault-leader.crt 2>/dev/null; then echo LEGACY_PRESENT; else echo LEGACY_ABSENT; fi"
         } `
-        { param($o) $o.Trim() -eq 'ABSENT' }
+        { param($o) $o -match '\bLEGACY_ABSENT\b' -and $o -notmatch '\bLEGACY_PRESENT\b' }
 }
 
 # ─── 8. Shared PKI root installed on every node ───────────────────────────
@@ -366,9 +382,9 @@ foreach ($node in @(
     Test-Check "$($nodeRef.Name): /usr/local/share/ca-certificates/nexus-vault-pki-root.crt present" `
         {
             ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$($nodeRef.Ip) `
-                "if sudo test -f /usr/local/share/ca-certificates/nexus-vault-pki-root.crt; then echo PRESENT; else echo ABSENT; fi"
+                "if sudo test -f /usr/local/share/ca-certificates/nexus-vault-pki-root.crt 2>/dev/null; then echo ROOT_PRESENT; else echo ROOT_ABSENT; fi"
         } `
-        { param($o) $o.Trim() -eq 'PRESENT' }
+        { param($o) $o -match '\bROOT_PRESENT\b' -and $o -notmatch '\bROOT_ABSENT\b' }
 }
 
 # ─── Summary ──────────────────────────────────────────────────────────────
