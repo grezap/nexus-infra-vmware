@@ -93,8 +93,17 @@ function Invoke-Terraform {
 }
 
 function Get-VarFlags {
+    # Accepts both -Vars 'x=1','y=2' (PS array) and -Vars 'x=1,y=2' (single
+    # comma-joined string -- needed when invoked via pwsh -File which doesn't
+    # auto-tokenize commas like interactive PS does). For var values that
+    # legitimately contain commas, pass each as a separate array element.
     $flags = @()
-    foreach ($v in $Vars) { $flags += @('-var', $v) }
+    foreach ($v in $Vars) {
+        foreach ($piece in ($v -split ',')) {
+            $trimmed = $piece.Trim()
+            if ($trimmed) { $flags += @('-var', $trimmed) }
+        }
+    }
     return $flags
 }
 
