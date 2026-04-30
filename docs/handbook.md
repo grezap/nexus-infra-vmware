@@ -1213,19 +1213,26 @@ ssh nexusadmin@192.168.70.121 "VAULT_TOKEN=<root> VAULT_SKIP_VERIFY=true VAULT_A
 # Now alice can `vault login -method=ldap -username=alice` and get the nexus-pki-admin policy.
 ```
 
-### 1i.5 NOT in scope for 0.D.3 (deferred)
+### 1i.5 LDAPS pulled forward to 0.D.3 (originally 0.D.5 scope)
 
-- **Demo rotate-role for `svc-demo-rotated`** — created the AD account in foundation, but the Vault static rotate-role's first-apply write fails because AD requires LDAPS/StartTLS for password-change operations. Plain LDAP/389 binds work for reads and user authentication (so `auth/ldap` login is fully functional), but `Set-ADAccountPassword` (via the LDAP `unicodePwd` attribute) is hard-blocked over plain LDAP regardless of the `LDAPServerIntegrity` signing setting. AD returns:
-  ```
-  LDAP Result Code 8 "Strong Auth Required":
-    The server requires binds to turn on integrity checking
-    if SSL\TLS are not already active on the connection
-  ```
-  Default `enable_vault_ldap_rotate_role=false` in `terraform/envs/security/variables.tf`. The svc-demo-rotated account exists (foundation creates it with a random initial pwd); only Vault's ownership of its rotation is deferred. Re-enable once 0.D.5 lands the LDAPS overlay (PKI-issued cert on dc-nexus + `ldaps://192.168.70.240:636`).
+During first-cycle iteration, plain LDAP/389 simple bind from Vault's go-ldap library was rejected by AD with `LDAP Result Code 8 "Strong Auth Required"` regardless of `LDAPServerIntegrity` registry value (tested 2/1/0; all rejected). Windows clients (.NET `ContextOptions.SimpleBind`) succeed against the same DC because they auto-negotiate sign-and-seal — Linux clients (go-ldap, libldap) don't. With no plain-LDAP path forward, **LDAPS was pulled forward from 0.D.5 to close 0.D.3**.
+
+The new `terraform/envs/security/role-overlay-vault-ldaps-cert.tf`:
+
+1. Issues a leaf cert from `pki_int/issue/vault-server` for `CN=dc-nexus.nexus.lab` + SANs `dc-nexus`, `DC-NEXUS`, `DC-NEXUS.nexus.lab`, IP `192.168.70.240`
+2. Converts PEM → PFX on the build host via `[X509Certificate2]::CreateFromPemFile`
+3. SCPs PFX to dc-nexus, imports to `Cert:\LocalMachine\My`
+4. Restarts NTDS — AD DS auto-discovers the cert and serves LDAPS on TCP/636
+
+Vault's `auth/ldap/config` and `secrets/ldap/config` now point at `ldaps://192.168.70.240:636` and pass the PKI root CA bundle via `certificate=@` so Vault trusts the chain.
+
+### 1i.6 NOT in scope for 0.D.3 (still deferred)
+
 - **0.D.4** — migrate foundation plaintext bootstrap creds (DSRM, local Administrator, nexusadmin) into Vault KV; refactor 0.C.* role overlays to read via `vault_kv_secret_v2` data sources
-- **0.D.5** — Transit auto-unseal + GMSA + tighten foundation `MinPasswordLength=14` + Vault Agent on member servers + **LDAPS overlay enabling rotate-role**
+- **0.D.5** — Transit auto-unseal + GMSA + tighten foundation `MinPasswordLength=14` + Vault Agent on member servers (LDAPS already landed in 0.D.3)
 - **mTLS Vault clients** — Phase 0.D.5+
 - **Multi-realm AD trust** — not in scope for a single-forest lab
+- **Revert `LDAPServerIntegrity=0`** — left as-is. LDAPS doesn't depend on it (TLS satisfies signing structurally), but flipping it back to `2` is a 0.D.5+ housekeeping item.
 - **Tail housekeeping** — `vms.yaml` 2 GB RAM correction + `vault-firstboot.sh` /etc/hosts fix (committed; awaits next template rebuild)
 
 ### 1i.6 RAM budget (unchanged)

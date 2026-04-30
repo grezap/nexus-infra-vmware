@@ -280,9 +280,21 @@ variable "enable_vault_ldap_secret_engine" {
 }
 
 variable "enable_vault_ldap_rotate_role" {
-  description = "Toggle: define the static rotate-role for svc-demo-rotated. AD requires LDAPS/StartTLS for password-change operations (Vault calls Set-ADAccountPassword which writes the unicodePwd attribute). Plain LDAP/389 binds work for reads + auth, but rotate-role's first-apply write fails with 'LDAP Result Code 8 Strong Auth Required: requires binds to turn on integrity checking if SSL\\TLS not active'. Default FALSE -- enable once 0.D.5 lands an LDAPS overlay (PKI-issued cert on dc-nexus + ldaps://192.168.70.240:636 in vault_ldap_url, OR starttls=true). On first apply Vault rotates the AD password to a Vault-managed value; subsequent reads return the current pwd via `vault read ldap/static-cred/<name>`."
+  description = "Toggle: define the static rotate-role for svc-demo-rotated. Requires LDAPS (handled by enable_vault_ldaps_cert in 0.D.3+ -- pulled forward from 0.D.5 because plain LDAP simple bind fails wholesale in this AD environment). On first apply Vault rotates the AD password to a Vault-managed value; subsequent reads return the current pwd via `vault read ldap/static-cred/<name>`. Default true."
   type        = bool
-  default     = false
+  default     = true
+}
+
+variable "enable_vault_ldaps_cert" {
+  description = "Toggle: issue a leaf cert from Vault PKI for dc-nexus.nexus.lab and install it in dc-nexus's LocalMachine\\My cert store, then restart NTDS so AD DS auto-discovers + serves LDAPS on TCP/636. Required for Vault's auth/ldap + secrets/ldap to bind to AD because plain LDAP/389 simple bind fails in this AD env regardless of LDAPServerIntegrity (tested 2/1/0; all fail). Originally 0.D.5 scope; pulled forward to close 0.D.3. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_ldaps_cert_ttl" {
+  description = "TTL for the LDAPS cert issued from pki_int/issue/<role> for dc-nexus. Default 8760h = 1 year (matches the rest of the lab leaf-cert convention; renewable via re-apply when <30 days remain)."
+  type        = string
+  default     = "8760h"
 }
 
 variable "vault_ad_bind_creds_file" {
@@ -292,9 +304,9 @@ variable "vault_ad_bind_creds_file" {
 }
 
 variable "vault_ldap_url" {
-  description = "LDAP URL for the Vault auth/ldap config. Plain ldap:// for 0.D.3 (LDAPS is a 0.D.5 tightening with the PKI-issued DC cert). Points at dc-nexus's VMnet11 IP."
+  description = "LDAP URL for the Vault auth/ldap + secrets/ldap config. ldaps://192.168.70.240:636 -- LDAPS pulled forward from 0.D.5 to 0.D.3 because plain LDAP/389 simple bind fails wholesale in this AD env. The DC cert is issued from Vault PKI by role-overlay-vault-ldaps-cert.tf and trusted by Vault via the certificate field (which receives the PKI root CA bundle inline)."
   type        = string
-  default     = "ldap://192.168.70.240:389"
+  default     = "ldaps://192.168.70.240:636"
 }
 
 variable "vault_ldap_user_dn" {

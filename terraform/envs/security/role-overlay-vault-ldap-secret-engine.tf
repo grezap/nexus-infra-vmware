@@ -25,11 +25,12 @@ resource "null_resource" "vault_ldap_secret_engine" {
 
   triggers = {
     auth_id          = length(null_resource.vault_ldap_auth) > 0 ? null_resource.vault_ldap_auth[0].id : "disabled"
+    ldaps_cert_id    = length(null_resource.vault_ldaps_cert) > 0 ? null_resource.vault_ldaps_cert[0].id : "disabled"
     ldap_url         = var.vault_ldap_url
-    secret_overlay_v = "1"
+    secret_overlay_v = "2" # v2 = LDAPS + certificate=@ca-bundle. v1 = plain LDAP (broken).
   }
 
-  depends_on = [null_resource.vault_ldap_auth]
+  depends_on = [null_resource.vault_ldap_auth, null_resource.vault_ldaps_cert]
 
   provisioner "local-exec" {
     when        = create
@@ -42,13 +43,20 @@ resource "null_resource" "vault_ldap_secret_engine" {
       $keysFile          = $ExecutionContext.InvokeCommand.ExpandString($keysFileRaw.Replace('$HOME', $env:USERPROFILE))
       $bindCredsFileRaw  = '${var.vault_ad_bind_creds_file}'
       $bindCredsFile     = $ExecutionContext.InvokeCommand.ExpandString($bindCredsFileRaw.Replace('$HOME', $env:USERPROFILE))
+      $caBundlePathRaw   = '${var.vault_pki_ca_bundle_path}'
+      $caBundlePath      = $ExecutionContext.InvokeCommand.ExpandString($caBundlePathRaw.Replace('$HOME', $env:USERPROFILE))
 
       if (-not (Test-Path $keysFile))      { throw "[ldap-secret-engine] vault-init.json missing"     }
       if (-not (Test-Path $bindCredsFile)) { throw "[ldap-secret-engine] vault-ad-bind.json missing"  }
+      if (-not (Test-Path $caBundlePath))  { throw "[ldap-secret-engine] CA bundle missing at $caBundlePath" }
       $rootToken  = (Get-Content $keysFile      | ConvertFrom-Json).root_token
       $bindCreds  = (Get-Content $bindCredsFile | ConvertFrom-Json)
       $bindDn     = $bindCreds.binddn
       $bindPass   = $bindCreds.bindpass
+
+      # Read CA bundle as base64 for clean SSH heredoc transit
+      $caBundleBytes = [System.IO.File]::ReadAllBytes($caBundlePath)
+      $caBundleB64   = [Convert]::ToBase64String($caBundleBytes)
 
       $bash = @"
 set -euo pipefail
@@ -93,14 +101,19 @@ else
   vault secrets enable ldap
 fi
 
-# 3. Configure secrets/ldap (upsert; AD schema)
-echo '[ldap-secret-engine] writing ldap/config (schema=ad, password_policy=nexus-ad-rotated)'
+# 3. Configure secrets/ldap (upsert; AD schema; LDAPS via certificate=@bundle)
+TMPCA=`$(mktemp)
+trap 'rm -f "`$TMPCA"' EXIT
+echo '$caBundleB64' | base64 -d > "`$TMPCA"
+
+echo '[ldap-secret-engine] writing ldap/config (LDAPS, schema=ad, password_policy=nexus-ad-rotated)'
 vault write ldap/config \
   binddn='$bindDn' \
   bindpass='$bindPass' \
   url='$ldapUrl' \
   schema=ad \
   password_policy=nexus-ad-rotated \
+  certificate=@"`$TMPCA" \
   request_timeout=30 \
   insecure_tls=false \
   starttls=false >/dev/null

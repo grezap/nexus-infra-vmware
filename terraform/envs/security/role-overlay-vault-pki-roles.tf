@@ -25,7 +25,7 @@ resource "null_resource" "vault_pki_roles" {
     int_id          = length(null_resource.vault_pki_intermediate_ca) > 0 ? null_resource.vault_pki_intermediate_ca[0].id : "disabled"
     role_name       = var.vault_pki_role_name
     leaf_ttl        = var.vault_pki_leaf_ttl
-    roles_overlay_v = "1"
+    roles_overlay_v = "2" # v2 = added dc-nexus + dc-nexus.nexus.lab to allowed_domains for LDAPS cert issuance (0.D.3 scope expansion). v1 = vault-N hostnames only.
   }
 
   depends_on = [null_resource.vault_pki_intermediate_ca]
@@ -54,7 +54,7 @@ export VAULT_ADDR=https://127.0.0.1:8200
 
 echo "[pki-roles] writing pki_int/roles/$roleName (idempotent overwrite)"
 vault write pki_int/roles/$roleName \
-  allowed_domains='nexus.lab,vault-1,vault-2,vault-3,vault-1.nexus.lab,vault-2.nexus.lab,vault-3.nexus.lab,localhost' \
+  allowed_domains='nexus.lab,vault-1,vault-2,vault-3,vault-1.nexus.lab,vault-2.nexus.lab,vault-3.nexus.lab,dc-nexus,dc-nexus.nexus.lab,DC-NEXUS,DC-NEXUS.nexus.lab,localhost' \
   allow_subdomains=false \
   allow_bare_domains=true \
   allow_glob_domains=false \

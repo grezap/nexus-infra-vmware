@@ -40,10 +40,9 @@
   Expected static-role / demo svc account name. Default svc-demo-rotated.
 
 .PARAMETER CheckRotateRole
-  If $true, runs the static-rotate-role + static-cred checks. Default $false
-  because AD requires LDAPS/StartTLS for password-change operations (the
-  rotate-role's first-apply write); plain LDAP/389 cannot rotate. Re-enable
-  this check once 0.D.5 lands the LDAPS overlay.
+  If $true, runs the static-rotate-role + static-cred checks. Default $true
+  now that LDAPS is in scope for 0.D.3 (vault_ldaps_cert overlay issues a
+  PKI cert for dc-nexus, AD DS serves LDAPS on 636, password writes work).
 
 .PARAMETER SkipPhase0D2
   If set, skips the chained 0.D.2 gate and runs only the 0.D.3 LDAP checks.
@@ -68,7 +67,7 @@ param(
     [string]$OperatorGroup     = 'nexus-vault-operators',
     [string]$ReaderGroup       = 'nexus-vault-readers',
     [string]$DemoRotateAccount = 'svc-demo-rotated',
-    [bool]  $CheckRotateRole   = $false,
+    [bool]  $CheckRotateRole   = $true,
     [switch]$SkipPhase0D2
 )
 
@@ -159,14 +158,14 @@ if (-not $bindCreds -or -not $bindCreds.smoke_username -or -not $bindCreds.smoke
     exit 1
 }
 
-# ─── 1. DC reachability for LDAP from vault-1 ────────────────────────────
-Write-Section 'DC reachability (vault-1 -> dc-nexus on TCP/389)'
-Test-Check "vault-1 can reach dc-nexus:389 (LDAP)" `
+# ─── 1. DC reachability for LDAPS from vault-1 ────────────────────────────
+Write-Section 'DC reachability (vault-1 -> dc-nexus on TCP/636 LDAPS)'
+Test-Check "vault-1 can reach dc-nexus:636 (LDAPS)" `
     {
         ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$Vault1Ip `
-            "timeout 5 bash -c '</dev/tcp/$DcIp/389' 2>/dev/null && echo LDAP_OPEN || echo LDAP_BLOCKED"
+            "timeout 5 bash -c '</dev/tcp/$DcIp/636' 2>/dev/null && echo LDAPS_OPEN || echo LDAPS_BLOCKED"
     } `
-    { param($o) $o -match '\bLDAP_OPEN\b' }
+    { param($o) $o -match '\bLDAPS_OPEN\b' }
 
 # ─── 2. auth/ldap method enabled + configured ────────────────────────────
 Write-Section 'Vault auth/ldap'
@@ -180,13 +179,13 @@ Test-Check 'auth/ldap method enabled' `
         } catch { $false }
     }
 
-Test-Check 'auth/ldap config has expected url + binddn (no bindpass leak)' `
+Test-Check 'auth/ldap config has expected url (LDAPS) + binddn (no bindpass leak)' `
     { Invoke-VaultCli -Ip $Vault1Ip -VaultCmd 'read -format=json auth/ldap/config' -Token $rootToken } `
     {
         param($o)
         try {
             $j = $o | ConvertFrom-Json
-            ($j.data.url -match 'ldap://') -and `
+            ($j.data.url -match 'ldaps://') -and `
             ($j.data.binddn -match 'svc-vault-ldap') -and `
             (-not $j.data.bindpass)   # bindpass should never be returned in reads
         } catch { $false }
@@ -362,12 +361,10 @@ Test-Check 'ldap/config has schema=ad + password_policy=nexus-ad-rotated' `
         } catch { $false }
     }
 
-# ─── 7. Static rotate-role + cred lookup (skipped by default -- requires LDAPS) ─────
+# ─── 7. Static rotate-role + cred lookup (LDAPS in scope as of 0.D.3) ─────
 Write-Section 'Static rotate-role for demo AD account'
 if (-not $CheckRotateRole) {
-    Write-Host "[SKIP] static-role + static-cred checks -- AD requires LDAPS/StartTLS for password-change operations" -ForegroundColor Yellow
-    Write-Host "[SKIP] re-enable once 0.D.5 LDAPS overlay lands (vault_ldap_url -> ldaps://...:636 + DC cert)" -ForegroundColor Yellow
-    Write-Host "[SKIP] to run these checks anyway: pwsh -File scripts\smoke-0.D.3.ps1 -CheckRotateRole `$true" -ForegroundColor Yellow
+    Write-Host "[SKIP] static-role + static-cred checks (-CheckRotateRole `$false explicitly)" -ForegroundColor Yellow
 } else {
     Test-Check "ldap/static-role/$DemoRotateAccount exists" `
         { Invoke-VaultCli -Ip $Vault1Ip -VaultCmd "read -format=json ldap/static-role/$DemoRotateAccount" -Token $rootToken } `

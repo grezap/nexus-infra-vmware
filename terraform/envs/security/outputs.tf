@@ -44,10 +44,12 @@ output "vault_ldap_state" {
   value = {
     ldap_enabled          = var.enable_vault_ldap
     policies_enabled      = var.enable_vault_ldap && var.enable_vault_ldap_policies
+    ldaps_cert_enabled    = var.enable_vault_ldap && var.enable_vault_ldaps_cert
     auth_enabled          = var.enable_vault_ldap && var.enable_vault_ldap_auth
     secret_engine_enabled = var.enable_vault_ldap && var.enable_vault_ldap_secret_engine
     rotate_role_enabled   = var.enable_vault_ldap && var.enable_vault_ldap_rotate_role
     ldap_url              = var.vault_ldap_url
+    ldaps_cert_ttl        = var.vault_ldaps_cert_ttl
     user_dn               = var.vault_ldap_user_dn
     group_dn              = var.vault_ldap_group_dn
     userattr              = var.vault_ldap_userattr
@@ -128,20 +130,27 @@ output "next_step" {
       Root CA bundle:  ${var.vault_pki_ca_bundle_path}  (drop VAULT_SKIP_VERIFY; set VAULT_CACERT here)
       LDAP bind cred:  ${var.vault_ad_bind_creds_file}  (binddn + bindpass + smoke creds; mode 0600 on build host)
 
-    LDAP login (Phase 0.D.3):
+    LDAP login (Phase 0.D.3, LDAPS):
       vault login -method=ldap -username=nexusadmin
       # Member of ${var.vault_ldap_admin_group} -> nexus-admin policy (full sudo)
+      # Bind goes over ${var.vault_ldap_url} ; cert chain is the PKI root bundle.
 
-    Demo rotate-role (DEFERRED to 0.D.5):
-      The static rotate-role for ${var.vault_ldap_demo_rotate_account} is NOT
-      enabled by default in 0.D.3 because AD requires LDAPS/StartTLS for
-      password-change operations (Set-ADAccountPassword via the unicodePwd
-      attribute is hard-blocked over plain LDAP/389, regardless of the
-      LDAPServerIntegrity signing setting). The rotate-role's first apply
-      attempts to write a fresh password and AD returns
-      "LDAP Result Code 8: Strong Auth Required". 0.D.5 lands the LDAPS
-      overlay (PKI-issued cert on dc-nexus + ldaps://192.168.70.240:636);
-      from then on, set enable_vault_ldap_rotate_role=true to activate.
+    Demo rotate-role (Phase 0.D.3, ON by default):
+      vault read ldap/static-cred/${var.vault_ldap_demo_rotate_account}
+      # Vault owns the AD password from first apply; rotates every
+      # ${var.vault_ldap_demo_rotation_period} via the nexus-ad-rotated
+      # password policy. Force-rotate on demand:
+      #   vault write -force ldap/rotate-role/${var.vault_ldap_demo_rotate_account}
+
+    Why LDAPS (and not plain LDAP/389):
+      Plain LDAP simple bind fails wholesale in this AD environment with
+      "Strong Auth Required" regardless of LDAPServerIntegrity (tested 2/1/0;
+      all fail). LDAPS pulled forward from 0.D.5 to 0.D.3 -- the
+      vault_ldaps_cert overlay issues a leaf cert from pki_int/ for
+      dc-nexus.nexus.lab, installs it in dc-nexus's LocalMachine\My store,
+      restarts NTDS, and AD then serves LDAPS on TCP/636. Vault auth/ldap
+      and secrets/ldap both bind via ${var.vault_ldap_url} with the PKI
+      root CA bundle inline as the certificate trust anchor.
 
     Build-host reachability invariant (per memory/feedback_lab_host_reachability.md)
     -- every Vault node must be SSH/22 + 8200 reachable from the build host:

@@ -34,6 +34,7 @@ resource "null_resource" "vault_ldap_auth" {
 
   triggers = {
     policies_id    = length(null_resource.vault_ldap_policies) > 0 ? null_resource.vault_ldap_policies[0].id : "disabled"
+    ldaps_cert_id  = length(null_resource.vault_ldaps_cert) > 0 ? null_resource.vault_ldaps_cert[0].id : "disabled"
     ldap_url       = var.vault_ldap_url
     user_dn        = var.vault_ldap_user_dn
     group_dn       = var.vault_ldap_group_dn
@@ -44,10 +45,10 @@ resource "null_resource" "vault_ldap_auth" {
     admin_group    = var.vault_ldap_admin_group
     operator_group = var.vault_ldap_operator_group
     reader_group   = var.vault_ldap_reader_group
-    auth_overlay_v = "2" # v2 = upndomain + AD-canonical userfilter -- v1's search-then-rebind flow failed on plain LDAP/389 with "failed to bind as user" even when the JSON pwd matched AD (PS-on-DC Get-ADUser -Credential bind succeeded). UPN bind sidesteps the search entirely; userfilter narrows to objectClass=user for the group lookup. Cost: 1 cycle iteration to diagnose. v1 = initial implementation.
+    auth_overlay_v = "3" # v3 = LDAPS via certificate=@ca-bundle field; depends on vault_ldaps_cert so the DC is serving LDAPS before this writes the config. v2 = upndomain + AD-canonical userfilter (plain LDAP). v1 = initial implementation (plain LDAP, search-then-rebind, broken).
   }
 
-  depends_on = [null_resource.vault_ldap_policies]
+  depends_on = [null_resource.vault_ldap_policies, null_resource.vault_ldaps_cert]
 
   provisioner "local-exec" {
     when        = create
@@ -69,12 +70,17 @@ resource "null_resource" "vault_ldap_auth" {
       $keysFile          = $ExecutionContext.InvokeCommand.ExpandString($keysFileRaw.Replace('$HOME', $env:USERPROFILE))
       $bindCredsFileRaw  = '${var.vault_ad_bind_creds_file}'
       $bindCredsFile     = $ExecutionContext.InvokeCommand.ExpandString($bindCredsFileRaw.Replace('$HOME', $env:USERPROFILE))
+      $caBundlePathRaw   = '${var.vault_pki_ca_bundle_path}'
+      $caBundlePath      = $ExecutionContext.InvokeCommand.ExpandString($caBundlePathRaw.Replace('$HOME', $env:USERPROFILE))
 
       if (-not (Test-Path $keysFile)) {
         throw "[ldap-auth] vault-init.json missing at $keysFile"
       }
       if (-not (Test-Path $bindCredsFile)) {
         throw "[ldap-auth] vault-ad-bind.json missing at $bindCredsFile -- run foundation env with -Vars enable_vault_ad_integration=true first"
+      }
+      if (-not (Test-Path $caBundlePath)) {
+        throw "[ldap-auth] CA bundle missing at $caBundlePath -- run vault_pki_distribute_root first"
       }
       $rootToken  = (Get-Content $keysFile      | ConvertFrom-Json).root_token
       $bindCreds  = (Get-Content $bindCredsFile | ConvertFrom-Json)
@@ -84,7 +90,11 @@ resource "null_resource" "vault_ldap_auth" {
         throw "[ldap-auth] vault-ad-bind.json missing binddn or bindpass"
       }
 
-      Write-Host "[ldap-auth] dispatching to $${ip} -- ldap_url=$ldapUrl, binddn=$bindDn"
+      # Read CA bundle as base64 so we can ship it cleanly via SSH heredoc
+      $caBundleBytes = [System.IO.File]::ReadAllBytes($caBundlePath)
+      $caBundleB64   = [Convert]::ToBase64String($caBundleBytes)
+
+      Write-Host "[ldap-auth] dispatching to $${ip} -- ldap_url=$ldapUrl, binddn=$bindDn, certificate from $caBundlePath"
 
       $bash = @"
 set -euo pipefail
@@ -101,14 +111,15 @@ else
 fi
 
 # 2. Configure auth/ldap (upsert)
-# upndomain is the AD-canonical pattern: Vault binds as <user>@<upndomain>
-# directly, AD matches via userPrincipalName attribute, no search-then-rebind.
-# Without it, plain LDAP/389 binds fail with "failed to bind as user" even
-# when the password is correct (Vault's go-ldap re-bind on the same plaintext
-# connection trips AD's signing requirement on the second bind).
-# userfilter narrows to objectClass=user so any LDAP search Vault still does
-# (e.g., for group enumeration) only matches user objects, not computers etc.
-echo '[ldap-auth] writing auth/ldap/config (upn_domain + AD-canonical userfilter)'
+# Stage the CA bundle to a tmpfile + reference via @file syntax so Vault
+# trusts the LDAPS cert chain. upndomain stays for AD-canonical UPN bind
+# semantics. userfilter narrows to objectClass=user for the group
+# enumeration searches Vault still does after the user bind succeeds.
+TMPCA=`$(mktemp)
+trap 'rm -f "`$TMPCA"' EXIT
+echo '$caBundleB64' | base64 -d > "`$TMPCA"
+
+echo '[ldap-auth] writing auth/ldap/config (LDAPS + upn_domain + AD-canonical userfilter)'
 vault write auth/ldap/config \
   url='$ldapUrl' \
   binddn='$bindDn' \
@@ -120,6 +131,7 @@ vault write auth/ldap/config \
   groupdn='$groupDn' \
   groupattr='$groupattr' \
   groupfilter='(&(objectClass=group)(member:1.2.840.113556.1.4.1941:={{.UserDN}}))' \
+  certificate=@"`$TMPCA" \
   insecure_tls=false \
   starttls=false \
   request_timeout=30 \
