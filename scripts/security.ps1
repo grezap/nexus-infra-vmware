@@ -19,17 +19,22 @@
 .PARAMETER Verb
   apply    -- terraform apply -auto-approve in terraform/envs/security
   destroy  -- terraform destroy -auto-approve
-  smoke    -- run scripts/smoke-0.D.1.ps1 (24+ check Vault cluster gate)
+  smoke    -- run the active phase smoke gate (default 0.D.2; chains 0.D.1)
   cycle    -- destroy -> apply -> smoke (halts on first failure)
   plan     -- terraform plan
   validate -- terraform fmt -check -recursive + terraform validate
+
+.PARAMETER Phase
+  Which smoke phase to run. '0.D.2' (default) runs the full PKI smoke gate
+  which chains 0.D.1 first. '0.D.1' runs the cluster-only gate (useful for
+  iterating with -Vars enable_vault_pki=false).
 
 .PARAMETER Vars
   Array of "key=value" pairs forwarded to terraform as -var flags. Applies
   to apply/plan/cycle.
 
 .PARAMETER SmokeArgs
-  Hashtable forwarded to smoke-0.D.1.ps1 (e.g. -SmokeArgs @{KvMountPath='custom-nexus'}).
+  Hashtable forwarded to the smoke script (e.g. -SmokeArgs @{KvMountPath='custom-nexus'}).
 
 .EXAMPLE
   pwsh -File scripts\security.ps1 cycle
@@ -37,8 +42,14 @@
 .EXAMPLE
   pwsh -File scripts\security.ps1 apply -Vars enable_vault_init=false
 
+.EXAMPLE
+  # iterate on the cluster bring-up alone, skip PKI
+  pwsh -File scripts\security.ps1 apply -Vars enable_vault_pki=false
+  pwsh -File scripts\security.ps1 smoke -Phase 0.D.1
+
 .NOTES
-  See scripts/smoke-0.D.1.ps1 for the smoke gate this delegates to.
+  See scripts/smoke-0.D.1.ps1 (cluster-only gate) and scripts/smoke-0.D.2.ps1
+  (PKI gate, chains 0.D.1) for the underlying check definitions.
   See scripts/foundation.ps1 for the same shape applied to envs/foundation/.
 #>
 
@@ -47,6 +58,9 @@ param(
     [Parameter(Mandatory, Position = 0)]
     [ValidateSet('apply', 'destroy', 'smoke', 'cycle', 'plan', 'validate')]
     [string]$Verb,
+
+    [ValidateSet('0.D.1', '0.D.2')]
+    [string]$Phase = '0.D.2',
 
     [string[]]$Vars = @(),
 
@@ -57,7 +71,7 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot  = Split-Path -Parent $PSScriptRoot
 $envDir    = Join-Path $repoRoot 'terraform\envs\security'
-$smokePath = Join-Path $repoRoot 'scripts\smoke-0.D.1.ps1'
+$smokePath = Join-Path $repoRoot ("scripts\smoke-{0}.ps1" -f $Phase)
 
 function Write-Step([string]$title) {
     Write-Host ''
@@ -97,9 +111,9 @@ function Invoke-Destroy {
 }
 
 function Invoke-Smoke {
-    Write-Step "pwsh -File $(Split-Path -Leaf $smokePath)"
+    Write-Step "pwsh -File $(Split-Path -Leaf $smokePath) (phase $Phase)"
     if (-not (Test-Path $smokePath)) {
-        throw "smoke script not found: $smokePath"
+        throw "smoke script not found for phase $Phase`: $smokePath"
     }
     & pwsh -NoProfile -File $smokePath @SmokeArgs
     if ($LASTEXITCODE -ne 0) {

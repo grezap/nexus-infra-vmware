@@ -944,6 +944,147 @@ pwsh -File scripts\security.ps1 cycle
 
 ---
 
+## 1h. Phase 0.D.2 — `envs/security` PKI overlay
+
+Layered on top of §1g. Mounts Vault PKI (`pki/` root + `pki_int/` intermediate), defines a `vault-server` issuing role, reissues each Vault listener cert from `pki_int/` (atomic-swap + SIGHUP — zero-downtime), distributes the root CA to the build host (operator drops `VAULT_SKIP_VERIFY` + sets `VAULT_CACERT`) and to every Vault node's system trust store, and retires the per-clone trust shuffle that 0.D.1 needed for cold-start raft join.
+
+**Canon mapping** (per [`memory/feedback_master_plan_authority.md`](../memory/feedback_master_plan_authority.md)):
+
+| Choice | Source |
+|---|---|
+| Vault PKI is in scope for Phase 0.D | [`docs/architecture.md`](architecture.md) line 122 ("Phase 0.D — Vault — bootstraps a 3-node Vault Raft cluster; cert issuance moves to Vault PKI") |
+| No new VMs in 0.D.2 | `nexus-platform-plan/docs/infra/vms.yaml` foundation cluster lists vault-1/2/3 only |
+| pwsh-native operator wrappers | [`memory/feedback_build_host_pwsh_native.md`](../memory/feedback_build_host_pwsh_native.md) |
+| Selective per-step toggles (`enable_vault_pki_*`) | [`memory/feedback_selective_provisioning.md`](../memory/feedback_selective_provisioning.md) |
+| Build-host SSH/22 + 8200 stays reachable across cert rotation | [`memory/feedback_lab_host_reachability.md`](../memory/feedback_lab_host_reachability.md) — SIGHUP reload preserves listening sockets |
+| Root CN "NexusPlatform Root CA" / Intermediate CN "NexusPlatform Intermediate CA" | (canon-silent — chosen to identify the lab portfolio root) |
+| Root TTL 10y / Intermediate TTL 5y / Leaf TTL 1y | (canon-silent — test-enterprise lab; Vault Agent-driven shorter rotation lands in 0.D.5) |
+| Root CA bundle at `$HOME\.nexus\vault-ca-bundle.crt` | (canon-silent — mirrors operator-private location of `vault-init.json`) |
+
+**Files (added in 0.D.2):**
+
+| Path | Purpose |
+|---|---|
+| `terraform/envs/security/role-overlay-vault-pki-mount.tf` | Step 1: mount `pki/` (max_lease_ttl 10y) + `pki_int/` (max_lease_ttl 5y) |
+| `terraform/envs/security/role-overlay-vault-pki-root.tf` | Step 2: generate root CA (CN "NexusPlatform Root CA"), set issuing/CRL URLs |
+| `terraform/envs/security/role-overlay-vault-pki-intermediate.tf` | Step 3: generate CSR at `pki_int/` → sign via root → set-signed → URLs config |
+| `terraform/envs/security/role-overlay-vault-pki-roles.tf` | Step 4: define `pki_int/roles/vault-server` (allowed_domains nexus.lab + vault-1/2/3 + FQDNs + localhost; `allow_ip_sans=true`; RSA-4096; 1y TTL) |
+| `terraform/envs/security/role-overlay-vault-pki-rotate.tf` | Step 5: per-node `pki_int/issue/vault-server` → atomic-swap into `/etc/vault.d/tls/` → `systemctl reload vault.service` (SIGHUP) → verify post-reload via `openssl s_client`. Idempotent: skip if cert is PKI-issued and >30d remaining. |
+| `terraform/envs/security/role-overlay-vault-pki-distribute.tf` | Step 6: write root CA to build host `$HOME\.nexus\vault-ca-bundle.crt` + install on each Vault node's system trust store at `/usr/local/share/ca-certificates/nexus-vault-pki-root.crt` |
+| `terraform/envs/security/role-overlay-vault-pki-cleanup-hack.tf` | Step 7: remove `/usr/local/share/ca-certificates/vault-leader.crt` (the 0.D.1 cold-start residue) from followers — shared root CA is now the sole trust anchor |
+| `scripts/smoke-0.D.2.ps1` | New smoke gate — chains `smoke-0.D.1.ps1` first, then layers PKI checks (engines mounted, root + intermediate CN match + chain validates, role configured, per-node listener cert SAN+TTL+issuer correct, build-host CA bundle hash-matches PKI root, .NET TLS handshake validates against bundle, legacy trust anchor pruned, shared root present on every node) |
+
+### 1h.1 Operator order
+
+Same order as 0.D.1. The PKI overlays run as part of the same `terraform apply` (security env), gated by `var.enable_vault_pki` (default true). No extra step:
+
+```powershell
+# 1. Build the vault Packer template (one-time, ~10-15 min)
+cd packer\vault
+packer init .
+packer build .
+
+# 2. Apply foundation env WITH the Vault dhcp-host reservations enabled
+cd ..\..
+pwsh -File scripts\foundation.ps1 apply -Vars enable_vault_dhcp_reservations=true
+
+# 3. Apply security env (clones boot, 0.D.1 cluster bring-up, then 0.D.2 PKI bootstrap + rotate + distribute + cleanup)
+pwsh -File scripts\security.ps1 apply
+
+# 4. Smoke gate (defaults to 0.D.2 -- chains 0.D.1 first, then PKI checks)
+pwsh -File scripts\security.ps1 smoke
+```
+
+Or as a chained cycle:
+
+```powershell
+pwsh -File scripts\security.ps1 cycle      # destroy -> apply -> smoke (0.D.2)
+```
+
+### 1h.2 Selective ops
+
+```powershell
+# Run 0.D.1 only -- skip the entire PKI overlay
+pwsh -File scripts\security.ps1 apply -Vars enable_vault_pki=false
+pwsh -File scripts\security.ps1 smoke -Phase 0.D.1
+
+# PKI mounts + CAs but no leaf rotation (e.g. iterating on the role definition)
+pwsh -File scripts\security.ps1 apply -Vars enable_vault_pki_rotate=false
+
+# Iterate on a single PKI step
+terraform -chdir=terraform\envs\security apply -target=null_resource.vault_pki_intermediate_ca
+terraform -chdir=terraform\envs\security taint  null_resource.vault_pki_rotate_listener
+terraform -chdir=terraform\envs\security apply  -target=null_resource.vault_pki_rotate_listener
+```
+
+### 1h.3 Build-host reachability invariant (post-PKI)
+
+SIGHUP reload preserves the vault.service listening socket — TCP connections aren't dropped during cert swap. Reachability invariant unchanged from 0.D.1:
+
+```powershell
+foreach ($ip in @('192.168.70.121', '192.168.70.122', '192.168.70.123')) {
+    foreach ($port in @(22, 8200)) {
+        Test-NetConnection $ip -Port $port -InformationLevel Quiet
+    }
+}
+```
+
+Six True results = invariant intact. The 0.D.2 smoke gate carries forward this check.
+
+### 1h.4 Operating Vault from the build host (post-PKI)
+
+Drop `VAULT_SKIP_VERIFY` and set `VAULT_CACERT`:
+
+```powershell
+$env:VAULT_ADDR   = 'https://192.168.70.121:8200'
+$env:VAULT_CACERT = "$HOME\.nexus\vault-ca-bundle.crt"
+$env:VAULT_TOKEN  = (Get-Content $HOME\.nexus\vault-init.json | ConvertFrom-Json).root_token
+
+vault status
+vault read pki/cert/ca           # root CA
+vault read pki_int/cert/ca       # intermediate CA
+vault read pki_int/roles/vault-server
+vault list pki_int/issuers
+vault kv get nexus/smoke/canary
+```
+
+Issue a one-off cert from the role (e.g. for ad-hoc testing or a future template):
+
+```powershell
+vault write pki_int/issue/vault-server `
+  common_name=vault-1.nexus.lab `
+  alt_names=vault-1,localhost `
+  ip_sans=192.168.70.121,192.168.10.121,127.0.0.1 `
+  ttl=24h
+```
+
+### 1h.5 Cert rotation lifecycle
+
+| Event | Behavior |
+|---|---|
+| `terraform apply` with cert >30d remaining + already PKI-issued | Rotate step is no-op (idempotency probe). |
+| `terraform apply` with cert <30d remaining | Rotate step issues fresh cert, atomic-swaps, SIGHUPs, verifies. |
+| `terraform taint null_resource.vault_pki_rotate_listener` + apply | Forces re-rotation regardless of remaining days. |
+| Vault node clone replaced (e.g. `terraform destroy -target=module.vault_2` + `apply`) | Fresh clone gets self-signed bootstrap cert via `vault-firstboot.sh` first; cluster bring-up rejoins the node; PKI rotate overlay then issues a PKI-signed cert and replaces the bootstrap. The legacy trust shuffle on rejoin (cluster overlay) installs the leader's PKI-issued cert in the new clone's system trust store as the cold-start anchor; the cleanup overlay then prunes it once the shared root is in place. |
+| Manual cert reissue via Vault CLI | Allowed (operator-time issuance via `vault write pki_int/issue/...`); but the listener won't pick it up unless the operator writes the new cert/key to `/etc/vault.d/tls/` and SIGHUPs vault.service. The rotate overlay handles all of this declaratively. |
+
+### 1h.6 NOT in scope for 0.D.2 (deferred)
+
+Per the 0.D scope tracking commitment in [`memory/project_nexus_infra_phase.md`](../memory/project_nexus_infra_phase.md):
+
+- **0.D.3** — AD/LDAP auth method (Vault binds to dc-nexus on TCP/389) + AD secret engine for AD svc account password rotation
+- **0.D.4** — Migrate foundation env's plaintext bootstrap creds (DSRM, local Administrator, nexusadmin) into Vault KV at `nexus/foundation/...`; refactor 0.C.* role overlays to read via `vault_kv_secret_v2` data sources
+- **0.D.5** — Vault Transit auto-unseal + GMSA managed-service-accounts + tighten foundation `MinPasswordLength=14` + Vault Agent on member servers (Vault Agent is what enables short-TTL leaf certs with auto-renewal — not required at 1y leaf TTL)
+- **mTLS between Vault and clients** — Phase 0.D.5+ (PKI provides the issuance machinery; client identity policy is a separate layer)
+- **Cross-cluster trust** — not in scope for a 3-node single-cluster lab
+- **Tail housekeeping** — update `nexus-platform-plan/docs/infra/vms.yaml` with the 2 GB RAM correction so canon matches observed-sufficient sizing (carried forward from 0.D.1)
+
+### 1h.7 RAM budget (unchanged)
+
+0.D.2 adds no VMs. RAM accounting is identical to §1g.7.
+
+---
+
 ## 2. Working with the running gateway
 
 ### 2.1 SSH in

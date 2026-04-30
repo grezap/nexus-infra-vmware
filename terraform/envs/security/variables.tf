@@ -138,3 +138,105 @@ variable "vault_node_user" {
   type        = string
   default     = "nexusadmin"
 }
+
+# ─── Phase 0.D.2 PKI overlay toggles ─────────────────────────────────────
+#
+# Per memory/feedback_selective_provisioning.md, every PKI step is
+# independently toggle-able. Master toggle var.enable_vault_pki gates the
+# whole layer; per-step toggles default true and AND-compose with the master.
+#
+# Order: mount -> root -> intermediate -> roles -> rotate -> distribute -> cleanup
+# All steps depend_on null_resource.vault_post_init (cluster + KV-v2 + auth
+# methods must be live before PKI bootstrap runs).
+
+variable "enable_vault_pki" {
+  description = "Master toggle: bootstrap Vault PKI (root + intermediate + role + cert reissue + CA distribution + legacy trust cleanup). Default true. Set false to short-circuit the entire 0.D.2 layer (e.g. iterating on the 0.D.1 cluster bring-up alone)."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_pki_mount" {
+  description = "Toggle: mount PKI (pki/) and intermediate (pki_int/) secrets engines. Idempotent via probe."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_pki_root" {
+  description = "Toggle: generate the internal root CA at pki/. Idempotent via vault read pki/cert/ca probe."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_pki_intermediate" {
+  description = "Toggle: generate intermediate CSR at pki_int/, sign via root, set signed cert. Idempotent via vault read pki_int/cert/ca probe."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_pki_roles" {
+  description = "Toggle: define the vault-server PKI role for issuing listener certs. Idempotent overwrite (vault write semantics are upsert)."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_pki_rotate" {
+  description = "Toggle: per-node leaf cert issuance + atomic-swap into /etc/vault.d/tls/ + SIGHUP reload. Idempotent via current-cert issuer + days-remaining probe (skips if cert is already PKI-issued and >30d remaining)."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_pki_distribute" {
+  description = "Toggle: write root CA bundle to build host ($HOME\\.nexus\\vault-ca-bundle.crt) + install on each Vault node's system trust store. Hash-compare idempotent."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_pki_cleanup_legacy_trust" {
+  description = "Toggle: remove the per-clone /usr/local/share/ca-certificates/vault-leader.crt residue from followers (the 0.D.1 cold-start hack -- distribute step replaces it with the shared root CA, this step removes the stale per-clone cert). File-existence idempotent."
+  type        = bool
+  default     = true
+}
+
+# ─── Phase 0.D.2 PKI parameters ──────────────────────────────────────────
+
+variable "vault_pki_root_common_name" {
+  description = "Common Name for the root CA. Per Phase 0.D.2 design (canon-silent on common_name; chosen to identify the lab portfolio root)."
+  type        = string
+  default     = "NexusPlatform Root CA"
+}
+
+variable "vault_pki_intermediate_common_name" {
+  description = "Common Name for the intermediate CA. All leaf certs (vault listeners, future templates) chain through this."
+  type        = string
+  default     = "NexusPlatform Intermediate CA"
+}
+
+variable "vault_pki_root_ttl" {
+  description = "Root CA TTL. Default 87600h = 10 years -- root signs the intermediate once and is otherwise unused; long-lived per standard PKI design."
+  type        = string
+  default     = "87600h"
+}
+
+variable "vault_pki_intermediate_ttl" {
+  description = "Intermediate CA TTL. Default 43800h = 5 years -- long enough to outlast Phase 0.D.* iterations; rotation is a 0.D.5+ concern."
+  type        = string
+  default     = "43800h"
+}
+
+variable "vault_pki_leaf_ttl" {
+  description = "Leaf cert TTL for issued vault-server certs. Default 8760h = 1 year. Lab-acceptable cadence (test-enterprise lab; Vault Agent automated renewal lands in 0.D.5 with a shorter TTL)."
+  type        = string
+  default     = "8760h"
+}
+
+variable "vault_pki_role_name" {
+  description = "Name of the PKI role used to issue vault listener certs. Per pki_int/issue/<role> URL semantics."
+  type        = string
+  default     = "vault-server"
+}
+
+variable "vault_pki_ca_bundle_path" {
+  description = "Absolute path on the build host where the root CA bundle gets distributed. Operator points VAULT_CACERT at this path to drop VAULT_SKIP_VERIFY. Default mirrors vault-init.json under operator-private $HOME/.nexus/."
+  type        = string
+  default     = "$HOME/.nexus/vault-ca-bundle.crt"
+}

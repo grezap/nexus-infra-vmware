@@ -294,8 +294,19 @@ resource "null_resource" "vault_join_followers" {
           # the CRLF line endings broke parsing. System trust store
           # sidesteps both, AND the cert stays installed on the follower
           # so subsequent ops (like the post-init step's vault CLI calls)
-          # also benefit. Phase 0.D.2 PKI will replace this manual cert
-          # shuffle with a shared CA.
+          # also benefit.
+          #
+          # Lifecycle (Phase 0.D.2 lands): this per-clone trust shuffle is a
+          # cold-start hack -- PKI doesn't exist yet at first cluster join,
+          # so each follower must trust the leader's per-clone self-signed
+          # cert as a one-off. Once 0.D.2's role-overlay-vault-pki-distribute.tf
+          # installs the shared PKI root CA on every node, the per-clone
+          # cert is redundant; role-overlay-vault-pki-cleanup-hack.tf then
+          # removes /usr/local/share/ca-certificates/vault-leader.crt from
+          # followers so the shared root is the sole trust anchor. We leave
+          # this code path unchanged because it's structurally needed for
+          # cold-start; a future 0.D.5+ refactor (e.g. Packer-baked CA) could
+          # retire it entirely.
           Write-Host "[vault join] $${ip}: copying leader cert + installing in system CA trust store"
           scp -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $tmpCertFile "$${user}@$${ip}:/tmp/vault-leader.crt" 2>&1 | Out-Null
           if ($LASTEXITCODE -ne 0) {
