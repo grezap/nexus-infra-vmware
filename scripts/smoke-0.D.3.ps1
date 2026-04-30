@@ -225,16 +225,29 @@ Write-Section 'End-to-end LDAP login (svc-vault-smoke -> nexus-reader policy)'
 $smokeUser = $bindCreds.smoke_username
 $smokePass = $bindCreds.smoke_password
 
-# `vault login -method=ldap` from vault-1 against the local 8200 listener
+# Avoid shell-escape issues entirely by base64-transiting the password to the
+# remote node, decoding it into a tmpfile, then using Vault's `@file` field
+# syntax to read the value from the file. No layer of the pipeline (PS string
+# interpolation, ssh.exe argv, remote bash tokenization, vault CLI argv) ever
+# sees the raw password chars in a context where they could be mangled.
+$pwdB64  = [Convert]::ToBase64String([System.Text.UTF8Encoding]::new($false).GetBytes($smokePass))
+$userB64 = [Convert]::ToBase64String([System.Text.UTF8Encoding]::new($false).GetBytes($smokeUser))
+
 Test-Check "$smokeUser can login via auth/ldap and gets token" `
     {
-        # Build the login command on the remote node; capture token JSON.
-        # The password contains shell-special chars; escape via single-quote
-        # inside the SSH double-quoted command + replace any single quotes in
-        # pass with the standard '\'' escape.
-        $passEscaped = $smokePass -replace "'", "'\''"
+        $remoteScript = @"
+set -euo pipefail
+TMPPWD=`$(mktemp)
+trap 'rm -f "`$TMPPWD"' EXIT
+echo '$pwdB64' | base64 -d > "`$TMPPWD"
+USERNAME=`$(echo '$userB64' | base64 -d)
+export VAULT_SKIP_VERIFY=true
+export VAULT_ADDR=https://127.0.0.1:8200
+vault login -format=json -method=ldap username="`$USERNAME" password=@"`$TMPPWD"
+"@
+        $scriptB64 = [Convert]::ToBase64String([System.Text.UTF8Encoding]::new($false).GetBytes($remoteScript))
         ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$Vault1Ip `
-            "VAULT_SKIP_VERIFY=true VAULT_ADDR=https://127.0.0.1:8200 vault login -format=json -method=ldap username=$smokeUser password='$passEscaped' 2>&1"
+            "echo '$scriptB64' | base64 -d | bash" 2>&1
     } `
     {
         param($o)
@@ -243,6 +256,52 @@ Test-Check "$smokeUser can login via auth/ldap and gets token" `
             ($j.auth.client_token -and $j.auth.policies -contains 'nexus-reader')
         } catch { $false }
     }
+
+# Diagnostic block -- only emits if the previous check failed. Surfaces enough
+# cred-fingerprint info to verify JSON-vs-AD-pwd match without leaking the
+# actual password. Also probes AD for account state (Enabled, LockedOut,
+# PasswordExpired) which would explain a bind-rejection that's not a pwd
+# mismatch (e.g. AD lockout from too many failed login attempts during
+# iteration). Bind-as-user via ldapsearch from vault-1 isolates whether
+# the failure is at AD's auth layer or somewhere in Vault's path.
+if ($script:failures.Count -gt 0 -and $script:failures[-1] -match 'can login via auth/ldap') {
+    Write-Section 'Login failure diagnostic (no password leak)'
+    $pwdHash = [System.BitConverter]::ToString(
+        [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+            [System.Text.UTF8Encoding]::new($false).GetBytes($smokePass)
+        )
+    ).Replace('-','').ToLower().Substring(0,12)
+    Write-Host "  Smoke account:        $smokeUser" -ForegroundColor DarkGray
+    Write-Host "  JSON pwd length:      $($smokePass.Length)" -ForegroundColor DarkGray
+    Write-Host "  JSON pwd SHA256[:12]: $pwdHash" -ForegroundColor DarkGray
+
+    Write-Host ''
+    Write-Host '  AD account state (via dc-nexus):' -ForegroundColor DarkGray
+    $adProbe = ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no $user@192.168.70.240 `
+        "powershell -NoProfile -Command `"(Get-ADUser -Identity '$smokeUser' -Properties Enabled, LockedOut, PasswordExpired, PasswordLastSet) | Select-Object SamAccountName, Enabled, LockedOut, PasswordExpired, PasswordLastSet | Format-List`"" 2>&1
+    Write-Host ($adProbe | Out-String -Width 200) -ForegroundColor DarkGray
+
+    Write-Host '  Direct PS bind probe via Get-ADUser -Credential on dc-nexus (using JSON pwd via base64 transit):' -ForegroundColor DarkGray
+    # Use UTF-16-LE base64 for Windows PowerShell EncodedCommand on the DC.
+    $psScript = @"
+`$pwdB64 = '$pwdB64'
+`$pwd = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(`$pwdB64))
+`$cred = New-Object System.Management.Automation.PSCredential('$smokeUser', (ConvertTo-SecureString `$pwd -AsPlainText -Force))
+try {
+    `$u = Get-ADUser -Identity '$smokeUser' -Credential `$cred -ErrorAction Stop
+    Write-Output ('BIND_OK:' + `$u.DistinguishedName)
+} catch {
+    Write-Output ('BIND_FAILED: ' + `$_.Exception.Message)
+}
+"@
+    $psB64 = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($psScript))
+    $bindOut = ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $user@192.168.70.240 `
+        "powershell -NoProfile -EncodedCommand $psB64" 2>&1
+    Write-Host ($bindOut | Out-String -Width 200) -ForegroundColor DarkGray
+    Write-Host '  ^ BIND_OK: JSON pwd matches AD; failure is in Vaults LDAP code path or transit between Vault and AD.' -ForegroundColor DarkGray
+    Write-Host '  ^ BIND_FAILED + "user name or password is incorrect": JSON pwd does NOT match AD.' -ForegroundColor DarkGray
+    Write-Host '  ^ If AD state above shows LockedOut=True: account locked; SSH dc-nexus and run "Unlock-ADAccount svc-vault-smoke".' -ForegroundColor DarkGray
+}
 
 # ─── 6. secrets/ldap engine mounted + configured ─────────────────────────
 Write-Section 'Vault secrets/ldap engine'
