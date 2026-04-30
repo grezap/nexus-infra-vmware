@@ -57,10 +57,10 @@ export VAULT_SKIP_VERIFY=true
 export VAULT_ADDR=https://127.0.0.1:8200
 
 # 1. Define the password policy nexus-ad-rotated (idempotent overwrite).
-# NB: do NOT put backticks in comments inside this @"..."@ here-string --
-# PowerShell processes backtick-letter as escape sequences (e.g. `n -> newline)
-# even inside what looks like a bash comment. Canonized in
-# memory/feedback_terraform_heredoc_powershell.md (rule 3).
+# Comment intentionally contains no backtick characters (no markdown quotes,
+# no example escape sequences) -- inside this @"..."@ outer here-string,
+# PowerShell processes any backtick-letter as an escape, mangling the bash.
+# See memory/feedback_terraform_heredoc_powershell.md rule 3.
 echo '[ldap-secret-engine] writing password policy nexus-ad-rotated'
 TMPPOL=`$(mktemp)
 trap 'rm -f "`$TMPPOL"' EXIT
