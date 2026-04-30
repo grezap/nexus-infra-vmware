@@ -220,7 +220,7 @@ resource "null_resource" "vault_join_followers" {
 
   triggers = {
     init_id        = null_resource.vault_init_leader[0].id
-    join_overlay_v = "6" # v6 = post-join settle 5->15 sec, per-unseal JSON progress logging, verify retry 6x@5s. v5 raft-join itself now works (system CA trust store) but verify saw "still sealed" because the seal state hadn't propagated from leader -> follower yet. The unseal CLI returns immediately even though the actual seal-state transition takes a few seconds. v5 = system trust store. v4 = -leader-ca-cert (didn't work). v3 = (typo of v2). v2 = -leader-tls-skip-verify (wrong flag). v1 = no peer cert.
+    join_overlay_v = "7" # v7 = same as v6 + fix `$${threshold}:` PS escape (yet ANOTHER `$var:` scope qualifier bug -- I keep making this same mistake when adding new log lines). v6 = post-join settle + retry. v5 = system trust store. v4 = -leader-ca-cert. v3 = (typo). v2 = wrong flag. v1 = no peer cert.
 
   }
 
@@ -333,7 +333,7 @@ resource "null_resource" "vault_join_followers" {
           }
           try {
             $j = $unsealOut | ConvertFrom-Json
-            Write-Host "[vault join] $ip unseal key $($i+1)/$threshold: progress=$($j.progress)/$($j.t), sealed=$($j.sealed)"
+            Write-Host "[vault join] $ip unseal key $($i+1)/$${threshold}: progress=$($j.progress)/$($j.t), sealed=$($j.sealed)"
           } catch {
             Write-Host "[vault join] $ip unseal key $($i+1) (output unparseable): $($unsealOut.Trim())"
           }
