@@ -220,7 +220,7 @@ resource "null_resource" "vault_join_followers" {
 
   triggers = {
     init_id        = null_resource.vault_init_leader[0].id
-    join_overlay_v = "5" # v5 = install leader cert in follower's system CA trust store (`/usr/local/share/ca-certificates/` + `update-ca-certificates`), then run raft join WITHOUT `-leader-ca-cert`. v4's `-leader-ca-cert=/tmp/vault-leader.crt` did NOT actually work -- vault-1's logs showed `tls: bad certificate` and vault-2's logs showed `x509: certificate signed by unknown authority`. Either the flag isn't propagated CLI->server in 1.18, or the CRLF line endings PowerShell's Set-Content emits broke parsing. System trust store sidesteps both. Plus write cert with LF line endings explicitly.
+    join_overlay_v = "6" # v6 = post-join settle 5->15 sec, per-unseal JSON progress logging, verify retry 6x@5s. v5 raft-join itself now works (system CA trust store) but verify saw "still sealed" because the seal state hadn't propagated from leader -> follower yet. The unseal CLI returns immediately even though the actual seal-state transition takes a few seconds. v5 = system trust store. v4 = -leader-ca-cert (didn't work). v3 = (typo of v2). v2 = -leader-tls-skip-verify (wrong flag). v1 = no peer cert.
 
   }
 
@@ -313,24 +313,50 @@ resource "null_resource" "vault_join_followers" {
             throw "[vault join] raft join on $ip failed (rc=$LASTEXITCODE). Output:`n$joinOut"
           }
           Write-Host "[vault join] $ip raft join succeeded"
-          Start-Sleep -Seconds 5  # let raft handshake settle before unseal
+          # Bumped from 5 to 15 -- the freshly-joined node needs more time to
+          # pull the seal config from the leader before we can apply unseal
+          # keys. v5 with 5 sec saw "still sealed after unseal" because the
+          # seal state hadn't propagated yet.
+          Start-Sleep -Seconds 15
         }
 
-        # Unseal (whether fresh-joined or just sealed)
+        # Unseal (whether fresh-joined or just sealed). Capture JSON output
+        # for progress visibility -- previous versions only printed on
+        # failure, making the "is it really unsealing" question impossible
+        # to answer post-mortem.
         Write-Host "[vault join] unsealing $ip..."
         for ($i = 0; $i -lt $threshold; $i++) {
           $k = $keys[$i]
-          $unsealOut = ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "VAULT_SKIP_VERIFY=true vault operator unseal -address=https://127.0.0.1:8200 $k" 2>&1 | Out-String
+          $unsealOut = ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "VAULT_SKIP_VERIFY=true vault operator unseal -format=json -address=https://127.0.0.1:8200 $k" 2>&1 | Out-String
           if ($LASTEXITCODE -ne 0) {
             throw "[vault join] unseal $ip key $($i+1) failed (rc=$LASTEXITCODE). Output:`n$unsealOut"
           }
+          try {
+            $j = $unsealOut | ConvertFrom-Json
+            Write-Host "[vault join] $ip unseal key $($i+1)/$threshold: progress=$($j.progress)/$($j.t), sealed=$($j.sealed)"
+          } catch {
+            Write-Host "[vault join] $ip unseal key $($i+1) (output unparseable): $($unsealOut.Trim())"
+          }
         }
 
-        # Verify
-        $verifyRaw = ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "VAULT_SKIP_VERIFY=true vault status -format=json -address=https://127.0.0.1:8200" 2>&1 | Out-String
-        $verifyJson = $verifyRaw | ConvertFrom-Json
-        if ($verifyJson.sealed -eq $true) {
-          throw "[vault join] $ip still sealed after unseal"
+        # Verify -- retry up to 6x @ 5 sec each (30 sec total). The seal-state
+        # transition after the final unseal can take a few seconds to settle,
+        # particularly on a freshly-joined raft follower.
+        $sealedFalse = $false
+        $verifyJson  = $null
+        for ($r = 1; $r -le 6; $r++) {
+          Start-Sleep -Seconds 5
+          $verifyRaw = ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "VAULT_SKIP_VERIFY=true vault status -format=json -address=https://127.0.0.1:8200" 2>&1 | Out-String
+          try { $verifyJson = $verifyRaw | ConvertFrom-Json } catch { $verifyJson = $null }
+          if ($verifyJson -and $verifyJson.sealed -eq $false) {
+            $sealedFalse = $true
+            break
+          }
+          $progress = if ($verifyJson) { "sealed=$($verifyJson.sealed) initialized=$($verifyJson.initialized) progress=$($verifyJson.progress)/$($verifyJson.t)" } else { "(verify output unparseable)" }
+          Write-Host "[vault join] $ip still sealed after unseal (verify attempt $r/6: $progress), retrying..."
+        }
+        if (-not $sealedFalse) {
+          throw "[vault join] $ip still sealed after 6x verify (30 sec total). Last status: $($verifyJson | ConvertTo-Json -Depth 4)"
         }
         Write-Host "[vault join] $ip joined + unsealed; ha_enabled=$($verifyJson.ha_enabled)"
       }
