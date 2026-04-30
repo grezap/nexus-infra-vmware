@@ -321,6 +321,18 @@ variable "vault_ldap_groupattr" {
   default     = "cn"
 }
 
+variable "vault_ldap_upn_domain" {
+  description = "Vault auth/ldap upndomain -- the UPN suffix Vault uses to construct the user-bind DN (canonical AD pattern). With this set, Vault binds as `<username>@<upndomain>` directly, which AD handles via userPrincipalName matching -- skipping the separate search-then-rebind flow that fails with `failed to bind as user` on plain LDAP/389 even when the password is correct (Vault's go-ldap re-bind on the same connection trips AD's signing requirement). Set the value to match the AD forest (nexus.lab) so userPrincipalName=<sam>@nexus.lab resolves cleanly. Default 'nexus.lab' matches var.ad_domain in foundation env."
+  type        = string
+  default     = "nexus.lab"
+}
+
+variable "vault_ldap_userfilter" {
+  description = "Vault auth/ldap userfilter -- the LDAP filter used when Vault DOES need to search (e.g., group enumeration). AD-canonical filter narrows to user objects only via objectClass=user, avoiding accidental matches against computers, contacts, or other directory objects. The default Vault filter `({{.UserAttr}}={{.Username}})` is generic LDAP and trips on AD-specific edge cases."
+  type        = string
+  default     = "(&(objectClass=user)(sAMAccountName={{.Username}}))"
+}
+
 variable "vault_ldap_admin_group" {
   description = "AD group whose members get the `nexus-admin` Vault policy. Must match the foundation env's var.vault_ad_group_admins."
   type        = string

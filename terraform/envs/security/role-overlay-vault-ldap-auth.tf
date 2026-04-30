@@ -39,10 +39,12 @@ resource "null_resource" "vault_ldap_auth" {
     group_dn       = var.vault_ldap_group_dn
     userattr       = var.vault_ldap_userattr
     groupattr      = var.vault_ldap_groupattr
+    upn_domain     = var.vault_ldap_upn_domain
+    userfilter     = var.vault_ldap_userfilter
     admin_group    = var.vault_ldap_admin_group
     operator_group = var.vault_ldap_operator_group
     reader_group   = var.vault_ldap_reader_group
-    auth_overlay_v = "1"
+    auth_overlay_v = "2" # v2 = upndomain + AD-canonical userfilter -- v1's search-then-rebind flow failed on plain LDAP/389 with "failed to bind as user" even when the JSON pwd matched AD (PS-on-DC Get-ADUser -Credential bind succeeded). UPN bind sidesteps the search entirely; userfilter narrows to objectClass=user for the group lookup. Cost: 1 cycle iteration to diagnose. v1 = initial implementation.
   }
 
   depends_on = [null_resource.vault_ldap_policies]
@@ -58,6 +60,8 @@ resource "null_resource" "vault_ldap_auth" {
       $groupDn           = '${var.vault_ldap_group_dn}'
       $userattr          = '${var.vault_ldap_userattr}'
       $groupattr         = '${var.vault_ldap_groupattr}'
+      $upnDomain         = '${var.vault_ldap_upn_domain}'
+      $userFilter        = '${var.vault_ldap_userfilter}'
       $adminGroup        = '${var.vault_ldap_admin_group}'
       $operatorGroup     = '${var.vault_ldap_operator_group}'
       $readerGroup       = '${var.vault_ldap_reader_group}'
@@ -97,13 +101,22 @@ else
 fi
 
 # 2. Configure auth/ldap (upsert)
-echo '[ldap-auth] writing auth/ldap/config'
+# upndomain is the AD-canonical pattern: Vault binds as <user>@<upndomain>
+# directly, AD matches via userPrincipalName attribute, no search-then-rebind.
+# Without it, plain LDAP/389 binds fail with "failed to bind as user" even
+# when the password is correct (Vault's go-ldap re-bind on the same plaintext
+# connection trips AD's signing requirement on the second bind).
+# userfilter narrows to objectClass=user so any LDAP search Vault still does
+# (e.g., for group enumeration) only matches user objects, not computers etc.
+echo '[ldap-auth] writing auth/ldap/config (upn_domain + AD-canonical userfilter)'
 vault write auth/ldap/config \
   url='$ldapUrl' \
   binddn='$bindDn' \
   bindpass='$bindPass' \
   userdn='$userDn' \
   userattr='$userattr' \
+  upndomain='$upnDomain' \
+  userfilter='$userFilter' \
   groupdn='$groupDn' \
   groupattr='$groupattr' \
   groupfilter='(&(objectClass=group)(member:1.2.840.113556.1.4.1941:={{.UserDN}}))' \

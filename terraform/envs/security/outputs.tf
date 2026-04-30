@@ -52,6 +52,8 @@ output "vault_ldap_state" {
     group_dn              = var.vault_ldap_group_dn
     userattr              = var.vault_ldap_userattr
     groupattr             = var.vault_ldap_groupattr
+    upn_domain            = var.vault_ldap_upn_domain
+    userfilter            = var.vault_ldap_userfilter
     bind_creds_file       = var.vault_ad_bind_creds_file
     admin_group           = var.vault_ldap_admin_group
     operator_group        = var.vault_ldap_operator_group
