@@ -6,6 +6,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Validated (Phase 0.D.1 unattended end-to-end 2026-04-30)
+
+- **3-node Vault Raft cluster reproducibility CONFIRMED**. `pwsh -File scripts\security.ps1 cycle`
+  returns 24/24 smoke checks GREEN: 6 build-host reachability probes (SSH/22 +
+  Vault API/8200 to all 3 nodes), 3 canonical IPs (VMnet10 backplane on nic1),
+  6 vault.service health (active + initialized + unsealed × 3), 3 raft topology
+  (3 peers, 1 leader, vault-1 is leader), 6 KV-v2 + auth (mount, userpass,
+  user, approle, role, smoke secret), 2 cross-node read consistency from both
+  followers. Wall-clock for cluster apply (post-template-build): ~5 min.
+
+  **Iteration tax to land 0.D.1 fully green** -- counted from cluster
+  scaffold through smoke green:
+
+  | Issue | Commit | Cycle cost |
+  |---|---|---|
+  | hostname=vault baked at template; vmrun -cloneName doesn't propagate | `661cced` | 1 |
+  | NIC enumeration order non-deterministic with two en* | `d4c2527` | 1 |
+  | `$ip:` PowerShell scope-qualifier collision with TF heredoc | `98e7132` | 1 |
+  | dual-NIC array splat -> hashtable splat | `f3f443a` | 1 |
+  | `-leader-tls-skip-verify` flag doesn't exist | `b87970c` | 1 |
+  | `-leader-ca-cert` flag doesn't propagate cleanly in 1.18 -- system trust store instead | `91b34a6` | 1 |
+  | post-join unseal needs 15s settle + verify retry | `0e3e0e2` | 1 |
+  | reintroduced `$threshold:` scope-qualifier bug on a new log line | `2e1bb75` | 1 |
+  | Plus pre-Vault foundation regression (gateway powered off) | n/a | 1 |
+
+  Total: ~9 cluster cycles. Memory entry `feedback_terraform_heredoc_powershell.md`
+  saved to canonize the `$var:` escape rules + a mandatory pre-commit
+  grep checklist so this regression doesn't keep happening.
+
+  **Carry-forward lessons** (now memory canon -- cited inline in the
+  overlay code where applied):
+
+  - **NIC enumeration**: systemd's `OriginalName=en*` rule is non-deterministic
+    with two en* interfaces. `vault-firstboot.sh` discriminates by MAC OUI
+    byte 5 (`:00:` = primary, `:01:` = secondary) and remediates kernel
+    naming via `ip link set <if> down; ip link set <if> name nic0` if the
+    wrong NIC got renamed. Same logic applies to the secondary rename to
+    nic1 -- bring DOWN before rename or it silently fails.
+  - **Hostname discrimination**: `vmrun clone -cloneName=vault-1` only
+    changes the VMware Workstation library display name; the guest's
+    `/etc/hostname` stays at the Packer template name (`vault`).
+    Discriminate clones by their DHCP-acquired VMnet11 IP (canonical via
+    `dhcp-host` MAC reservation on nexus-gateway), then `hostnamectl
+    set-hostname` to set the canonical name.
+  - **Vault raft join across self-signed certs**: `-leader-ca-cert=<path>`
+    flag empirically does NOT propagate CLI -> server reliably in
+    Vault 1.18 (or our PowerShell-CRLF + heredoc transit broke it
+    silently). System trust store works: SCP leader's cert to follower at
+    `/usr/local/share/ca-certificates/vault-leader.crt`, run
+    `update-ca-certificates`, then run `vault operator raft join` with
+    NO leader-cert flags. Go's HTTPS client picks up system trust by
+    default. Pre-PKI hack; 0.D.2 PKI replaces it with a shared CA.
+  - **Post-raft-join propagation**: the freshly-joined follower needs
+    ~15s to pull the seal config from the leader; 5s wasn't enough.
+    Plus the seal-state transition after final unseal is async -- verify
+    via 6× retry @ 5s each instead of single immediate check.
+
 ### Added (Phase 0.D.1 — 3-node Vault Raft cluster)
 
 - **`packer/vault/`** — new Packer template for Vault cluster nodes. Debian 13
