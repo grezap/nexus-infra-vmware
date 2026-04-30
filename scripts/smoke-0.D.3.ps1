@@ -301,6 +301,23 @@ try {
     Write-Host '  ^ BIND_OK: JSON pwd matches AD; failure is in Vaults LDAP code path or transit between Vault and AD.' -ForegroundColor DarkGray
     Write-Host '  ^ BIND_FAILED + "user name or password is incorrect": JSON pwd does NOT match AD.' -ForegroundColor DarkGray
     Write-Host '  ^ If AD state above shows LockedOut=True: account locked; SSH dc-nexus and run "Unlock-ADAccount svc-vault-smoke".' -ForegroundColor DarkGray
+
+    # If BIND_OK confirmed the pwd is fine, dump Vault's view of the LDAP config
+    # + tail vault.service journal to see what Vault is actually doing.
+    if ($bindOut -match 'BIND_OK:') {
+        Write-Host ''
+        Write-Host '  Vault auth/ldap config (as Vault sees it; bindpass redacted):' -ForegroundColor DarkGray
+        $configDump = ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$Vault1Ip `
+            "VAULT_TOKEN='$rootToken' VAULT_SKIP_VERIFY=true VAULT_ADDR=https://127.0.0.1:8200 vault read -format=json auth/ldap/config 2>&1 | jq '.data | del(.bindpass)'" 2>&1
+        Write-Host ($configDump | Out-String -Width 200) -ForegroundColor DarkGray
+
+        Write-Host '  vault.service journal (last 10 LDAP-related lines):' -ForegroundColor DarkGray
+        $journalDump = ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$Vault1Ip `
+            "sudo journalctl -u vault.service --since '5 minutes ago' --no-pager 2>/dev/null | grep -iE 'ldap|bind|auth.*fail' | tail -10" 2>&1
+        Write-Host ($journalDump | Out-String -Width 200) -ForegroundColor DarkGray
+        Write-Host '  ^ If journal shows specific bind errors (DN, ldap result code), they pinpoint the issue.' -ForegroundColor DarkGray
+        Write-Host '  ^ If config dump shows wrong userdn/userattr/groupdn, the auth/ldap overlay needs a fix.' -ForegroundColor DarkGray
+    }
 }
 
 # ─── 6. secrets/ldap engine mounted + configured ─────────────────────────
