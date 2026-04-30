@@ -300,3 +300,35 @@ variable "vault_ad_group_readers" {
   type        = string
   default     = "nexus-vault-readers"
 }
+
+# ─── Phase 0.D.3 — AD LDAP signing relaxation (deviation) ────────────────
+#
+# Server 2025 ships with HKLM\SYSTEM\CurrentControlSet\Services\NTDS\
+# Parameters\LDAPServerIntegrity = 2 (Require signing). Plain-LDAP/389
+# simple binds from non-Windows clients (Vault's go-ldap library, OpenLDAP
+# tools, JDK ldap, etc.) are rejected with LDAP Result Code 8 "Strong Auth
+# Required" because they don't auto-negotiate sign-and-seal the way Windows
+# clients do (System.DirectoryServices, ldp.exe, etc.).
+#
+# Lowering to 1 ("Negotiate") accepts simple bind while still preferring
+# signed connections. This is the canonical lab-acceptable workaround for
+# Vault's auth/ldap until LDAPS lands in 0.D.5. Documented as an explicit
+# deviation per memory/feedback_master_plan_authority.md -- to be reverted
+# in 0.D.5 once LDAPS is the canonical transport. See also
+# memory/feedback_ad_ldap_simple_bind_signing.md for the full rule.
+
+variable "enable_dc_ldap_signing_relaxed" {
+  description = "Toggle: lower AD's LDAPServerIntegrity from 2 (Require signing -- default in modern Windows Server) to var.dc_ldap_server_integrity (default 1 = Negotiate). Required for plain-LDAP simple binds from non-Windows clients. Default false -- foundation deploys without 0.D.3 don't need this. Set true alongside enable_vault_ad_integration."
+  type        = bool
+  default     = false
+}
+
+variable "dc_ldap_server_integrity" {
+  description = "Target value for HKLM:\\SYSTEM\\CurrentControlSet\\Services\\NTDS\\Parameters\\LDAPServerIntegrity. 0 = None (accept any bind, even unsigned), 1 = Negotiate (prefer signing but accept unsigned), 2 = Require (reject unsigned -- default). Set to 1 for 0.D.3 plain-LDAP compatibility; revert to 2 in 0.D.5 when LDAPS lands."
+  type        = number
+  default     = 1
+  validation {
+    condition     = contains([0, 1, 2], var.dc_ldap_server_integrity)
+    error_message = "Must be 0, 1, or 2."
+  }
+}

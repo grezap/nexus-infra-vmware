@@ -69,6 +69,8 @@ output "vault_ad_state" {
     group_readers          = var.vault_ad_group_readers
     bind_creds_file        = var.vault_ad_bind_creds_file
     ldap_url               = "ldap://192.168.70.240:389"
+    ldap_signing_relaxed   = var.enable_dc_ldap_signing_relaxed
+    ldap_server_integrity  = var.enable_dc_ldap_signing_relaxed ? var.dc_ldap_server_integrity : 2
   }
 }
 

@@ -1133,13 +1133,21 @@ First phase that spans **both envs**. Foundation creates AD service accounts + g
 ```powershell
 cd "F:\_CODING_\Repos\Local Development And Test\Portfolio_Project_Ideas\workspace\nexus-infra-vmware"
 
-# 1. Foundation env -- enable AD-side Vault objects (AD svc accounts + groups + demo + smoke account)
+# 1. Foundation env -- enable AD-side Vault objects + LDAP signing relaxation
+#    enable_dc_ldap_signing_relaxed=true is required: modern Windows Server
+#    defaults to LDAPServerIntegrity=2 (Require signing) which rejects plain-
+#    LDAP simple binds from non-Windows clients (Vault's go-ldap library).
+#    Setting this lowers the value to 1 (Negotiate). See
+#    memory/feedback_ad_ldap_simple_bind_signing.md for the full rule.
+#    Reverted to 2 when 0.D.5 lands LDAPS.
 pwsh -File scripts\foundation.ps1 apply `
-  -Vars enable_vault_dhcp_reservations=true,enable_vault_ad_integration=true,enable_jumpbox_domain_join=false
+  -Vars enable_vault_dhcp_reservations=true,enable_vault_ad_integration=true,enable_dc_ldap_signing_relaxed=true,enable_jumpbox_domain_join=false
 
 # 2. Security env -- cycle including new LDAP overlays (auto-reads vault-ad-bind.json)
 pwsh -File scripts\security.ps1 cycle      # smoke now defaults to 0.D.3 (chains 0.D.2 -> 0.D.1)
 ```
+
+> **Approved deviation (LDAPServerIntegrity 2 -> 1)**: documented in [`terraform/envs/foundation/role-overlay-dc-ldap-signing.tf`](../terraform/envs/foundation/role-overlay-dc-ldap-signing.tf) and [`memory/feedback_ad_ldap_simple_bind_signing.md`](../memory/feedback_ad_ldap_simple_bind_signing.md). 0.D.5 LDAPS overlay reverts the registry to 2 (TLS channel encryption satisfies the signing requirement).
 
 ### 1i.2 Selective ops
 
