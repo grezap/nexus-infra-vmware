@@ -161,6 +161,21 @@ else
   echo "$LOG_PREFIX hostname already '$HOSTNAME', no rename needed"
 fi
 
+# ─── 5b. Ensure /etc/hosts resolves the new hostname locally ───────────────
+# Without this, every `sudo` invocation prints
+#   sudo: unable to resolve host $HOSTNAME: Temporary failure in name resolution
+# to stderr because libc's getaddrinfo can't resolve the local hostname (no DNS
+# entry, no hosts file entry). The warning is harmless but pollutes every
+# operator + automation log line that uses sudo. Canonized in
+# memory/feedback_smoke_gate_probe_robustness.md as required pattern for every
+# Linux first-boot that sets a hostname.
+HOSTS_LINE="127.0.1.1 $HOSTNAME.nexus.lab $HOSTNAME"
+# Remove any stale 127.0.1.1 entry (from prior hostname or template baseline)
+# then append the canonical one. sed -i is idempotent on missing lines.
+sed -i '/^127\.0\.1\.1\s/d' /etc/hosts
+echo "$HOSTS_LINE" >> /etc/hosts
+echo "$LOG_PREFIX wrote /etc/hosts entry: $HOSTS_LINE"
+
 # ─── 6. Configure secondary NIC (nic1) for VMnet10 backplane ───────────────
 # .link file pins the rename across reboots; .network applies the static IP.
 # Also do `ip addr add` directly so the IP comes up immediately (networkd
