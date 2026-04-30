@@ -55,14 +55,18 @@ cd "F:\_CODING_\…\nexus-infra-vmware"
 
 # 1. Build the template — evaluation path, no key required (~35-45 min;
 #    Windows Setup alone is ~15 min, then 25-30 min of provisioning)
-make ws2025-core
+Push-Location packer\ws2025-core; packer build .; Pop-Location
 # Template lands at H:\VMS\NexusPlatform\_templates\ws2025-core\ws2025-core.vmx
 
 # 1b. MSDN path (owner only, requires bootstrap JSON)
-make ws2025-core-msdn
+Push-Location packer\ws2025-core
+packer build `
+    -var "product_source=msdn" `
+    -var "bootstrap_keys_file=$env:USERPROFILE/.nexus/secrets/windows-keys.json" .
+Pop-Location
 
 # 2. Smoke-test via the reusable module (~10 sec terraform + 30-60 sec boot)
-make ws2025-core-smoke
+Push-Location terraform\ws2025-core-smoke; terraform apply -auto-approve; Pop-Location
 # VM lands at H:\VMS\NexusPlatform\90-smoke\ws2025-core-smoke\ws2025-core-smoke.vmx
 
 # 3. Find its DHCP lease (from nexus-gateway's dnsmasq)
@@ -76,8 +80,10 @@ Test-NetConnection <ip> -Port 9182    # windows_exporter
 ssh nexusadmin@<ip> 'powershell -NoProfile -Command "hostname; (Get-Service sshd, windows_exporter).Status"'
 
 # 5. Tear down
-make ws2025-core-smoke-destroy
+Push-Location terraform\ws2025-core-smoke; terraform destroy -auto-approve; Pop-Location
 ```
+
+> Linux/WSL/CI users can substitute the equivalent `make ws2025-core` / `make ws2025-core-msdn` / `make ws2025-core-smoke` / `make ws2025-core-smoke-destroy` Makefile targets. GNU make is not installed on the canonical Windows build host -- the pwsh-native commands above are canonical there per [`memory/feedback_build_host_pwsh_native.md`](../memory/feedback_build_host_pwsh_native.md).
 
 ## Verification checklist
 
@@ -146,10 +152,10 @@ Windows's "system-managed" pagefile grows unpredictably (up to 3× RAM). On thin
 
 ```powershell
 cd "F:\_CODING_\…\nexus-infra-vmware"
-make ws2025-core-smoke-destroy                                            # if a smoke VM exists
+Push-Location terraform\ws2025-core-smoke; terraform destroy -auto-approve; Pop-Location   # if a smoke VM exists
 Remove-Item -Recurse -Force H:\VMS\NexusPlatform\_templates\ws2025-core -ErrorAction SilentlyContinue
-make ws2025-core                                                          # rebuild template
-make ws2025-core-smoke                                                    # verify
+Push-Location packer\ws2025-core;          packer build .;                Pop-Location     # rebuild template
+Push-Location terraform\ws2025-core-smoke; terraform apply -auto-approve; Pop-Location     # verify
 ```
 
 ## Known gotchas (real ones, from first build)

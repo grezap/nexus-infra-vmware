@@ -166,7 +166,7 @@ packer build packer/ws2025-core      # product_source defaults to "evaluation"
 ### Rotate a key
 
 1. `vault kv put nexus/windows/product-keys/<template> key=... source=msdn edition=...`
-2. `make <template>`   (Packer rebuild)
+2. Rebuild the Packer template -- pwsh-native: `Push-Location packer\<template>; packer build .; Pop-Location` (Linux/WSL/CI: `make <template>`)
 3. `terraform -chdir=terraform/<env> apply -replace=module.<vm>`   (rolling replace)
 
 ### Audit activation status across the fleet

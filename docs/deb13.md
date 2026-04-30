@@ -40,11 +40,11 @@ Prerequisites:
 ```powershell
 # 1. Build the template (~7 min)
 cd "F:\_CODING_\…\nexus-infra-vmware"
-make deb13
+Push-Location packer\deb13; packer build .; Pop-Location
 # Template lands at H:\VMS\NexusPlatform\_templates\deb13\deb13.vmx
 
 # 2. Smoke-test via the reusable module (~10 sec)
-make deb13-smoke
+Push-Location terraform\deb13-smoke; terraform apply -auto-approve; Pop-Location
 # VM lands at H:\VMS\NexusPlatform\90-smoke\deb13-smoke\deb13-smoke.vmx
 
 # 3. Find its DHCP lease (issued by nexus-gateway's dnsmasq)
@@ -57,8 +57,10 @@ Test-NetConnection <ip> -Port 9100
 ssh nexusadmin@<ip>     # Linux remote shell defaults to bash -- no wrapper needed
 
 # 5. Tear down
-make deb13-smoke-destroy
+Push-Location terraform\deb13-smoke; terraform destroy -auto-approve; Pop-Location
 ```
+
+> Linux/WSL/CI users can substitute the equivalent `make deb13` / `make deb13-smoke` / `make deb13-smoke-destroy` Makefile targets. GNU make is not installed on the canonical Windows build host -- the pwsh-native commands above are canonical there per [`memory/feedback_build_host_pwsh_native.md`](../memory/feedback_build_host_pwsh_native.md).
 
 ## Verification checklist
 
@@ -142,8 +144,8 @@ The role drops a `/etc/ssh/sshd_config.d/10-nexus-hardening.conf` snippet rather
 
 ```powershell
 cd "F:\_CODING_\…\nexus-infra-vmware"
-make deb13-smoke-destroy                                    # if a smoke VM exists
+Push-Location terraform\deb13-smoke; terraform destroy -auto-approve; Pop-Location   # if a smoke VM exists
 Remove-Item -Recurse -Force H:\VMS\NexusPlatform\_templates\deb13 -ErrorAction SilentlyContinue
-make deb13                                                  # rebuild template
-make deb13-smoke                                            # verify
+Push-Location packer\deb13;          packer build .;                Pop-Location     # rebuild template
+Push-Location terraform\deb13-smoke; terraform apply -auto-approve; Pop-Location     # verify
 ```

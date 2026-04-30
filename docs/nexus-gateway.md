@@ -66,11 +66,13 @@ Prerequisites:
 ```powershell
 # 1. Build the Packer template (~7 min — downloads Debian 13 netinst ISO, preseed, Ansible)
 cd "F:\_CODING_\…\nexus-infra-vmware"
-make gateway
+Push-Location packer\nexus-gateway
+packer build -var "output_directory=H:/VMS/NexusPlatform/_templates/nexus-gateway" nexus-gateway.pkr.hcl
+Pop-Location
 # Template lands at: H:\VMS\NexusPlatform\_templates\nexus-gateway\nexus-gateway.vmx
 
 # 2. Deploy the running instance (clones template → rewrites NICs → powers on)
-make gateway-apply
+Push-Location terraform\gateway; terraform apply -auto-approve; Pop-Location
 # Instance lands at: H:\VMS\NexusPlatform\00-edge\nexus-gateway\nexus-gateway.vmx
 
 # 3. Verify
@@ -78,6 +80,8 @@ Test-NetConnection 192.168.70.1 -Port 53
 Test-NetConnection 192.168.70.1 -Port 22
 nslookup one.one.one.one 192.168.70.1
 ```
+
+> Linux/WSL/CI users can substitute the equivalent `make gateway` / `make gateway-apply` Makefile targets. GNU make is not installed on the canonical Windows build host -- the pwsh-native commands above are canonical there per [`memory/feedback_build_host_pwsh_native.md`](../memory/feedback_build_host_pwsh_native.md).
 
 Expected result: 53 and 22 return `TcpTestSucceeded : True`; `nslookup` resolves `1.1.1.1` via the gateway.
 
@@ -149,12 +153,13 @@ curl -I https://cdimage.debian.org | head -1
 If nexus-gateway becomes corrupted:
 
 ```powershell
-cd terraform\gateway
-terraform destroy -auto-approve
+Push-Location terraform\gateway; terraform destroy -auto-approve; Pop-Location
 
-cd ..\..
-make gateway          # rebuild template
-make gateway-apply    # redeploy
+Push-Location packer\nexus-gateway
+packer build -var "output_directory=H:/VMS/NexusPlatform/_templates/nexus-gateway" nexus-gateway.pkr.hcl
+Pop-Location                                                                            # rebuild template
+
+Push-Location terraform\gateway; terraform apply -auto-approve; Pop-Location            # redeploy
 ```
 
 Total recovery time: ~6 minutes on NVMe.

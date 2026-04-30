@@ -1,6 +1,6 @@
 # ws2025-desktop — Windows Server 2025 Desktop Experience template
 
-**Phase:** 0.B.5 · **Builds:** `make ws2025-desktop` · **Smoke:** `make ws2025-desktop-smoke`
+**Phase:** 0.B.5 · **Builds:** `Push-Location packer\ws2025-desktop; packer build .; Pop-Location` · **Smoke:** `Push-Location terraform\ws2025-desktop-smoke; terraform apply -auto-approve; Pop-Location` · *(Linux/WSL/CI: `make ws2025-desktop` / `make ws2025-desktop-smoke`)*
 
 Sibling of [`ws2025-core`](ws2025-core.md). The two templates share everything under [`packer/_shared/powershell/`](../packer/_shared/powershell/) — Autounattend template, identity/network/firewall/observability/baseline/sysprep scripts, the `nexusadmin` authorized_keys file. They diverge on three axes:
 

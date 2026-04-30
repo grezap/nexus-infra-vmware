@@ -49,8 +49,21 @@ Get-NetIPAddress -InterfaceAlias 'VMware Network Adapter VMnet10'  # should be 1
 cd "F:\_CODING_\Repos\Local Development And Test\Portfolio_Project_Ideas\workspace"
 git clone git@github.com:grezap/nexus-infra-vmware.git
 cd nexus-infra-vmware
-make init   # runs packer init + terraform init for gateway
+
+# packer init + terraform init across the tree (pwsh-native -- no GNU make required)
+foreach ($d in @(
+    'packer\nexus-gateway','packer\deb13','packer\ubuntu24',
+    'packer\ws2025-core','packer\ws2025-desktop','packer\win11ent','packer\vault'
+)) { Push-Location $d; packer init .; Pop-Location }
+
+foreach ($d in @(
+    'terraform\gateway','terraform\deb13-smoke','terraform\ubuntu24-smoke',
+    'terraform\ws2025-core-smoke','terraform\ws2025-desktop-smoke','terraform\win11ent-smoke',
+    'terraform\envs\foundation','terraform\envs\security'
+)) { Push-Location $d; terraform init; Pop-Location }
 ```
+
+> The repo also ships a `Makefile` with equivalent `init` / `validate` / `<template>` targets for Linux/WSL/CI contexts, but **GNU make is not installed on the canonical Windows build host** -- the pwsh-native commands above (and the `scripts/<env>.ps1` wrappers introduced from §1c onward) are canonical for Windows operators per [`memory/feedback_build_host_pwsh_native.md`](../memory/feedback_build_host_pwsh_native.md).
 
 ### 0.4 SSH client setup on the build host (one-time)
 
@@ -129,10 +142,12 @@ Full deep-dive: [`docs/nexus-gateway.md`](nexus-gateway.md).
 cd "F:\_CODING_\Repos\Local Development And Test\Portfolio_Project_Ideas\workspace\nexus-infra-vmware"
 
 # Build the template (~7 min)
-make gateway
+Push-Location packer\nexus-gateway
+packer build -var "output_directory=H:/VMS/NexusPlatform/_templates/nexus-gateway" nexus-gateway.pkr.hcl
+Pop-Location
 
 # Deploy the running instance (~7 sec)
-make gateway-apply
+Push-Location terraform\gateway; terraform apply -auto-approve; Pop-Location
 
 # Sanity check
 Test-NetConnection 192.168.70.1 -Port 53
@@ -140,10 +155,10 @@ Test-NetConnection 192.168.70.1 -Port 22
 nslookup one.one.one.one 192.168.70.1
 
 # Tear down (destroys instance, template survives)
-make gateway-destroy
+Push-Location terraform\gateway; terraform destroy -auto-approve; Pop-Location
 ```
 
-**If the destination path already exists** before `make gateway`, wipe it first so Packer doesn't conflate runs:
+**If the destination path already exists** before the gateway template build, wipe it first so Packer doesn't conflate runs:
 
 ```powershell
 Remove-Item -Recurse -Force H:\VMS\NexusPlatform\_templates\nexus-gateway -ErrorAction SilentlyContinue
@@ -168,11 +183,11 @@ Full deep-dive: [`docs/deb13.md`](deb13.md). Parent image for ~60 of the 65 lab 
 cd "F:\_CODING_\Repos\Local Development And Test\Portfolio_Project_Ideas\workspace\nexus-infra-vmware"
 
 # Build the template (~7–8 min)
-make deb13
+Push-Location packer\deb13; packer build .; Pop-Location
 # Template lands at H:\VMS\NexusPlatform\_templates\deb13\deb13.vmx
 
 # Smoke-test the template via terraform/modules/vm/ (~10 sec)
-make deb13-smoke
+Push-Location terraform\deb13-smoke; terraform apply -auto-approve; Pop-Location
 # Clone lands at H:\VMS\NexusPlatform\90-smoke\deb13-smoke\deb13-smoke.vmx
 # It will DHCP from nexus-gateway in 192.168.70.200-.250.
 
@@ -184,16 +199,16 @@ Test-NetConnection <ip> -Port 9100
 ssh nexusadmin@<ip>     # Linux remote shell defaults to bash — no wrapper needed
 
 # Tear down
-make deb13-smoke-destroy
+Push-Location terraform\deb13-smoke; terraform destroy -auto-approve; Pop-Location
 ```
 
 ### 1a.1 Rebuilding from scratch
 
 ```powershell
-make deb13-smoke-destroy                                                       # if a smoke VM exists
+Push-Location terraform\deb13-smoke; terraform destroy -auto-approve; Pop-Location   # if a smoke VM exists
 Remove-Item -Recurse -Force H:\VMS\NexusPlatform\_templates\deb13 -ErrorAction SilentlyContinue
-make deb13
-make deb13-smoke                                                               # verify
+Push-Location packer\deb13;          packer build .;                Pop-Location     # rebuild template
+Push-Location terraform\deb13-smoke; terraform apply -auto-approve; Pop-Location     # verify
 ```
 
 ### 1a.2 Reusing the module for real role VMs
@@ -239,13 +254,17 @@ cd "F:\_CODING_\Repos\Local Development And Test\Portfolio_Project_Ideas\workspa
 # Build the template — evaluation path (default; 180-day eval, no product key).
 # Eval ISO must be staged at H:/VMS/ISO/WindowsServer2025Evaluation.iso.
 # First build is slow: ~15 min Setup + ~25 min PowerShell provisioning + Tools install.
-make ws2025-core
+Push-Location packer\ws2025-core; packer build .; Pop-Location
 
 # MSDN / retail path (owner only, requires bootstrap JSON with product key):
-make ws2025-core-msdn
+Push-Location packer\ws2025-core
+packer build `
+    -var "product_source=msdn" `
+    -var "bootstrap_keys_file=$env:USERPROFILE/.nexus/secrets/windows-keys.json" .
+Pop-Location
 
 # Smoke-test
-make ws2025-core-smoke
+Push-Location terraform\ws2025-core-smoke; terraform apply -auto-approve; Pop-Location
 # VM lands at H:/VMS/NexusPlatform/90-smoke/ws2025-core-smoke/*.vmx
 
 # Find its lease + SSH in (assumes §0.4 SSH client setup; otherwise prepend `-i $HOME\.ssh\nexus_gateway_ed25519`)
@@ -255,7 +274,7 @@ Test-NetConnection <ip> -Port 9182    # windows_exporter
 # Wrap PowerShell commands in `'powershell -NoProfile -Command "..."'` -- Win32-OpenSSH default remote shell is cmd.exe.
 ssh nexusadmin@<ip> 'powershell -NoProfile -Command "hostname; (Get-Service sshd, windows_exporter).Status"'
 
-make ws2025-core-smoke-destroy
+Push-Location terraform\ws2025-core-smoke; terraform destroy -auto-approve; Pop-Location
 ```
 
 ### 1b.1 The gotcha worth remembering (Windows template)
@@ -297,14 +316,9 @@ pwsh -File scripts\foundation.ps1 cycle
 
 # Smoke-only (after apply already succeeded)
 pwsh -File scripts\foundation.ps1 smoke
-
-# Equivalent Makefile targets exist (`make foundation-apply`,
-# `make foundation-destroy`, `make foundation-smoke`) but require GNU make,
-# which is not installed on the current Windows pwsh build host. The
-# pwsh wrapper above is canonical on Windows; the Makefile remains
-# functional in Linux/WSL/CI contexts -- see
-# memory/feedback_build_host_pwsh_native.md.
 ```
+
+> The repo's `Makefile` ships equivalent targets (`foundation-apply`, `foundation-destroy`, `foundation-smoke`) for Linux/WSL/CI runners. The Windows build host has no GNU make -- prefer the `pwsh -File scripts\foundation.ps1 ...` wrapper above per [`memory/feedback_build_host_pwsh_native.md`](../memory/feedback_build_host_pwsh_native.md).
 
 ### 1c.1 Lease discovery + smoke probe
 
@@ -694,7 +708,7 @@ terraform apply -target=null_resource.dc_password_policy -auto-approve
 terraform apply -var dc_password_min_length=14 -auto-approve
 ```
 
-**Smoke gate:** the canonical end-to-end check on Windows is `pwsh -File scripts\foundation.ps1 smoke` (which delegates to `scripts\smoke-0.C.4.ps1`). It runs 28 checks + summarizes pass/fail with a non-zero exit on any failure -- wire it into CI or run it manually after every apply. The Makefile equivalent is `make foundation-smoke` (Linux/WSL only; see `memory/feedback_build_host_pwsh_native.md` for why pwsh is canonical on the build host). The individual commands below are useful for ad-hoc debugging when a check fails:
+**Smoke gate:** the canonical end-to-end check on Windows is `pwsh -File scripts\foundation.ps1 smoke` (which delegates to `scripts\smoke-0.C.4.ps1`). It runs 28 checks + summarizes pass/fail with a non-zero exit on any failure -- wire it into CI or run it manually after every apply. The Makefile equivalent (`foundation-smoke` target) is provided for Linux/WSL/CI only; pwsh is canonical on the Windows build host per [`memory/feedback_build_host_pwsh_native.md`](../memory/feedback_build_host_pwsh_native.md). The individual commands below are useful for ad-hoc debugging when a check fails:
 
 ```powershell
 # OU layout + jumpbox move
@@ -1225,7 +1239,7 @@ Don't use `--no-verify`. Read the hook output, fix the underlying issue (usually
 
 ```
 nexus-infra-vmware/
-├── Makefile                    # top-level targets: make gateway, make gateway-apply, …
+├── Makefile                    # Linux/WSL/CI targets (gateway, *-apply, *-destroy, *-smoke); on Windows use `scripts/<env>.ps1` wrappers instead
 ├── docs/
 │   ├── architecture.md         # whole-fleet design
 │   ├── licensing.md            # Windows licensing canon
