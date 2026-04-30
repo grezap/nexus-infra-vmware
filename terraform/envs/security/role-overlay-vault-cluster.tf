@@ -220,7 +220,7 @@ resource "null_resource" "vault_join_followers" {
 
   triggers = {
     init_id        = null_resource.vault_init_leader[0].id
-    join_overlay_v = "3" # v3 = -leader-ca-cert with leader's actual cert SCP'd in. v2 used -leader-tls-skip-verify which doesn't exist in `vault operator raft join` (`flag provided but not defined`); the supported flag is -leader-ca-cert=<path>. v1 had no peer-cert handling and failed with "failed to get raft challenge".
+    join_overlay_v = "4" # v4 = same as v3 + fix `$${ip}:` escape on the new "copying leader cert" log line (PS parses `$ip:` as scope qualifier; same bug pattern as ready_overlay_v=2). v3 = -leader-ca-cert. v2 = wrong flag. v1 = no peer cert.
   }
 
   depends_on = [null_resource.vault_init_leader]
@@ -282,7 +282,7 @@ resource "null_resource" "vault_join_followers" {
           # defined"). Pre-PKI, the supported path is -leader-ca-cert pointing
           # at the leader's actual self-signed cert. We SCP'd it to the build
           # host above; now SCP it to each follower at /tmp/vault-leader.crt.
-          Write-Host "[vault join] $ip: copying leader cert to /tmp/vault-leader.crt"
+          Write-Host "[vault join] $${ip}: copying leader cert to /tmp/vault-leader.crt"
           scp -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $tmpCertFile "$${user}@$${ip}:/tmp/vault-leader.crt" 2>&1 | Out-Null
           if ($LASTEXITCODE -ne 0) {
             throw "[vault join] scp of leader cert to $ip failed (rc=$LASTEXITCODE)"
