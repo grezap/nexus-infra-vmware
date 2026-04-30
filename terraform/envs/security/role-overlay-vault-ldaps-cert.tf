@@ -44,7 +44,7 @@ resource "null_resource" "vault_ldaps_cert" {
     int_common_name = var.vault_pki_intermediate_common_name
     leaf_ttl        = var.vault_ldaps_cert_ttl
     role_name       = var.vault_pki_role_name
-    ldaps_overlay_v = "1"
+    ldaps_overlay_v = "2" # v2: also install issuing_ca into LocalMachine\CA so Schannel can serve the full chain (without it, AD resets the TLS handshake during LDAPS bind from Vault). v1: leaf-only into LocalMachine\My (handshake reset).
   }
 
   depends_on = [null_resource.vault_pki_distribute_root, null_resource.vault_pki_roles]
@@ -69,14 +69,25 @@ resource "null_resource" "vault_ldaps_cert" {
       $rootToken = (Get-Content $keysFile | ConvertFrom-Json).root_token
 
       # ─── Idempotency probe: dc-nexus already has valid PKI-issued cert? ──
+      # v2: probe BOTH the leaf (LocalMachine\My) AND the intermediate
+      # (LocalMachine\CA). If either is missing, re-issue + re-install both
+      # so Schannel always has a full chain to serve. v1 probed only the leaf
+      # which let stale leaf-only installs short-circuit even after we
+      # learned Schannel resets the LDAPS handshake without the intermediate
+      # locally available.
       $probeRemote = @"
-        `$existing = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue | Where-Object {
+        `$leaf = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue | Where-Object {
           (`$_.Subject -match 'CN=$dcFqdn') -and
           (`$_.Issuer -match '$intCommonName') -and
           ((`$_.NotAfter - (Get-Date)).TotalDays -gt 30)
         } | Select-Object -First 1;
-        if (`$existing) {
-          Write-Output ('CERT_OK: ' + `$existing.Subject + ' valid until ' + `$existing.NotAfter.ToString('o'))
+        `$inter = Get-ChildItem Cert:\LocalMachine\CA -ErrorAction SilentlyContinue | Where-Object {
+          `$_.Subject -match 'CN=$intCommonName'
+        } | Select-Object -First 1;
+        if (`$leaf -and `$inter) {
+          Write-Output ('CERT_OK: leaf=' + `$leaf.Subject + ' valid until ' + `$leaf.NotAfter.ToString('o') + '; intermediate=' + `$inter.Subject)
+        } elseif (`$leaf -and -not `$inter) {
+          Write-Output 'CERT_INCOMPLETE_NO_INTERMEDIATE'
         } else {
           Write-Output 'CERT_MISSING_OR_EXPIRING'
         }
@@ -104,24 +115,30 @@ resource "null_resource" "vault_ldaps_cert" {
         throw "[ldaps-cert] vault write pki_int/issue returned non-JSON. Output:`n$issueRaw"
       }
 
-      $certPem = $issued.data.certificate
-      $keyPem  = $issued.data.private_key
+      $certPem    = $issued.data.certificate
+      $keyPem     = $issued.data.private_key
+      $issuingCa  = $issued.data.issuing_ca
       if (-not $certPem -or -not $keyPem) {
         throw "[ldaps-cert] issued data missing certificate or private_key"
       }
-      Write-Host "[ldaps-cert] issued cert ($($certPem.Length) chars) + key ($($keyPem.Length) chars)"
+      if (-not $issuingCa) {
+        throw "[ldaps-cert] issued data missing issuing_ca (intermediate) -- needed for Schannel chain build"
+      }
+      Write-Host "[ldaps-cert] issued cert ($($certPem.Length) chars) + key ($($keyPem.Length) chars) + intermediate ($($issuingCa.Length) chars)"
 
       # ─── Convert PEM -> PFX on build host (.NET; required for Windows import) ──
       $tmpDir = New-Item -ItemType Directory -Force -Path (Join-Path $env:TEMP "vault-ldaps-cert-$(Get-Random)")
       $pemCertFile = Join-Path $tmpDir 'cert.pem'
       $pemKeyFile  = Join-Path $tmpDir 'key.pem'
+      $pemIntFile  = Join-Path $tmpDir 'intermediate.pem'
       $pfxFile     = Join-Path $tmpDir 'dc-ldaps.pfx'
       # Random transit-only password for the PFX (used only between build host
       # PEM-to-PFX conversion and dc-nexus Import-PfxCertificate).
       $pfxPwd      = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 32 | ForEach-Object { [char]$_ })
 
-      Set-Content -Path $pemCertFile -Value $certPem -Encoding Ascii
-      Set-Content -Path $pemKeyFile  -Value $keyPem  -Encoding Ascii
+      Set-Content -Path $pemCertFile -Value $certPem   -Encoding Ascii
+      Set-Content -Path $pemKeyFile  -Value $keyPem    -Encoding Ascii
+      Set-Content -Path $pemIntFile  -Value $issuingCa -Encoding Ascii
 
       try {
         $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::CreateFromPemFile($pemCertFile, $pemKeyFile)
@@ -133,34 +150,57 @@ resource "null_resource" "vault_ldaps_cert" {
         throw "[ldaps-cert] PEM-to-PFX conversion failed: $_"
       }
 
-      # ─── SCP PFX to dc-nexus + import + restart NTDS ──────────────────
-      $remotePath = 'C:/Windows/Temp/dc-ldaps.pfx'
-      Write-Host "[ldaps-cert] scp PFX to $${dcIp}:$remotePath"
-      scp -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $pfxFile "$${user}@$${dcIp}:$remotePath" 2>&1 | Out-Null
+      # ─── SCP leaf PFX + intermediate PEM to dc-nexus ─────────────────
+      $remotePfxPath = 'C:/Windows/Temp/dc-ldaps.pfx'
+      $remoteIntPath = 'C:/Windows/Temp/dc-ldaps-intermediate.pem'
+      Write-Host "[ldaps-cert] scp PFX + intermediate PEM to $${dcIp}"
+      scp -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $pfxFile     "$${user}@$${dcIp}:$remotePfxPath" 2>&1 | Out-Null
       if ($LASTEXITCODE -ne 0) {
         Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
         throw "[ldaps-cert] scp of PFX failed (rc=$LASTEXITCODE)"
       }
+      scp -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $pemIntFile  "$${user}@$${dcIp}:$remoteIntPath" 2>&1 | Out-Null
+      if ($LASTEXITCODE -ne 0) {
+        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+        throw "[ldaps-cert] scp of intermediate PEM failed (rc=$LASTEXITCODE)"
+      }
 
+      # ─── Import: leaf+key -> LocalMachine\My, intermediate -> LocalMachine\CA ──
+      # Both stores are required: My holds the LDAPS cert + private key, CA
+      # holds the issuing intermediate so Schannel can build the full chain
+      # to serve during the TLS handshake. Without CA, Schannel resets the
+      # connection mid-handshake when a client tries to bind LDAPS.
       $importRemote = @"
         try {
-          # Remove any existing matching cert (re-issuing case)
+          # Remove any existing leaf cert with our subject (re-issuing case)
           Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue | Where-Object {
             `$_.Subject -match 'CN=$dcFqdn'
           } | ForEach-Object {
-            Write-Output ('removing existing cert: thumbprint=' + `$_.Thumbprint);
+            Write-Output ('removing existing leaf cert: thumbprint=' + `$_.Thumbprint);
             Remove-Item `$_.PSPath -Force
           };
 
           `$pwd = ConvertTo-SecureString '$pfxPwd' -AsPlainText -Force;
           `$imp = Import-PfxCertificate -FilePath 'C:\Windows\Temp\dc-ldaps.pfx' -CertStoreLocation 'Cert:\LocalMachine\My' -Password `$pwd -Exportable;
-          Write-Output ('imported cert: thumbprint=' + `$imp.Thumbprint + ' subject=' + `$imp.Subject + ' notAfter=' + `$imp.NotAfter.ToString('o'));
+          Write-Output ('imported leaf: thumbprint=' + `$imp.Thumbprint + ' subject=' + `$imp.Subject + ' notAfter=' + `$imp.NotAfter.ToString('o'));
 
-          Remove-Item 'C:\Windows\Temp\dc-ldaps.pfx' -Force;
+          # Remove any existing intermediate with our CN before re-importing
+          Get-ChildItem Cert:\LocalMachine\CA -ErrorAction SilentlyContinue | Where-Object {
+            `$_.Subject -match 'CN=$intCommonName'
+          } | ForEach-Object {
+            Write-Output ('removing existing intermediate: thumbprint=' + `$_.Thumbprint);
+            Remove-Item `$_.PSPath -Force
+          };
+
+          `$intImp = Import-Certificate -FilePath 'C:\Windows\Temp\dc-ldaps-intermediate.pem' -CertStoreLocation 'Cert:\LocalMachine\CA';
+          Write-Output ('imported intermediate: thumbprint=' + `$intImp.Thumbprint + ' subject=' + `$intImp.Subject);
+
+          Remove-Item 'C:\Windows\Temp\dc-ldaps.pfx'              -Force;
+          Remove-Item 'C:\Windows\Temp\dc-ldaps-intermediate.pem' -Force;
 
           Write-Output 'restarting NTDS to pick up new LDAPS cert (~10-30s outage)...';
           Restart-Service NTDS -Force;
-          Start-Sleep -Seconds 12;
+          Start-Sleep -Seconds 20;
           Write-Output ('NTDS service status: ' + (Get-Service NTDS).Status);
         } catch {
           Write-Output ('IMPORT_FAILED: ' + `$_);
@@ -179,24 +219,47 @@ resource "null_resource" "vault_ldaps_cert" {
       }
       Write-Host "[ldaps-cert] $($importOut.Trim())"
 
-      # ─── Verify LDAPS port responds on dc-nexus:636 ───────────────────
-      Write-Host "[ldaps-cert] verifying LDAPS port on $${dcIp}:636..."
-      Start-Sleep -Seconds 3
-      $verifyOk = $false
-      for ($i = 1; $i -le 6; $i++) {
+      # ─── Verify LDAPS handshake actually completes on dc-nexus:636 ────
+      # TCP-only check is not enough -- Schannel may accept the TCP open
+      # but reset the TLS handshake mid-flight if the cert chain is broken.
+      # Do a real SslStream.AuthenticateAsClient + read back the server cert
+      # so we know AD is actually serving LDAPS end-to-end before downstream
+      # overlays (auth/ldap config, secret-engine, rotate-role) try to bind.
+      Write-Host "[ldaps-cert] verifying LDAPS handshake on $${dcIp}:636..."
+      Start-Sleep -Seconds 5
+      $verifyOk      = $false
+      $verifySubject = ''
+      $verifyIssuer  = ''
+      $verifyError   = ''
+      for ($i = 1; $i -le 8; $i++) {
+        $tcp = $null
+        $ssl = $null
         try {
           $tcp = New-Object System.Net.Sockets.TcpClient
           $tcp.Connect($dcIp, 636)
-          if ($tcp.Connected) { $verifyOk = $true; $tcp.Close(); break }
+          $stream = $tcp.GetStream()
+          # Skip-verify callback: this is a probe of WHAT cert AD is
+          # serving, not a chain-trust check. Vault handles trust on its
+          # own with the certificate=@ca-bundle field at bind time.
+          $ssl = New-Object System.Net.Security.SslStream($stream, $false, { param($s, $cert, $chain, $err) $true })
+          $ssl.AuthenticateAsClient($dcFqdn)
+          $verifySubject = $ssl.RemoteCertificate.Subject
+          $verifyIssuer  = $ssl.RemoteCertificate.Issuer
+          $verifyOk = $true
+          break
         } catch {
-          Write-Host "[ldaps-cert] LDAPS not yet listening (attempt $i/6), sleeping 5s..."
+          $verifyError = $_.Exception.Message
+          Write-Host "[ldaps-cert] LDAPS handshake not ready (attempt $i/8): $verifyError -- sleeping 5s..."
           Start-Sleep -Seconds 5
+        } finally {
+          if ($ssl) { $ssl.Dispose() }
+          if ($tcp) { $tcp.Close() }
         }
       }
       if (-not $verifyOk) {
-        throw "[ldaps-cert] dc-nexus is NOT serving LDAPS on $${dcIp}:636 after 30s wait"
+        throw "[ldaps-cert] dc-nexus LDAPS handshake on $${dcIp}:636 still failing after 8 retries (last error: $verifyError)"
       }
-      Write-Host "[ldaps-cert] dc-nexus serving LDAPS on $${dcIp}:636"
+      Write-Host "[ldaps-cert] dc-nexus LDAPS handshake OK -- subject=$verifySubject, issuer=$verifyIssuer"
     PWSH
   }
 }
