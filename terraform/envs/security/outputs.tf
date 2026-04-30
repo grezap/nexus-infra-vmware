@@ -130,9 +130,16 @@ output "next_step" {
       vault login -method=ldap -username=nexusadmin
       # Member of ${var.vault_ldap_admin_group} -> nexus-admin policy (full sudo)
 
-      vault read ldap/static-cred/${var.vault_ldap_demo_rotate_account}
-      # Returns the current Vault-managed password for the demo AD account
-      # (rotated every ${var.vault_ldap_demo_rotation_period}).
+    Demo rotate-role (DEFERRED to 0.D.5):
+      The static rotate-role for ${var.vault_ldap_demo_rotate_account} is NOT
+      enabled by default in 0.D.3 because AD requires LDAPS/StartTLS for
+      password-change operations (Set-ADAccountPassword via the unicodePwd
+      attribute is hard-blocked over plain LDAP/389, regardless of the
+      LDAPServerIntegrity signing setting). The rotate-role's first apply
+      attempts to write a fresh password and AD returns
+      "LDAP Result Code 8: Strong Auth Required". 0.D.5 lands the LDAPS
+      overlay (PKI-issued cert on dc-nexus + ldaps://192.168.70.240:636);
+      from then on, set enable_vault_ldap_rotate_role=true to activate.
 
     Build-host reachability invariant (per memory/feedback_lab_host_reachability.md)
     -- every Vault node must be SSH/22 + 8200 reachable from the build host:

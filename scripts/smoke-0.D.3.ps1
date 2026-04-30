@@ -39,6 +39,12 @@
 .PARAMETER DemoRotateAccount
   Expected static-role / demo svc account name. Default svc-demo-rotated.
 
+.PARAMETER CheckRotateRole
+  If $true, runs the static-rotate-role + static-cred checks. Default $false
+  because AD requires LDAPS/StartTLS for password-change operations (the
+  rotate-role's first-apply write); plain LDAP/389 cannot rotate. Re-enable
+  this check once 0.D.5 lands the LDAPS overlay.
+
 .PARAMETER SkipPhase0D2
   If set, skips the chained 0.D.2 gate and runs only the 0.D.3 LDAP checks.
   Useful when iterating on LDAP overlays alone. Default $false.
@@ -62,6 +68,7 @@ param(
     [string]$OperatorGroup     = 'nexus-vault-operators',
     [string]$ReaderGroup       = 'nexus-vault-readers',
     [string]$DemoRotateAccount = 'svc-demo-rotated',
+    [bool]  $CheckRotateRole   = $false,
     [switch]$SkipPhase0D2
 )
 
@@ -260,29 +267,35 @@ Test-Check 'ldap/config has schema=ad + password_policy=nexus-ad-rotated' `
         } catch { $false }
     }
 
-# ─── 7. Static rotate-role + cred lookup ─────────────────────────────────
+# ─── 7. Static rotate-role + cred lookup (skipped by default -- requires LDAPS) ─────
 Write-Section 'Static rotate-role for demo AD account'
-Test-Check "ldap/static-role/$DemoRotateAccount exists" `
-    { Invoke-VaultCli -Ip $Vault1Ip -VaultCmd "read -format=json ldap/static-role/$DemoRotateAccount" -Token $rootToken } `
-    {
-        param($o)
-        try {
-            $j = $o | ConvertFrom-Json
-            $j.data.username -eq $DemoRotateAccount
-        } catch { $false }
-    }
+if (-not $CheckRotateRole) {
+    Write-Host "[SKIP] static-role + static-cred checks -- AD requires LDAPS/StartTLS for password-change operations" -ForegroundColor Yellow
+    Write-Host "[SKIP] re-enable once 0.D.5 LDAPS overlay lands (vault_ldap_url -> ldaps://...:636 + DC cert)" -ForegroundColor Yellow
+    Write-Host "[SKIP] to run these checks anyway: pwsh -File scripts\smoke-0.D.3.ps1 -CheckRotateRole `$true" -ForegroundColor Yellow
+} else {
+    Test-Check "ldap/static-role/$DemoRotateAccount exists" `
+        { Invoke-VaultCli -Ip $Vault1Ip -VaultCmd "read -format=json ldap/static-role/$DemoRotateAccount" -Token $rootToken } `
+        {
+            param($o)
+            try {
+                $j = $o | ConvertFrom-Json
+                $j.data.username -eq $DemoRotateAccount
+            } catch { $false }
+        }
 
-Test-Check "ldap/static-cred/$DemoRotateAccount returns current Vault-managed password" `
-    { Invoke-VaultCli -Ip $Vault1Ip -VaultCmd "read -format=json ldap/static-cred/$DemoRotateAccount" -Token $rootToken } `
-    {
-        param($o)
-        try {
-            $j = $o | ConvertFrom-Json
-            ($j.data.username -eq $DemoRotateAccount) -and `
-            ([string]::IsNullOrEmpty($j.data.password) -eq $false) -and `
-            ($j.data.last_vault_rotation)
-        } catch { $false }
-    }
+    Test-Check "ldap/static-cred/$DemoRotateAccount returns current Vault-managed password" `
+        { Invoke-VaultCli -Ip $Vault1Ip -VaultCmd "read -format=json ldap/static-cred/$DemoRotateAccount" -Token $rootToken } `
+        {
+            param($o)
+            try {
+                $j = $o | ConvertFrom-Json
+                ($j.data.username -eq $DemoRotateAccount) -and `
+                ([string]::IsNullOrEmpty($j.data.password) -eq $false) -and `
+                ($j.data.last_vault_rotation)
+            } catch { $false }
+        }
+}
 
 # ─── Summary ──────────────────────────────────────────────────────────────
 Write-Host ''

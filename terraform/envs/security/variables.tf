@@ -280,9 +280,9 @@ variable "enable_vault_ldap_secret_engine" {
 }
 
 variable "enable_vault_ldap_rotate_role" {
-  description = "Toggle: define the static rotate-role for svc-demo-rotated. First apply rotates the AD password to a Vault-managed value; subsequent reads return the current pwd via `vault read ldap/static-cred/<name>`. Default true."
+  description = "Toggle: define the static rotate-role for svc-demo-rotated. AD requires LDAPS/StartTLS for password-change operations (Vault calls Set-ADAccountPassword which writes the unicodePwd attribute). Plain LDAP/389 binds work for reads + auth, but rotate-role's first-apply write fails with 'LDAP Result Code 8 Strong Auth Required: requires binds to turn on integrity checking if SSL\\TLS not active'. Default FALSE -- enable once 0.D.5 lands an LDAPS overlay (PKI-issued cert on dc-nexus + ldaps://192.168.70.240:636 in vault_ldap_url, OR starttls=true). On first apply Vault rotates the AD password to a Vault-managed value; subsequent reads return the current pwd via `vault read ldap/static-cred/<name>`."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "vault_ad_bind_creds_file" {

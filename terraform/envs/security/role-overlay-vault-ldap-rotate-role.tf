@@ -1,6 +1,23 @@
 /*
  * role-overlay-vault-ldap-rotate-role.tf -- Phase 0.D.3 step 4/4 (security)
  *
+ * STATUS: gated OFF by default in 0.D.3 (var.enable_vault_ldap_rotate_role
+ * defaults to false). Reason: AD requires LDAPS or LDAP+StartTLS for
+ * password-change operations (writing the unicodePwd attribute). Plain
+ * LDAP/389 binds work for reads + auth, so auth/ldap is fully functional,
+ * but Vault's first-apply rotate of svc-demo-rotated fails with
+ * "LDAP Result Code 8 Strong Auth Required" -- AD enforces TLS for this
+ * specific operation regardless of the LDAPServerIntegrity signing setting.
+ * Canonized in memory/feedback_ad_ldaps_password_writes.md.
+ *
+ * Re-enable after 0.D.5 lands the LDAPS overlay:
+ *   1. Issue a cert via pki_int/issue/vault-server for dc-nexus.nexus.lab
+ *      (foundation-side overlay, TBD)
+ *   2. Import cert into dc-nexus's Local Computer Personal cert store; AD
+ *      DS auto-detects + serves LDAPS on TCP/636
+ *   3. Flip var.vault_ldap_url to ldaps://192.168.70.240:636
+ *   4. terraform apply -var enable_vault_ldap_rotate_role=true
+ *
  * Define the static rotate-role for `svc-demo-rotated`. From this overlay
  * forward, Vault owns that AD account's password and rotates it every
  * `var.vault_ldap_demo_rotation_period` (default 24h).

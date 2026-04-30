@@ -1207,8 +1207,15 @@ ssh nexusadmin@192.168.70.121 "VAULT_TOKEN=<root> VAULT_SKIP_VERIFY=true VAULT_A
 
 ### 1i.5 NOT in scope for 0.D.3 (deferred)
 
+- **Demo rotate-role for `svc-demo-rotated`** — created the AD account in foundation, but the Vault static rotate-role's first-apply write fails because AD requires LDAPS/StartTLS for password-change operations. Plain LDAP/389 binds work for reads and user authentication (so `auth/ldap` login is fully functional), but `Set-ADAccountPassword` (via the LDAP `unicodePwd` attribute) is hard-blocked over plain LDAP regardless of the `LDAPServerIntegrity` signing setting. AD returns:
+  ```
+  LDAP Result Code 8 "Strong Auth Required":
+    The server requires binds to turn on integrity checking
+    if SSL\TLS are not already active on the connection
+  ```
+  Default `enable_vault_ldap_rotate_role=false` in `terraform/envs/security/variables.tf`. The svc-demo-rotated account exists (foundation creates it with a random initial pwd); only Vault's ownership of its rotation is deferred. Re-enable once 0.D.5 lands the LDAPS overlay (PKI-issued cert on dc-nexus + `ldaps://192.168.70.240:636`).
 - **0.D.4** — migrate foundation plaintext bootstrap creds (DSRM, local Administrator, nexusadmin) into Vault KV; refactor 0.C.* role overlays to read via `vault_kv_secret_v2` data sources
-- **0.D.5** — Transit auto-unseal + GMSA + tighten foundation `MinPasswordLength=14` + Vault Agent on member servers (where short-TTL leaf cert auto-rotation lands; also where LDAPS replaces plain LDAP/389)
+- **0.D.5** — Transit auto-unseal + GMSA + tighten foundation `MinPasswordLength=14` + Vault Agent on member servers + **LDAPS overlay enabling rotate-role**
 - **mTLS Vault clients** — Phase 0.D.5+
 - **Multi-realm AD trust** — not in scope for a single-forest lab
 - **Tail housekeeping** — `vms.yaml` 2 GB RAM correction + `vault-firstboot.sh` /etc/hosts fix (committed; awaits next template rebuild)
