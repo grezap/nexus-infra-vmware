@@ -220,7 +220,7 @@ resource "null_resource" "vault_join_followers" {
 
   triggers = {
     init_id        = null_resource.vault_init_leader[0].id
-    join_overlay_v = "1"
+    join_overlay_v = "2" # v2 = `-leader-tls-skip-verify` on raft join. v1 failed with "failed to get raft challenge" Code 500 from the leader -- the follower's Vault makes an HTTPS callback to the leader's API to fetch the challenge, but each clone has its own self-signed TLS cert and nothing trusts anything else pre-PKI (0.D.2). The flag is the peer-side analog of VAULT_SKIP_VERIFY for the local API.
   }
 
   depends_on = [null_resource.vault_init_leader]
@@ -257,9 +257,14 @@ resource "null_resource" "vault_join_followers" {
         }
 
         if (-not $statusJson -or $statusJson.initialized -ne $true) {
-          # Fresh node -- run raft join
+          # Fresh node -- run raft join.
+          # `-leader-tls-skip-verify` skips TLS verification when the follower's
+          # Vault calls the leader's API to fetch the raft challenge. Each clone
+          # has its own self-signed bootstrap TLS cert; nothing trusts anything
+          # else until Phase 0.D.2 issues from a shared PKI. v1 of this overlay
+          # omitted the flag and failed with "failed to get raft challenge" 500.
           Write-Host "[vault join] $ip joining raft cluster at $leaderApi..."
-          $joinOut = ssh -o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "VAULT_SKIP_VERIFY=true vault operator raft join -address=https://127.0.0.1:8200 $leaderApi" 2>&1 | Out-String
+          $joinOut = ssh -o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "VAULT_SKIP_VERIFY=true vault operator raft join -address=https://127.0.0.1:8200 -leader-tls-skip-verify=true $leaderApi" 2>&1 | Out-String
           if ($LASTEXITCODE -ne 0) {
             throw "[vault join] raft join on $ip failed (rc=$LASTEXITCODE). Output:`n$joinOut"
           }
