@@ -225,6 +225,25 @@ Write-Section 'End-to-end LDAP login (svc-vault-smoke -> nexus-reader policy)'
 $smokeUser = $bindCreds.smoke_username
 $smokePass = $bindCreds.smoke_password
 
+# Pre-step: unlock the smoke user at the Vault layer. Vault tracks failed
+# login attempts per (mount-accessor, user) and locks the user after
+# lockout_threshold=5 failed attempts in lockout_counter_reset_duration=15m
+# (defaults). Iteration cycles trivially exceed the threshold and the next
+# legitimate login attempt returns "Code 403 permission denied" with
+# journal "login attempts exceeded, user is locked out". Idempotent: the
+# unlock API is safe to call when the user isn't locked. Without this,
+# every smoke re-run after a single failure triggers the lockout cascade.
+$unlockBash = @"
+set -euo pipefail
+export VAULT_TOKEN='$rootToken'
+export VAULT_SKIP_VERIFY=true
+export VAULT_ADDR=https://127.0.0.1:8200
+ACCESSOR=`$(vault auth list -format=json | jq -r '."ldap/".accessor')
+vault write -f "sys/locked-users/`$ACCESSOR/unlock/$smokeUser" >/dev/null 2>&1 || true
+"@
+$unlockB64 = [Convert]::ToBase64String([System.Text.UTF8Encoding]::new($false).GetBytes($unlockBash))
+ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$Vault1Ip "echo '$unlockB64' | base64 -d | bash" 2>&1 | Out-Null
+
 # Avoid shell-escape issues entirely by base64-transiting the password to the
 # remote node, decoding it into a tmpfile, then using Vault's `@file` field
 # syntax to read the value from the file. No layer of the pipeline (PS string
