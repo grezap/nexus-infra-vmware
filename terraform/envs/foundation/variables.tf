@@ -227,9 +227,9 @@ variable "mac_vault_3_primary" {
 # them up without a shared state backend (pre-Phase-0.E Consul KV).
 
 variable "enable_vault_ad_integration" {
-  description = "Master toggle: create AD objects (svc accounts + groups) for Vault LDAP integration. Default false -- foundation-only deploys do not touch AD-for-Vault. Set true via -Vars when bringing up 0.D.3 alongside envs/security/."
+  description = "Master toggle: create AD objects (svc accounts + groups) for Vault LDAP integration. Default true (changed from false on 2026-05-01 after partial-apply landmine -- a foundation apply WITHOUT this var on a lab that had previously enabled it would treat the AD objects as drift and DESTROY svc-vault-ldap + svc-vault-smoke + svc-demo-rotated + the 3 security groups + the OU=ServiceAccounts ACL delegation, breaking the entire Vault LDAP integration in seconds. Same gotcha class as enable_vault_dhcp_reservations -- canonized in memory/feedback_terraform_partial_apply_destroys_resources.md). Operators with foundation-only deploys (no Vault) opt out via -Vars enable_vault_ad_integration=false."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "enable_vault_ad_bind_account" {
