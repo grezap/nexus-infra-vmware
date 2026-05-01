@@ -180,15 +180,18 @@ variable "dc_time_external_peers" {
 # ─── Phase 0.D.1 — Vault cluster gateway dnsmasq dhcp-host reservations ───
 # When the security env (Vault cluster) is being deployed, the gateway needs
 # per-MAC reservations so vault-1/2/3 DHCP into canonical IPs .121/.122/.123
-# (per nexus-platform-plan/docs/infra/vms.yaml lines 55-57). Default false
-# so existing foundation-only deploys don't touch the gateway. Set true via
-# `pwsh -File scripts\foundation.ps1 apply -Vars enable_vault_dhcp_reservations=true`
-# OR drop into terraform.tfvars, OR set a default override via -var.
+# (per nexus-platform-plan/docs/infra/vms.yaml lines 55-57). Default true
+# (changed from false on 2026-05-01 after a foundation apply -Vars enable_vault_ad_integration=true
+#  -- without also passing enable_vault_dhcp_reservations=true -- destroyed
+#  the previously-written reservations as drift, bouncing all 3 Vault VMs
+#  into the dynamic pool and breaking the entire Vault cluster + smoke gate).
+# Operators who genuinely don't want gateway reservations (foundation-only
+# deploys with no Vault) can opt out with -Vars enable_vault_dhcp_reservations=false.
 
 variable "enable_vault_dhcp_reservations" {
-  description = "Toggle: write dhcp-host reservations on nexus-gateway pinning vault-1/2/3 MACs to canonical VMnet11 IPs (192.168.70.121/.122/.123 per nexus-platform-plan/docs/infra/vms.yaml). MUST be true before applying envs/security/, otherwise the Vault clones DHCP into the dynamic pool and the cluster's canonical IPs are wrong. Default false to avoid surprising existing foundation-only deploys."
+  description = "Toggle: write dhcp-host reservations on nexus-gateway pinning vault-1/2/3 MACs to canonical VMnet11 IPs (192.168.70.121/.122/.123 per nexus-platform-plan/docs/infra/vms.yaml). MUST be true before applying envs/security/, otherwise the Vault clones DHCP into the dynamic pool and the cluster's canonical IPs are wrong. Default true (changed 2026-05-01: false-default trap silently destroys reservations on partial apply)."
   type        = bool
-  default     = false
+  default     = true
 }
 
 # Vault MAC variables -- defaults match envs/security/'s defaults so changes
