@@ -51,7 +51,7 @@ resource "null_resource" "vault_ldap_rotate_role" {
     secret_engine_id = length(null_resource.vault_ldap_secret_engine) > 0 ? null_resource.vault_ldap_secret_engine[0].id : "disabled"
     account_name     = var.vault_ldap_demo_rotate_account
     rotation_period  = var.vault_ldap_demo_rotation_period
-    rotate_overlay_v = "1"
+    rotate_overlay_v = "2" # v2 = skip_import_rotation=true + explicit `vault write -force ldap/rotate-role/<name>` after create. Default Vault behavior on static-role create is to bind AS the target with the unknown pre-existing password, which AD rejects with data 52e (ERROR_LOGON_FAILURE / "Invalid Credentials"). With the skip flag set, Vault creates the role without that bind attempt; the force-rotate then takes ownership using the bind credential which has unicodePwd write rights. v1 = create-only (failed; "failed to bind with current password").
   }
 
   depends_on = [null_resource.vault_ldap_secret_engine]
@@ -90,11 +90,27 @@ if vault read -format=json ldap/static-role/$accountName 2>/dev/null | jq -e '.d
   exit 0
 fi
 
-echo "[ldap-rotate-role] writing ldap/static-role/$accountName"
+# Create the static-role WITHOUT the import-rotate bind attempt. The
+# engine-level skip_static_role_import_rotation=true (set by the
+# secret-engine overlay) is the primary defense; the role-level
+# skip_import_rotation=true here is explicit + override-safe in case the
+# engine config drifts. Without these, Vault tries to bind to AD as
+# `$accountName` with a freshly-generated password it has never given
+# AD, AD rejects ("data 52e" / "Invalid Credentials"), and the create
+# returns 500 "failed to bind with current password".
+echo "[ldap-rotate-role] writing ldap/static-role/$accountName (skip_import_rotation=true)"
 vault write ldap/static-role/$accountName \
   username='$accountName' \
   dn='$accountDn' \
-  rotation_period='$rotationPeriod' >/dev/null
+  rotation_period='$rotationPeriod' \
+  skip_import_rotation=true >/dev/null
+
+# Now take ownership of the AD password via an explicit rotation. This
+# binds as svc-vault-ldap (the engine bindcred) and writes unicodePwd
+# over LDAPS -- the proven write path. After this, Vault owns + serves
+# the credential via ldap/static-cred/<name>.
+echo "[ldap-rotate-role] forcing first managed rotation of $accountName"
+vault write -force ldap/rotate-role/$accountName >/dev/null
 
 # Verify the role is queryable + a credential lookup works
 echo '[ldap-rotate-role] verifying ldap/static-cred/$accountName...'

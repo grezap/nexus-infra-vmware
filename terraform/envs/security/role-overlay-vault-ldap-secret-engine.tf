@@ -27,7 +27,7 @@ resource "null_resource" "vault_ldap_secret_engine" {
     auth_id          = length(null_resource.vault_ldap_auth) > 0 ? null_resource.vault_ldap_auth[0].id : "disabled"
     ldaps_cert_id    = length(null_resource.vault_ldaps_cert) > 0 ? null_resource.vault_ldaps_cert[0].id : "disabled"
     ldap_url         = var.vault_ldap_url
-    secret_overlay_v = "2" # v2 = LDAPS + certificate=@ca-bundle. v1 = plain LDAP (broken).
+    secret_overlay_v = "3" # v3 = adds skip_static_role_import_rotation=true so static-role creation does not try to bind AS the target user with an unknown current password (fresh AD onboarding case). v2 = LDAPS + certificate=@ca-bundle. v1 = plain LDAP (broken).
   }
 
   depends_on = [null_resource.vault_ldap_auth, null_resource.vault_ldaps_cert]
@@ -106,13 +106,26 @@ TMPCA=`$(mktemp)
 trap 'rm -f "`$TMPCA"' EXIT
 echo '$caBundleB64' | base64 -d > "`$TMPCA"
 
-echo '[ldap-secret-engine] writing ldap/config (LDAPS, schema=ad, password_policy=nexus-ad-rotated)'
+echo '[ldap-secret-engine] writing ldap/config (LDAPS, schema=ad, password_policy=nexus-ad-rotated, skip_static_role_import_rotation=true)'
+# skip_static_role_import_rotation=true makes Vault NOT try to bind AS the
+# target account on static-role creation. Default behavior is to import-
+# rotate the password by binding as the user with its current password --
+# but for fresh AD onboarding we never knew that password, so AD rejects
+# the bind with "data 52e" (ERROR_LOGON_FAILURE) and Vault surfaces it as
+# "failed to bind with current password". Per Vault API docs at
+# developer.hashicorp.com/vault/api-docs/secret/ldap, this engine-level
+# flag becomes the default for skip_import_rotation on every static-role
+# created against this engine. The first rotation still happens -- it's
+# triggered explicitly by the rotate-role overlay via
+# `vault write -force ldap/rotate-role/<name>` after the static-role
+# is created, using the bind credential which has unicodePwd write rights.
 vault write ldap/config \
   binddn='$bindDn' \
   bindpass='$bindPass' \
   url='$ldapUrl' \
   schema=ad \
   password_policy=nexus-ad-rotated \
+  skip_static_role_import_rotation=true \
   certificate=@"`$TMPCA" \
   request_timeout=30 \
   insecure_tls=false \
