@@ -374,3 +374,82 @@ variable "vault_ldap_demo_rotation_period" {
   type        = string
   default     = "24h"
 }
+
+# ─── Phase 0.D.4 — foundation cred migration into Vault KV ───────────────
+#
+# Three new overlays land here (policy, approle, seed) so the foundation
+# env can drop its plaintext bootstrap credentials and read them from
+# `nexus/foundation/...` via vault_kv_secret_v2 data sources instead.
+#
+# Order: policy -> approle -> seed (one-time, sticky-write).
+# Master toggle var.enable_vault_kv_foundation_seed gates the whole layer;
+# per-step toggles default true and AND-compose with the master.
+# All steps depend_on null_resource.vault_post_init.
+#
+# Cross-env coupling:
+#   - The seed overlay reads $HOME/.nexus/vault-ad-bind.json (legacy 0.D.3
+#     output) on the build host and migrates its contents into
+#     nexus/foundation/ad/svc-vault-ldap + nexus/foundation/ad/svc-vault-smoke.
+#     If the file is absent (greenfield without 0.D.3-style ad-integration),
+#     those two paths are skipped -- foundation env's bind/smoke overlays
+#     write them direct-to-KV at create time once 0.D.4 lands.
+#   - The approle overlay writes
+#     $HOME/.nexus/vault-foundation-approle.json (mode 0600 equivalent via
+#     icacls) which the foundation env's `provider "vault"` block reads at
+#     plan/apply time.
+#
+# Seed values mirror foundation env defaults exactly. Override here only
+# if you want different starting passwords than the foundation defaults.
+# Once seeded, ROTATE via Vault (vault kv put nexus/foundation/...) -- the
+# seed step will not overwrite a populated path.
+
+variable "enable_vault_kv_foundation_seed" {
+  description = "Master toggle: bootstrap nexus-foundation-reader policy + AppRole + seed plaintext defaults at nexus/foundation/...  Default true. Set false to short-circuit the entire 0.D.4 layer (e.g. iterating on 0.D.1-3 alone)."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_kv_foundation_policy" {
+  description = "Toggle: write the nexus-foundation-reader policy (read on nexus/data/foundation/*, write on nexus/data/foundation/ad/* only). Default true. Idempotent overwrite via `vault policy write`."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_kv_foundation_approle" {
+  description = "Toggle: define AppRole nexus-foundation-reader and persist role-id+secret-id into vault-foundation-approle.json on the build host. Default true. role-id is stable across re-applies; secret-id is regenerated on every apply."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_kv_foundation_seed_values" {
+  description = "Toggle: one-time seed of plaintext defaults + JSON migration into nexus/foundation/...  Default true. Sticky writes -- never overwrites a populated path. Set false to skip seeding (e.g. when re-applying a security env that already seeded; this also avoids re-shipping plaintext defaults through SSH if you've rotated everything in Vault already)."
+  type        = bool
+  default     = true
+}
+
+variable "vault_foundation_approle_creds_file" {
+  description = "Absolute path on the build host where the AppRole role-id + secret-id JSON gets written. mode 0600 via icacls. Mirrors vault-init.json under operator-private $HOME/.nexus/. The foundation env's `provider \"vault\"` block reads this file at plan/apply time."
+  type        = string
+  default     = "$HOME/.nexus/vault-foundation-approle.json"
+}
+
+variable "foundation_seed_dsrm_password" {
+  description = "Seed value for nexus/foundation/dc-nexus/dsrm at password. Default matches the foundation env's var.dsrm_password default exactly (NexusDSRM!1) so a steady-state lab seeds back to the same value after a destroy+apply cycle. Override to seed a different starting pwd; rotate-after-seed via `vault kv put nexus/foundation/dc-nexus/dsrm password=...`."
+  type        = string
+  default     = "NexusDSRM!1"
+  sensitive   = true
+}
+
+variable "foundation_seed_local_administrator_password" {
+  description = "Seed value for nexus/foundation/dc-nexus/local-administrator at password. Default matches foundation env's var.local_administrator_password default (NexusAdmin!1)."
+  type        = string
+  default     = "NexusAdmin!1"
+  sensitive   = true
+}
+
+variable "foundation_seed_nexusadmin_password" {
+  description = "Seed value for nexus/foundation/identity/nexusadmin at password. Default matches foundation env's var.nexusadmin_password default (NexusPackerBuild!1) -- mirrors the build-time bootstrap pwd that ws2025-desktop's Packer template bakes in."
+  type        = string
+  default     = "NexusPackerBuild!1"
+  sensitive   = true
+}

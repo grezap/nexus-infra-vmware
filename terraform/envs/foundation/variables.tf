@@ -341,3 +341,60 @@ variable "dc_ldap_server_integrity" {
     error_message = "Must be 0, 1, or 2."
   }
 }
+
+# ─── Phase 0.D.4 — Vault-KV-backed bootstrap creds ───────────────────────
+#
+# When this layer is enabled, the foundation env reads dsrm /
+# local-administrator / nexusadmin passwords from Vault KV at
+# `nexus/foundation/...` instead of from the variable defaults above.
+# The plaintext defaults remain as a fallback for greenfield bring-up.
+#
+# Cross-env coupling:
+#   - The security env's role-overlay-vault-foundation-policy.tf creates
+#     the `nexus-foundation-reader` Vault policy + AppRole + seeds the
+#     nexus/foundation/* paths. Foundation env reads via vault_kv_secret_v2
+#     data sources authenticated by the AppRole role-id+secret-id JSON the
+#     security env writes to var.vault_foundation_approle_creds_file.
+#   - The CA bundle for TLS verification comes from the security env's
+#     role-overlay-vault-pki-distribute.tf overlay (Phase 0.D.2 output).
+#
+# Operator order on a fresh lab:
+#   1. foundation apply (default: enable_vault_kv_creds=false) -- bare lab
+#      + AD plumbing using plaintext variable defaults.
+#   2. security apply -- brings up Vault + writes approle JSON + seeds KV.
+#   3. foundation apply -Vars enable_vault_kv_creds=true -- consumers now
+#      read from Vault KV.
+#
+# Cross-ref: memory/feedback_terraform_partial_apply_destroys_resources.md
+# -- once steady-state is reached, this default flips to `true`. Default
+# flip lands at 0.D.4 close-out.
+
+variable "enable_vault_kv_creds" {
+  description = "Toggle: read bootstrap creds (dsrm, local_administrator, nexusadmin) from Vault KV at nexus/foundation/* instead of variable defaults. Default false during 0.D.4 development (preserves greenfield bring-up path). Flipped to true at 0.D.4 close-out per feedback_terraform_partial_apply_destroys_resources.md (defaults reflect steady state; opt-out is the explicit override)."
+  type        = bool
+  default     = false
+}
+
+variable "vault_kv_mount_path" {
+  description = "Mount path for the KV-v2 secrets engine. Per MASTER-PLAN.md s 0.D goal: nexus/* paths. Mirrors envs/security/var.vault_kv_mount_path."
+  type        = string
+  default     = "nexus"
+}
+
+variable "vault_foundation_approle_creds_file" {
+  description = "Path on the build host where envs/security/role-overlay-vault-foundation-approle.tf writes the AppRole role-id + secret-id JSON. Foundation env's `provider \"vault\"` block reads this at plan/apply time via Terraform's pathexpand() -- which resolves `~/` to HOME but does NOT substitute `$HOME`. Default uses `~/.nexus/...` form for that reason. Resolves to the same physical file as the security env's `$HOME/.nexus/vault-foundation-approle.json` (which is PowerShell-side and uses ExpandString)."
+  type        = string
+  default     = "~/.nexus/vault-foundation-approle.json"
+}
+
+variable "vault_ca_bundle_path" {
+  description = "Path on the build host to the Vault PKI root CA bundle (envs/security/role-overlay-vault-pki-distribute.tf output). Used by the foundation env's `provider \"vault\"` block as ca_cert_file -- enables TLS verification without VAULT_SKIP_VERIFY. Same `~/` rationale as vault_foundation_approle_creds_file -- pathexpand handles tilde, not $HOME."
+  type        = string
+  default     = "~/.nexus/vault-ca-bundle.crt"
+}
+
+variable "enable_vault_kv_ad_writeback" {
+  description = "Toggle: when the dc_vault_ad_bind / dc_vault_ad_smoke overlays generate a fresh random pwd for an AD account, ALSO write that pwd to Vault KV at nexus/foundation/ad/<account>. Default true. Set false to keep KV as a read-only mirror (e.g. when iterating on the bind/smoke overlays without a Vault cluster up). When false, the legacy JSON-file write at vault_ad_bind_creds_file remains canonical."
+  type        = bool
+  default     = true
+}

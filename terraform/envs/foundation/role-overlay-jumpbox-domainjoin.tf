@@ -73,7 +73,8 @@ resource "null_resource" "jumpbox_domain_join" {
       $ip             = '${local.jumpbox_ip}'
       $newname        = '${local.jumpbox_hostname}'
       $domain         = '${local.ad_domain}'
-      $nexusadmin_pwd = '${var.nexusadmin_password}'
+      # Phase 0.D.4 -- nexusadmin pwd from Vault KV when enabled, else var fallback.
+      $nexusadmin_pwd = '${local.foundation_creds.nexusadmin}'
       $netbios        = '${local.ad_netbios}'
 
       # ─── Pre-flight: wait for END-TO-END ssh to work ───────────────────

@@ -34,7 +34,8 @@ resource "null_resource" "dc_vault_ad_smoke_account" {
     account_name    = var.vault_ad_smoke_account_name
     group_readers   = var.vault_ad_group_readers
     bind_creds_file = var.vault_ad_bind_creds_file
-    smoke_overlay_v = "1"
+    kv_ad_writeback = tostring(var.enable_vault_kv_ad_writeback)
+    smoke_overlay_v = "2" # v2 = Phase 0.D.4 KV writeback (writes generated pwd to nexus/foundation/ad/svc-vault-smoke when enable_vault_kv_ad_writeback=true). v1 = JSON-only.
   }
 
   depends_on = [
@@ -170,6 +171,42 @@ resource "null_resource" "dc_vault_ad_smoke_account" {
         ($h | ConvertTo-Json -Depth 4) | Set-Content -Path $jsonPath -Encoding UTF8
         icacls $jsonPath /inheritance:r /grant:r "$($env:USERNAME):F" 2>&1 | Out-Null
         Write-Host "[dc-vault-ad-smoke] persisted smoke_username + smoke_password to $${jsonPath}"
+
+        # ─── Phase 0.D.4: also write to Vault KV (canonical store) ───────
+        # Same pattern as the bind overlay -- best-effort; WARN+skip if
+        # Vault isn't up yet.
+        if ([bool]::Parse('${var.enable_vault_kv_ad_writeback}')) {
+          $vaultInitFile = Join-Path $env:USERPROFILE '.nexus\vault-init.json'
+          if (Test-Path $vaultInitFile) {
+            $rootToken = $null
+            try { $rootToken = (Get-Content $vaultInitFile -Raw | ConvertFrom-Json).root_token } catch { }
+            if ($rootToken) {
+              $kvBodyJson = (@{ username = $accountName; password = $smokePwd } | ConvertTo-Json -Compress)
+              $kvBodyB64  = [Convert]::ToBase64String([System.Text.UTF8Encoding]::new($false).GetBytes($kvBodyJson))
+              $kvBash = @"
+set -euo pipefail
+export VAULT_TOKEN='$rootToken'
+export VAULT_SKIP_VERIFY=true
+export VAULT_ADDR=https://192.168.70.121:8200
+TMP=`$(mktemp); trap 'rm -f "`$TMP"' EXIT
+echo '$kvBodyB64' | base64 -d > "`$TMP"
+vault kv put 'nexus/foundation/ad/$accountName' @"`$TMP" >/dev/null
+echo "[dc-vault-ad-smoke] KV writeback to nexus/foundation/ad/$accountName -- OK"
+"@
+              $kvBashB64 = [Convert]::ToBase64String([System.Text.UTF8Encoding]::new($false).GetBytes($kvBash))
+              $kvOut = ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no nexusadmin@192.168.70.121 "echo '$kvBashB64' | base64 -d | bash" 2>&1 | Out-String
+              if ($LASTEXITCODE -eq 0) {
+                Write-Host $kvOut.Trim()
+              } else {
+                Write-Host "[dc-vault-ad-smoke] WARN: KV writeback failed (rc=$LASTEXITCODE); JSON file remains canonical. Output:`n$($kvOut.Trim())"
+              }
+            } else {
+              Write-Host "[dc-vault-ad-smoke] WARN: KV writeback skipped (vault-init.json unparseable / no root_token)"
+            }
+          } else {
+            Write-Host "[dc-vault-ad-smoke] WARN: KV writeback skipped -- $vaultInitFile not present (security env not yet applied)"
+          }
+        }
       } else {
         Write-Host "[dc-vault-ad-smoke] cached smoke_password preserved; no JSON rewrite"
       }

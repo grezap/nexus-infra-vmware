@@ -74,6 +74,26 @@ output "vault_ad_state" {
   }
 }
 
+output "vault_kv_creds_state" {
+  description = "Phase 0.D.4 KV-backed bootstrap creds state. Only meaningful when var.enable_vault_kv_creds=true (default false during 0.D.4 development; flips to true at 0.D.4 close-out)."
+  value = {
+    kv_creds_enabled   = var.enable_vault_kv_creds
+    kv_ad_writeback    = var.enable_vault_kv_ad_writeback
+    kv_mount_path      = var.vault_kv_mount_path
+    approle_creds_file = var.vault_foundation_approle_creds_file
+    ca_bundle_path     = var.vault_ca_bundle_path
+    consumed_paths = var.enable_vault_kv_creds ? [
+      "${var.vault_kv_mount_path}/foundation/dc-nexus/dsrm",
+      "${var.vault_kv_mount_path}/foundation/dc-nexus/local-administrator",
+      "${var.vault_kv_mount_path}/foundation/identity/nexusadmin",
+    ] : []
+    written_paths = var.enable_vault_ad_integration && var.enable_vault_kv_ad_writeback ? [
+      "${var.vault_kv_mount_path}/foundation/ad/${var.vault_ad_bind_account_name}",
+      "${var.vault_kv_mount_path}/foundation/ad/${var.vault_ad_smoke_account_name}",
+    ] : []
+  }
+}
+
 output "next_step" {
   value = <<-EOT
 
@@ -154,5 +174,15 @@ output "next_step" {
     Tear down just the 0.C.4 hardening (keeps DC + jumpbox + domain join):
       terraform apply -var enable_dc_ous=false -var enable_dc_password_policy=false ``
                       -var enable_dc_reverse_dns=false -var enable_dc_time_authoritative=false -auto-approve
+
+    Phase 0.D.4 -- Vault-KV-backed bootstrap creds (default off; enable
+    after security env has applied):
+      pwsh -File scripts\foundation.ps1 apply -Vars enable_vault_kv_creds=true
+      # Reads dsrm / local-administrator / nexusadmin from nexus/foundation/...
+      # via the nexus-foundation-reader AppRole. Provider config in
+      # vault-provider.tf reads role-id+secret-id from
+      # ${var.vault_foundation_approle_creds_file} (mode 0600 on build host).
+      # The CA bundle for TLS verification comes from
+      # ${var.vault_ca_bundle_path} (Phase 0.D.2 distribute output).
   EOT
 }

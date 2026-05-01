@@ -91,10 +91,32 @@ output "vault_pki_state" {
   }
 }
 
+output "vault_kv_foundation_state" {
+  description = "Phase 0.D.4 KV foundation seed state -- the AppRole + policy + nexus/foundation/* seeded paths that the foundation env's vault provider data sources consume. Only meaningful when var.enable_vault_kv_foundation_seed=true."
+  value = {
+    seed_enabled        = var.enable_vault_kv_foundation_seed
+    policy_enabled      = var.enable_vault_kv_foundation_seed && var.enable_vault_kv_foundation_policy
+    approle_enabled     = var.enable_vault_kv_foundation_seed && var.enable_vault_kv_foundation_approle
+    seed_values_enabled = var.enable_vault_kv_foundation_seed && var.enable_vault_kv_foundation_seed_values
+    policy_name         = "nexus-foundation-reader"
+    approle_name        = "nexus-foundation-reader"
+    approle_creds_file  = var.vault_foundation_approle_creds_file
+    seeded_paths = [
+      "${var.vault_kv_mount_path}/foundation/dc-nexus/dsrm",
+      "${var.vault_kv_mount_path}/foundation/dc-nexus/local-administrator",
+      "${var.vault_kv_mount_path}/foundation/identity/nexusadmin",
+      "${var.vault_kv_mount_path}/foundation/vault/userpass-nexusadmin",
+      "${var.vault_kv_mount_path}/foundation/ad/svc-vault-ldap",
+      "${var.vault_kv_mount_path}/foundation/ad/svc-vault-smoke",
+    ]
+  }
+}
+
 output "next_step" {
   value = <<-EOT
 
-    Phase 0.D.1 + 0.D.2 + 0.D.3 -- Vault cluster + PKI + LDAP integration deployed.
+    Phase 0.D.1 + 0.D.2 + 0.D.3 + 0.D.4 -- Vault cluster + PKI + LDAP +
+    foundation cred migration deployed.
 
     Pre-flight order (do NOT skip):
       1. Foundation env's gateway dnsmasq must have the Vault dhcp-host
@@ -104,12 +126,19 @@ output "next_step" {
              -Vars enable_vault_dhcp_reservations=true,enable_vault_ad_integration=true
       2. Vault Packer template must be built:
            Push-Location packer\vault; packer init .; packer build .; Pop-Location
-      3. THIS env (security) -- 0.D.1 cluster + 0.D.2 PKI + 0.D.3 LDAP in one apply:
+      3. THIS env (security) -- 0.D.1 cluster + 0.D.2 PKI + 0.D.3 LDAP +
+         0.D.4 foundation seed in one apply:
            pwsh -File scripts\security.ps1 apply
+      4. Re-apply foundation env with KV-cred reads enabled (0.D.4 consumer
+         side; data sources resolve via the AppRole creds JSON written by
+         step 3):
+           pwsh -File scripts\foundation.ps1 apply -Vars enable_vault_kv_creds=true
 
-    Smoke gate (Phase 0.D.3 -- chains 0.D.2 -> 0.D.1, then layers LDAP checks):
+    Smoke gate (Phase 0.D.4 -- chains 0.D.3 -> 0.D.2 -> 0.D.1, then layers
+    KV-foundation-seed + AppRole-token-policy checks):
       pwsh -File scripts\security.ps1 smoke
       # Or run an earlier phase explicitly:
+      pwsh -File scripts\security.ps1 smoke -Phase 0.D.3
       pwsh -File scripts\security.ps1 smoke -Phase 0.D.2
       pwsh -File scripts\security.ps1 smoke -Phase 0.D.1
 
@@ -126,9 +155,20 @@ output "next_step" {
       Root token + 5 unseal keys: ${var.vault_init_keys_file} (mode 0600 on build host)
       Userpass user:   ${var.vault_userpass_user}
       KV-v2 mount:     ${var.vault_kv_mount_path}/
-      AppRole name:    ${var.vault_approle_name}
+      AppRole name (cluster bootstrap):  ${var.vault_approle_name}
+      AppRole name (foundation reader):  nexus-foundation-reader  (0.D.4)
       Root CA bundle:  ${var.vault_pki_ca_bundle_path}  (drop VAULT_SKIP_VERIFY; set VAULT_CACERT here)
-      LDAP bind cred:  ${var.vault_ad_bind_creds_file}  (binddn + bindpass + smoke creds; mode 0600 on build host)
+      LDAP bind cred:  ${var.vault_ad_bind_creds_file}  (binddn + bindpass + smoke creds; mode 0600 on build host -- legacy 0.D.3 artifact, vestigial after 0.D.4 close-out)
+      AppRole creds:   ${var.vault_foundation_approle_creds_file}  (0.D.4 -- foundation env's vault provider auth; mode 0600 on build host)
+
+    Phase 0.D.4 -- foundation cred migration (KV-backed reads):
+      vault kv get nexus/foundation/dc-nexus/dsrm                  # DSRM pwd
+      vault kv get nexus/foundation/dc-nexus/local-administrator   # local Administrator pwd
+      vault kv get nexus/foundation/identity/nexusadmin            # nexusadmin AD user pwd
+      vault kv get nexus/foundation/vault/userpass-nexusadmin      # vault userpass pwd
+      vault kv get nexus/foundation/ad/svc-vault-ldap              # bind cred (Vault auth/ldap)
+      vault kv get nexus/foundation/ad/svc-vault-smoke             # smoke probe cred
+      # Acceptance criterion (per MASTER-PLAN.md Phase 0.D goal): kv get returns.
 
     LDAP login (Phase 0.D.3, LDAPS):
       vault login -method=ldap -username=nexusadmin

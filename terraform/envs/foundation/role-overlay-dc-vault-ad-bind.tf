@@ -38,7 +38,8 @@ resource "null_resource" "dc_vault_ad_bind" {
     bind_account_name = var.vault_ad_bind_account_name
     bind_creds_file   = var.vault_ad_bind_creds_file
     rotate_password   = tostring(var.enable_vault_ad_bind_rotate_password)
-    bind_overlay_v    = "1"
+    kv_ad_writeback   = tostring(var.enable_vault_kv_ad_writeback)
+    bind_overlay_v    = "2" # v2 = Phase 0.D.4 KV writeback (writes generated pwd to nexus/foundation/ad/svc-vault-ldap when enable_vault_kv_ad_writeback=true). v1 = JSON-only.
   }
 
   depends_on = [null_resource.dc_nexus_verify, null_resource.dc_ous]
@@ -164,6 +165,44 @@ resource "null_resource" "dc_vault_ad_bind" {
 
       Write-Host "[dc-vault-ad-bind] persisted bind cred to $${jsonPath} (mode 0600 equivalent via icacls)"
       Write-Host "[dc-vault-ad-bind] CRITICAL: vault-ad-bind.json holds the bindpass; back it up + protect it"
+
+      # ─── Phase 0.D.4: also write to Vault KV (canonical store) ─────────
+      # Best-effort; if Vault isn't up yet (security env not applied,
+      # vault-init.json missing, vault-1 unreachable), log WARN and continue.
+      # The seed overlay in security env will migrate the JSON contents on
+      # its next apply.
+      if ([bool]::Parse('${var.enable_vault_kv_ad_writeback}')) {
+        $vaultInitFile = Join-Path $env:USERPROFILE '.nexus\vault-init.json'
+        if (Test-Path $vaultInitFile) {
+          $rootToken = $null
+          try { $rootToken = (Get-Content $vaultInitFile -Raw | ConvertFrom-Json).root_token } catch { }
+          if ($rootToken) {
+            $kvBodyJson = (@{ binddn = $bindDn; username = $accountName; password = $bindPwd } | ConvertTo-Json -Compress)
+            $kvBodyB64  = [Convert]::ToBase64String([System.Text.UTF8Encoding]::new($false).GetBytes($kvBodyJson))
+            $kvBash = @"
+set -euo pipefail
+export VAULT_TOKEN='$rootToken'
+export VAULT_SKIP_VERIFY=true
+export VAULT_ADDR=https://192.168.70.121:8200
+TMP=`$(mktemp); trap 'rm -f "`$TMP"' EXIT
+echo '$kvBodyB64' | base64 -d > "`$TMP"
+vault kv put 'nexus/foundation/ad/$accountName' @"`$TMP" >/dev/null
+echo "[dc-vault-ad-bind] KV writeback to nexus/foundation/ad/$accountName -- OK"
+"@
+            $kvBashB64 = [Convert]::ToBase64String([System.Text.UTF8Encoding]::new($false).GetBytes($kvBash))
+            $kvOut = ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no nexusadmin@192.168.70.121 "echo '$kvBashB64' | base64 -d | bash" 2>&1 | Out-String
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host $kvOut.Trim()
+            } else {
+              Write-Host "[dc-vault-ad-bind] WARN: KV writeback failed (rc=$LASTEXITCODE); JSON file remains canonical. Output:`n$($kvOut.Trim())"
+            }
+          } else {
+            Write-Host "[dc-vault-ad-bind] WARN: KV writeback skipped (vault-init.json unparseable / no root_token)"
+          }
+        } else {
+          Write-Host "[dc-vault-ad-bind] WARN: KV writeback skipped -- $vaultInitFile not present (security env not yet applied; seed overlay will migrate from JSON)"
+        }
+      }
     PWSH
   }
 }

@@ -29,6 +29,15 @@ terraform {
       source  = "hashicorp/null"
       version = ">= 3.2.0"
     }
+    # Phase 0.D.4 -- vault_kv_secret_v2 data sources for nexus/foundation/*
+    # bootstrap creds. Provider config + AppRole auth lives in vault-provider.tf.
+    # Pinned to v4.x: v5 removed the `auth_login_approle` block (replaced by
+    # the more general `auth_login` schema), and v4 is the LTS-friendly
+    # release for the auth shape we use. Bumping to v5 is a 0.D.5+ refactor.
+    vault = {
+      source  = "hashicorp/vault"
+      version = "~> 4.0"
+    }
   }
 }
 

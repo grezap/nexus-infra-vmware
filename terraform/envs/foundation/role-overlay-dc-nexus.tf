@@ -195,9 +195,12 @@ resource "null_resource" "dc_nexus_promote" {
       $ip            = '${local.dc_nexus_ip}'
       $domain        = '${local.ad_domain}'
       $netbios       = '${local.ad_netbios}'
-      $dsrm_pwd      = '${var.dsrm_password}'
-      $admin_pwd     = '${var.local_administrator_password}'
-      $nexusadmin_pwd = '${var.nexusadmin_password}'
+      # Phase 0.D.4 -- creds resolved via local.foundation_creds (Vault KV
+      # data source when enable_vault_kv_creds=true; plaintext var fallback
+      # otherwise). See data-vault-kv-foundation.tf.
+      $dsrm_pwd       = '${local.foundation_creds.dsrm}'
+      $admin_pwd      = '${local.foundation_creds.local_administrator}'
+      $nexusadmin_pwd = '${local.foundation_creds.nexusadmin}'
 
       # Idempotency: skip if the forest already exists. Wrap in try/catch
       # because Get-ADDomain throws ResourceUnavailable on workgroup boxes,

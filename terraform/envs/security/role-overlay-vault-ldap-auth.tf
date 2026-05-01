@@ -35,6 +35,7 @@ resource "null_resource" "vault_ldap_auth" {
   triggers = {
     policies_id    = length(null_resource.vault_ldap_policies) > 0 ? null_resource.vault_ldap_policies[0].id : "disabled"
     ldaps_cert_id  = length(null_resource.vault_ldaps_cert) > 0 ? null_resource.vault_ldaps_cert[0].id : "disabled"
+    seed_id        = length(null_resource.vault_foundation_seed) > 0 ? null_resource.vault_foundation_seed[0].id : "disabled"
     ldap_url       = var.vault_ldap_url
     user_dn        = var.vault_ldap_user_dn
     group_dn       = var.vault_ldap_group_dn
@@ -45,10 +46,10 @@ resource "null_resource" "vault_ldap_auth" {
     admin_group    = var.vault_ldap_admin_group
     operator_group = var.vault_ldap_operator_group
     reader_group   = var.vault_ldap_reader_group
-    auth_overlay_v = "4" # v4 = upndomain="" (search-then-bind via userfilter). Per Vault sdk/helper/ldaputil/client.go RenderUserSearchFilter, setting upndomain rewrites the {{.Username}} value to <user>@<upndomain> before executing the userfilter -- so our (sAMAccountName={{.Username}}) becomes (sAMAccountName=svc-...@nexus.lab) which AD never matches (sAMAccountName has no @-suffix). LDAPS doesn't need the UPN-bind workaround that motivated upndomain under plain-LDAP/389. Vault issue #27276; 1.19+ has enable_samaccountname_login. v3 = LDAPS + upndomain (broke smoke login, search returned 0). v2 = upndomain + plain-LDAP. v1 = plain-LDAP search-then-rebind.
+    auth_overlay_v = "5" # v5 = bindpass sourced from Vault KV (nexus/foundation/ad/svc-vault-ldap) with JSON-file fallback (0.D.4 -- KV becomes canonical, JSON vestigial). v4 = upndomain="" (search-then-bind via userfilter). Per Vault sdk/helper/ldaputil/client.go RenderUserSearchFilter, setting upndomain rewrites the {{.Username}} value to <user>@<upndomain> before executing the userfilter -- so our (sAMAccountName={{.Username}}) becomes (sAMAccountName=svc-...@nexus.lab) which AD never matches (sAMAccountName has no @-suffix). LDAPS doesn't need the UPN-bind workaround that motivated upndomain under plain-LDAP/389. Vault issue #27276; 1.19+ has enable_samaccountname_login. v3 = LDAPS + upndomain (broke smoke login, search returned 0). v2 = upndomain + plain-LDAP. v1 = plain-LDAP search-then-rebind.
   }
 
-  depends_on = [null_resource.vault_ldap_policies, null_resource.vault_ldaps_cert]
+  depends_on = [null_resource.vault_ldap_policies, null_resource.vault_ldaps_cert, null_resource.vault_foundation_seed]
 
   provisioner "local-exec" {
     when        = create
@@ -76,18 +77,55 @@ resource "null_resource" "vault_ldap_auth" {
       if (-not (Test-Path $keysFile)) {
         throw "[ldap-auth] vault-init.json missing at $keysFile"
       }
-      if (-not (Test-Path $bindCredsFile)) {
-        throw "[ldap-auth] vault-ad-bind.json missing at $bindCredsFile -- run foundation env with -Vars enable_vault_ad_integration=true first"
-      }
       if (-not (Test-Path $caBundlePath)) {
         throw "[ldap-auth] CA bundle missing at $caBundlePath -- run vault_pki_distribute_root first"
       }
       $rootToken  = (Get-Content $keysFile      | ConvertFrom-Json).root_token
-      $bindCreds  = (Get-Content $bindCredsFile | ConvertFrom-Json)
-      $bindDn     = $bindCreds.binddn
-      $bindPass   = $bindCreds.bindpass
+
+      # ─── Resolve bindpass: prefer Vault KV (0.D.4), fall back to JSON ──
+      # 0.D.4 makes nexus/foundation/ad/svc-vault-ldap the canonical store
+      # for the bind cred. The seed overlay (foundation_seed_values) writes
+      # this path on every fresh apply, sourced either from the legacy JSON
+      # file or from the foundation env's bind overlay's direct-to-KV path
+      # (Stage C). Either way, by the time ldap_auth runs, KV should have
+      # the value -- depends_on enforces ordering.
+      #
+      # Fallback to JSON keeps the overlay resilient against operator
+      # disabling enable_vault_kv_foundation_seed_values (e.g. iterating
+      # on LDAP-auth alone with KV already in the desired state).
+      Write-Host "[ldap-auth] resolving bind cred (preferring Vault KV nexus/foundation/ad/svc-vault-ldap)..."
+      $kvProbeBash = @"
+set -euo pipefail
+export VAULT_TOKEN='$rootToken'
+export VAULT_SKIP_VERIFY=true
+export VAULT_ADDR=https://127.0.0.1:8200
+vault kv get -format=json nexus/foundation/ad/svc-vault-ldap 2>/dev/null || echo '{}'
+"@
+      $kvProbeB64 = [Convert]::ToBase64String([System.Text.UTF8Encoding]::new($false).GetBytes($kvProbeBash))
+      $kvProbeOut = ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "echo '$kvProbeB64' | base64 -d | bash" 2>&1 | Out-String
+
+      $bindDn   = $null
+      $bindPass = $null
+      try {
+        $kvJson = $kvProbeOut | ConvertFrom-Json
+        if ($kvJson.data.data.binddn -and $kvJson.data.data.password) {
+          $bindDn   = $kvJson.data.data.binddn
+          $bindPass = $kvJson.data.data.password
+          Write-Host "[ldap-auth] bind cred resolved from Vault KV (canonical)"
+        }
+      } catch { }
+
       if (-not $bindDn -or -not $bindPass) {
-        throw "[ldap-auth] vault-ad-bind.json missing binddn or bindpass"
+        Write-Host "[ldap-auth] Vault KV path empty/unparseable; falling back to JSON file $bindCredsFile"
+        if (-not (Test-Path $bindCredsFile)) {
+          throw "[ldap-auth] neither Vault KV nor $bindCredsFile yields a bind cred -- run foundation env with -Vars enable_vault_ad_integration=true first, then security apply (which seeds KV)"
+        }
+        $bindCreds = (Get-Content $bindCredsFile | ConvertFrom-Json)
+        $bindDn    = $bindCreds.binddn
+        $bindPass  = $bindCreds.bindpass
+        if (-not $bindDn -or -not $bindPass) {
+          throw "[ldap-auth] $bindCredsFile missing binddn or bindpass"
+        }
       }
 
       # Read CA bundle as base64 so we can ship it cleanly via SSH heredoc
