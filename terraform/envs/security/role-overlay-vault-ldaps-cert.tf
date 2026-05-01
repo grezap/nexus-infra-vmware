@@ -70,7 +70,7 @@ resource "null_resource" "vault_ldaps_cert" {
     int_common_name = var.vault_pki_intermediate_common_name
     leaf_ttl        = var.vault_ldaps_cert_ttl
     role_name       = var.vault_pki_role_name
-    ldaps_overlay_v = "4" # v4: ALSO install root CA into Cert:\LocalMachine\Root on dc-nexus -- without it Schannel chain build returns PartialChain and AD logs Event 36886 ("No suitable default server credential"), resetting every LDAPS handshake. THIS IS THE ACTUAL FIX. v3: openssl PFX on vault-1 (kept; correct in its own right). v2: leaf+intermediate stores. v1: leaf-only.
+    ldaps_overlay_v = "5" # v5: probe also reissues when leaf's validity span (NotAfter - NotBefore) is outside desired_ttl ±10%; previously skipped indefinitely after a TTL change (1y -> 90d at 0.D.5 close-out). v4: install root CA into Cert:\LocalMachine\Root on dc-nexus (THE actual fix for LDAPS handshake reset). v3: openssl PFX on vault-1. v2: leaf+intermediate stores. v1: leaf-only.
   }
 
   depends_on = [null_resource.vault_pki_distribute_root, null_resource.vault_pki_roles]
@@ -104,12 +104,20 @@ resource "null_resource" "vault_ldaps_cert" {
       # All three tiers must be present for Schannel to qualify the leaf
       # as a default server credential. Missing any one (especially root
       # in LocalMachine\Root) causes Event 36886 + LDAPS handshake reset.
+      # Convert the desired TTL (e.g. "2160h" or "8760h") to hours for the
+      # probe's span-check. Vault duration strings always use "h" suffix in
+      # this overlay's config; trim and parse.
+      $desiredHours = [int]($leafTtl -replace 'h$','')
       $probeRemote = @"
         `$leaf = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue | Where-Object {
           (`$_.Subject -match 'CN=$dcFqdn') -and
           (`$_.Issuer -match '$intCommonName') -and
           ((`$_.NotAfter - (Get-Date)).TotalDays -gt 30) -and
-          `$_.HasPrivateKey
+          `$_.HasPrivateKey -and
+          # 0.D.5 leaf-TTL drop (1y -> 90d) -- also reissue if the existing
+          # cert's validity span is outside the desired_ttl +/-10% band.
+          ((`$_.NotAfter - `$_.NotBefore).TotalHours -ge ($desiredHours * 0.9)) -and
+          ((`$_.NotAfter - `$_.NotBefore).TotalHours -le ($desiredHours * 1.1))
         } | Select-Object -First 1;
         `$inter = Get-ChildItem Cert:\LocalMachine\CA -ErrorAction SilentlyContinue | Where-Object {
           `$_.Subject -match 'CN=$intCommonName'

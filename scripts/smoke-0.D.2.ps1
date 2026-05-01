@@ -47,7 +47,12 @@
   Expected PKI role name. Default 'vault-server'.
 
 .PARAMETER MinLeafTtlDays
-  Minimum days remaining on each leaf cert (1y issuance ≈ 365d, lower bound 300d). Default 300.
+  Minimum days remaining on each leaf cert. Default 30 (matches the
+  rotate-listener overlay's reissue threshold). Pre-0.D.5 the default
+  was 300 (calibrated for 1y issuance); at 0.D.5 close-out the leaf TTL
+  dropped to 90d and the smoke threshold dropped to 30d so freshly-
+  issued certs (89d remaining) and aged-but-not-yet-rotated certs
+  (>=30d remaining) both pass.
 
 .PARAMETER SkipPhase0D1
   If $true, skips the chained 0.D.1 gate and runs only the 0.D.2 PKI checks.
@@ -72,7 +77,7 @@ param(
     [string]$IntermediateCommonName = 'NexusPlatform Intermediate CA',
     [string]$RootCommonName         = 'NexusPlatform Root CA',
     [string]$RoleName               = 'vault-server',
-    [int]   $MinLeafTtlDays         = 300,
+    [int]   $MinLeafTtlDays         = 30,
     [switch]$SkipPhase0D1
 )
 

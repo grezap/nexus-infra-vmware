@@ -224,9 +224,9 @@ variable "vault_pki_intermediate_ttl" {
 }
 
 variable "vault_pki_leaf_ttl" {
-  description = "Leaf cert TTL for issued vault-server certs. Default 8760h = 1 year. Lab-acceptable cadence (test-enterprise lab; Vault Agent automated renewal lands in 0.D.5 with a shorter TTL)."
+  description = "Leaf cert TTL for issued vault-server certs. Default 2160h = 90 days at 0.D.5 close-out (was 8760h = 1 year through 0.D.4). Quarterly rotation cadence aligns with operator review windows; existing rotate-listener probe (`days-remaining > 30`) still works at this TTL since the 30-day threshold is < 60 of the 90-day window. Will tighten to 30d in a later phase once Vault Agent automated renewal proves stable across multiple cycles."
   type        = string
-  default     = "8760h"
+  default     = "2160h"
 }
 
 variable "vault_pki_role_name" {
@@ -292,9 +292,9 @@ variable "enable_vault_ldaps_cert" {
 }
 
 variable "vault_ldaps_cert_ttl" {
-  description = "TTL for the LDAPS cert issued from pki_int/issue/<role> for dc-nexus. Default 8760h = 1 year (matches the rest of the lab leaf-cert convention; renewable via re-apply when <30 days remain)."
+  description = "TTL for the LDAPS cert issued from pki_int/issue/<role> for dc-nexus. Default 2160h = 90 days at 0.D.5 close-out (was 8760h = 1 year through 0.D.4). Matches vault_pki_leaf_ttl. The vault_ldaps_cert overlay's renewal-on-re-apply pattern handles the shorter cadence; smoke gate's `>=30 days remaining` predicate stays valid (30d < 60d threshold within a 90d window)."
   type        = string
-  default     = "8760h"
+  default     = "2160h"
 }
 
 variable "vault_ad_bind_creds_file" {

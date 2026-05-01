@@ -45,7 +45,7 @@ resource "null_resource" "vault_pki_rotate_listener" {
     int_common_name  = var.vault_pki_intermediate_common_name
     leaf_ttl         = var.vault_pki_leaf_ttl
     role_name        = var.vault_pki_role_name
-    rotate_overlay_v = "1"
+    rotate_overlay_v = "2" # v2 = also reissue when current cert's validity span (notAfter - notBefore) differs from desired LEAF_TTL by >10%. v1 only checked days-remaining > 30, which would skip a 1y cert with 360 days left even after operator wanted to drop TTL to 90d. 0.D.5 leaf-TTL drop motivated this.
   }
 
   depends_on = [null_resource.vault_pki_roles]
@@ -96,18 +96,34 @@ CRT=/etc/vault.d/tls/vault.crt
 KEY=/etc/vault.d/tls/vault.key
 
 # ─── Idempotency probe: skip if current cert is already PKI-issued + fresh ──
+# Two conditions for skip: (a) issued by our intermediate, (b) >30 days
+# remaining, (c) cert's total validity span (notAfter - notBefore) is
+# within 10% of LEAF_TTL. The third condition catches the 0.D.5 leaf-TTL
+# drop case: a 365d cert with 360d remaining would otherwise skip
+# rotation forever, even though operator dropped the TTL to 90d.
 SKIP_REASON=''
 if sudo test -f "`$CRT"; then
   CUR_ISSUER=`$(sudo openssl x509 -in "`$CRT" -noout -issuer 2>/dev/null | sed 's/^issuer= *//' | sed 's/^issuer=//')
   if echo "`$CUR_ISSUER" | grep -qF "`$INT_CN"; then
     EXPIRY=`$(sudo openssl x509 -in "`$CRT" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')
+    NOTBEFORE=`$(sudo openssl x509 -in "`$CRT" -noout -startdate 2>/dev/null | sed 's/^notBefore=//')
     EXPIRY_EPOCH=`$(date -d "`$EXPIRY" +%s 2>/dev/null || echo 0)
+    NOTBEFORE_EPOCH=`$(date -d "`$NOTBEFORE" +%s 2>/dev/null || echo 0)
     NOW_EPOCH=`$(date +%s)
     REMAINING_DAYS=`$(( (EXPIRY_EPOCH - NOW_EPOCH) / 86400 ))
-    if [ "`$REMAINING_DAYS" -gt 30 ]; then
-      SKIP_REASON="cert is PKI-issued (issuer=`$CUR_ISSUER) and `$REMAINING_DAYS days remaining"
-    else
+    SPAN_HOURS=`$(( (EXPIRY_EPOCH - NOTBEFORE_EPOCH) / 3600 ))
+    # Convert LEAF_TTL like "2160h" or "8760h" to integer hours
+    DESIRED_HOURS=`$(echo "`$LEAF_TTL" | sed 's/h$//')
+    # 10% tolerance band (Vault may issue slightly less than ttl due to
+    # max_ttl backoff, leeway, etc.)
+    LOWER=`$(( DESIRED_HOURS * 9 / 10 ))
+    UPPER=`$(( DESIRED_HOURS * 11 / 10 ))
+    if [ "`$REMAINING_DAYS" -le 30 ]; then
       echo "[pki-rotate] `$HOSTNAME: cert is PKI-issued but only `$REMAINING_DAYS days remaining; re-issuing"
+    elif [ "`$SPAN_HOURS" -lt "`$LOWER" ] || [ "`$SPAN_HOURS" -gt "`$UPPER" ]; then
+      echo "[pki-rotate] `$HOSTNAME: cert validity span `$SPAN_HOURS h is outside desired `$DESIRED_HOURS h +/-10% (likely TTL change); re-issuing"
+    else
+      SKIP_REASON="cert is PKI-issued (issuer=`$CUR_ISSUER), `$REMAINING_DAYS days remaining, span=`$SPAN_HOURS h matches desired `$DESIRED_HOURS h"
     fi
   else
     echo "[pki-rotate] `$HOSTNAME: current cert issuer='`$CUR_ISSUER' is not the PKI intermediate; rotating"
