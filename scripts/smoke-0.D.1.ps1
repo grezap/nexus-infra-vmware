@@ -173,9 +173,18 @@ if (-not $rootToken) {
         { $peersJson | ConvertTo-Json -Depth 8 } `
         { param($o) $peersJson -and ($peersJson.data.config.servers | Where-Object { $_.leader }).Count -eq 1 }
 
-    Test-Check 'raft list-peers: vault-1 is the leader (post-init expected)' `
+    # Don't pin "vault-1 must be leader" -- Raft elects whichever node currently
+    # holds quorum, and after any restart / partition / recovery cycle ANY of
+    # vault-1/2/3 can be the leader (by design). What we actually want to
+    # verify is "the elected leader is one of our 3 known nodes," which
+    # combined with "exactly 3 servers" + "exactly 1 leader" above is
+    # sufficient. The earlier "vault-1 must be leader" check fired during
+    # 0.D.3 close-out recovery when vault-3 was elected after the
+    # rename-nic1 + restart-vault dance, even though the cluster was
+    # perfectly healthy.
+    Test-Check 'raft list-peers: leader is one of vault-1/2/3' `
         { $peersJson | ConvertTo-Json -Depth 8 } `
-        { param($o) $peersJson -and ($peersJson.data.config.servers | Where-Object { $_.node_id -eq 'vault-1' -and $_.leader }).Count -eq 1 }
+    { param($o) $peersJson -and (($peersJson.data.config.servers | Where-Object { $_.leader -and ($_.node_id -in @('vault-1', 'vault-2', 'vault-3')) }).Count -eq 1) }
 
     # ─── 5. KV-v2 + auth methods + smoke secret
     Write-Section 'KV-v2 + auth methods + smoke secret'

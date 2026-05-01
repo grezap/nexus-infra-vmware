@@ -200,6 +200,31 @@ LinkLocalAddressing=no
 DHCP=no
 IPv6AcceptRA=no
 EOF
+
+  # CRITICAL: rewrite the deb13 baseline's 10-nic0.link to MAC-match the
+  # PRIMARY NIC instead of OriginalName=en*. Without this, on every boot
+  # AFTER first-boot, systemd-udev processes 10-nic0.link first (lex order),
+  # matches en* greedily against BOTH NICs, renames the first one to nic0,
+  # then tries to rename the second one to nic0 too -- which conflicts and
+  # leaves it stuck with its kernel-default name (e.g. ens192). The
+  # 20-nic1.link MAC rule never runs because 10-nic0.link already matched.
+  # Result: nic1 doesn't exist, the static .network rule for nic1 doesn't
+  # apply, the VMnet10 backplane interface has no IP, and Vault's Raft
+  # cluster RPC port (8201) becomes unreachable across nodes -> quorum
+  # loss on ANY restart. Diagnosed 2026-05-01 during 0.D.3 close-out.
+  # MAC-matching makes both .link files specific + safe across reboots.
+  if [ -f /etc/systemd/network/10-nic0.link ] && ! grep -q "^MACAddress=$PRIMARY_MAC" /etc/systemd/network/10-nic0.link; then
+    echo "$LOG_PREFIX rewriting 10-nic0.link to MAC-match primary (was OriginalName=en* greedy)"
+    cat > /etc/systemd/network/10-nic0.link <<EOF
+[Match]
+MACAddress=$PRIMARY_MAC
+
+[Link]
+Name=nic0
+EOF
+    udevadm control --reload 2>/dev/null || true
+  fi
+
   ip link set nic1 up 2>/dev/null || true
   # Idempotent: only add the address if it's not already there.
   if ! ip -4 -o addr show nic1 2>/dev/null | grep -q "$VMNET10_IP"; then
