@@ -25,10 +25,12 @@
   validate -- terraform fmt -check -recursive + terraform validate
 
 .PARAMETER Phase
-  Which smoke phase to run. '0.D.3' (default) runs the full LDAP smoke gate
-  which chains 0.D.2 (which itself chains 0.D.1). '0.D.2' runs the PKI gate
-  alone (chains 0.D.1). '0.D.1' runs the cluster-only gate. Use older phases
-  when iterating with -Vars enable_vault_ldap=false / enable_vault_pki=false.
+  Which smoke phase to run. '0.D.4' (default) runs the full KV-foundation
+  smoke gate which chains 0.D.3 -> 0.D.2 -> 0.D.1. '0.D.3' runs the LDAP
+  gate alone (chains 0.D.2 + 0.D.1). '0.D.2' runs the PKI gate (chains
+  0.D.1). '0.D.1' runs the cluster-only gate. Use older phases when
+  iterating with -Vars enable_vault_kv_foundation_seed=false /
+  enable_vault_ldap=false / enable_vault_pki=false.
 
 .PARAMETER Vars
   Array of "key=value" pairs forwarded to terraform as -var flags. Applies
@@ -49,8 +51,8 @@
   pwsh -File scripts\security.ps1 smoke -Phase 0.D.1
 
 .NOTES
-  See scripts/smoke-0.D.1.ps1 (cluster-only gate) and scripts/smoke-0.D.2.ps1
-  (PKI gate, chains 0.D.1) for the underlying check definitions.
+  See scripts/smoke-0.D.{1,2,3,4}.ps1 for the underlying check definitions.
+  Each phase's smoke gate chains the previous phase's checks first.
   See scripts/foundation.ps1 for the same shape applied to envs/foundation/.
 #>
 
@@ -60,8 +62,8 @@ param(
     [ValidateSet('apply', 'destroy', 'smoke', 'cycle', 'plan', 'validate')]
     [string]$Verb,
 
-    [ValidateSet('0.D.1', '0.D.2', '0.D.3')]
-    [string]$Phase = '0.D.3',
+    [ValidateSet('0.D.1', '0.D.2', '0.D.3', '0.D.4')]
+    [string]$Phase = '0.D.4',
 
     [string[]]$Vars = @(),
 

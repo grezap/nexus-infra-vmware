@@ -96,8 +96,15 @@ echo "FOUNDATION_APPROLE_SECRET_ID=`$SECRET_ID"
         throw "[foundation-approle] role/secret-id provisioning failed (rc=$LASTEXITCODE). Output:`n$output"
       }
 
-      $roleId = ($output | Select-String -Pattern '^FOUNDATION_APPROLE_ROLE_ID=(.+)$' -AllMatches).Matches | ForEach-Object { $_.Groups[1].Value.Trim() } | Select-Object -First 1
-      $secretId = ($output | Select-String -Pattern '^FOUNDATION_APPROLE_SECRET_ID=(.+)$' -AllMatches).Matches | ForEach-Object { $_.Groups[1].Value.Trim() } | Select-Object -First 1
+      # Multi-line regex match -- PowerShell's `-match` with `(?m)` flag
+      # treats `^`/`$` as line anchors within the multi-line $output string.
+      # (Select-String with -AllMatches on a multi-line string can return
+      # null Matches when the input has no trailing newline; the (?m) regex
+      # via `-match` is the canonical PS idiom for this.)
+      $roleId   = $null
+      $secretId = $null
+      if ($output -match '(?m)^FOUNDATION_APPROLE_ROLE_ID=(.+)$')   { $roleId   = $Matches[1].Trim() }
+      if ($output -match '(?m)^FOUNDATION_APPROLE_SECRET_ID=(.+)$') { $secretId = $Matches[1].Trim() }
       if (-not $roleId -or -not $secretId) {
         throw "[foundation-approle] failed to parse role-id/secret-id from remote output. Output:`n$output"
       }
