@@ -434,16 +434,16 @@ variable "vault_foundation_approle_creds_file" {
 }
 
 variable "foundation_seed_dsrm_password" {
-  description = "Seed value for nexus/foundation/dc-nexus/dsrm at password. Default matches the foundation env's var.dsrm_password default exactly (NexusDSRM!1) so a steady-state lab seeds back to the same value after a destroy+apply cycle. Override to seed a different starting pwd; rotate-after-seed via `vault kv put nexus/foundation/dc-nexus/dsrm password=...`."
+  description = "Seed value for nexus/foundation/dc-nexus/dsrm at password. Default matches the foundation env's var.dsrm_password default (NexusDSRMBootstrap!2026, >=14 chars per 0.D.5 MinPasswordLength=14 policy) so a steady-state lab seeds back to the same value after a destroy+apply cycle. Override to seed a different starting pwd; rotate-after-seed via `vault kv put nexus/foundation/dc-nexus/dsrm password=$(openssl rand -base64 24)` then re-apply foundation env (the dc_rotate_bootstrap_creds overlay pushes the new pwd to AD)."
   type        = string
-  default     = "NexusDSRM!1"
+  default     = "NexusDSRMBootstrap!2026"
   sensitive   = true
 }
 
 variable "foundation_seed_local_administrator_password" {
-  description = "Seed value for nexus/foundation/dc-nexus/local-administrator at password. Default matches foundation env's var.local_administrator_password default (NexusAdmin!1)."
+  description = "Seed value for nexus/foundation/dc-nexus/local-administrator at password. Default matches foundation env's var.local_administrator_password default (NexusLocalAdminBootstrap!2026, >=14 chars per 0.D.5 MinPasswordLength=14 policy)."
   type        = string
-  default     = "NexusAdmin!1"
+  default     = "NexusLocalAdminBootstrap!2026"
   sensitive   = true
 }
 

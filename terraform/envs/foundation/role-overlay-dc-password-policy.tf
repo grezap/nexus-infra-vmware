@@ -50,7 +50,7 @@ resource "null_resource" "dc_password_policy" {
     max_password_age_days     = var.dc_max_password_age_days
     min_password_age_days     = var.dc_min_password_age_days
     password_history_count    = var.dc_password_history_count
-    password_policy_overlay_v = "2" # v2 = hoist `if`-as-expression for MaxPasswordAge=0/never out of inline string concat (Win PS 5.1 doesn't support `if` as expression inside larger expressions, only as RHS of assignment); also moved $maxAgeSpan if-then to a pre-computed value. Cosmetic only -- v1 set the policy correctly but emitted a parse error on the verify line. v1 = initial implementation.
+    password_policy_overlay_v = "3" # v3 = ship script via scp + powershell -File (was -EncodedCommand). At v=2 + MinPasswordLength=14 the encoded base64 was ~8 KB which exceeded cmd.exe's command-line limit; remote SSH returned "The command line is too long." but the retry loop's predicate (only matched connection-level failures) treated exit=1 as success, silently dropping the policy update. Per memory/feedback_windows_ssh_automation.md rule #2 (base64 transit has length limits) + memory/feedback_diagnose_before_rewriting.md (catch failure modes the retry loop doesn't classify). v2 = hoist `if`-as-expression for MaxPasswordAge=0/never out of inline string concat. v1 = initial implementation.
   }
 
   depends_on = [null_resource.dc_nexus_verify]
@@ -117,23 +117,43 @@ resource "null_resource" "dc_password_policy" {
         `$maxAgeStr = if (`$verify.MaxPasswordAge.Ticks -eq 0) { '0 (never)' } else { ([int]`$verify.MaxPasswordAge.TotalDays).ToString() + 'd' };
         Write-Output ('verify: MinPasswordLength=' + `$verify.MinPasswordLength + ', LockoutThreshold=' + `$verify.LockoutThreshold + ', LockoutDuration=' + [int]`$verify.LockoutDuration.TotalMinutes + 'min, MaxPasswordAge=' + `$maxAgeStr)
 "@
-      $bytes = [System.Text.Encoding]::Unicode.GetBytes($remote)
-      $b64   = [Convert]::ToBase64String($bytes)
+      # Ship as file (scp + powershell -File) instead of -EncodedCommand.
+      # The encoded base64 of this script (UTF-16 + base64) crosses cmd.exe's
+      # ~8 KB command-line limit when MinPasswordLength=14 is the target
+      # (cmd.exe rejects with "The command line is too long.")  Per memory
+      # feedback_windows_ssh_automation.md rule #2 + the LDAPS cert overlay's
+      # canonical pattern, scp the script + run via powershell -File.
+      $tmpDir          = New-Item -ItemType Directory -Force -Path (Join-Path $env:TEMP "nexus-pwd-policy-$(Get-Random)")
+      $localScriptPath = Join-Path $tmpDir 'set-password-policy.ps1'
+      $remoteScriptPath = 'C:/Windows/Temp/set-password-policy.ps1'
+      Set-Content -Path $localScriptPath -Value $remote -Encoding UTF8
 
       $maxAttempts = 5
-      $issued = $false
+      $issued      = $false
+      $sshOutput   = ''
       for ($i = 1; $i -le $maxAttempts; $i++) {
-        $sshOutput = ssh -o ConnectTimeout=15 nexusadmin@$ip "powershell -NoProfile -EncodedCommand $b64" 2>&1 | Out-String
+        # Stage the script on the DC first, then run it via -File. Tighten
+        # the success predicate: ssh exit MUST be 0 AND output MUST contain
+        # the verify marker. exit=1 alone (the prior false-positive case)
+        # is now correctly classified as failure.
+        scp -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $localScriptPath "nexusadmin@$${ip}:$remoteScriptPath" 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "[dc-password-policy] attempt $i scp failed (rc=$LASTEXITCODE), retrying..."
+          Start-Sleep -Seconds 10
+          continue
+        }
+        $sshOutput = ssh -o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=no nexusadmin@$ip "powershell -NoProfile -ExecutionPolicy Bypass -File $remoteScriptPath" 2>&1 | Out-String
         $rc = $LASTEXITCODE
-        if ($sshOutput -notmatch "Connection (timed out|refused)" -and $sshOutput -notmatch "port 22:") {
+        if ($rc -eq 0 -and $sshOutput -match 'verify: MinPasswordLength=') {
           Write-Host "[dc-password-policy] attempt $i succeeded (ssh exit=$rc)"
-          if ($sshOutput.Trim()) { Write-Host "[dc-password-policy] ssh output:`n$($sshOutput.Trim())" }
+          Write-Host "[dc-password-policy] ssh output:`n$($sshOutput.Trim())"
           $issued = $true
           break
         }
-        Write-Host "[dc-password-policy] attempt $i failed: $($sshOutput.Trim())"
+        Write-Host "[dc-password-policy] attempt $i FAILED (rc=$rc): $($sshOutput.Trim())"
         Start-Sleep -Seconds 10
       }
+      Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
       if (-not $issued) {
         throw "[dc-password-policy] all $maxAttempts attempts failed. Last output: $sshOutput"
       }

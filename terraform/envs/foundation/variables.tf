@@ -59,16 +59,16 @@ variable "ad_netbios" {
 }
 
 variable "dsrm_password" {
-  description = "Directory Services Restore Mode (DSRM) administrator password used by Install-ADDSForest. Pre-Phase-0.D this lives plaintext in tfvars / defaults; Vault-backed in Phase 0.D. Does not need to match the build-time nexusadmin password."
+  description = "Directory Services Restore Mode (DSRM) administrator password used by Install-ADDSForest. Default placeholder is >=14 chars to satisfy 0.D.5 password policy (MinPasswordLength=14). Real lab uses Vault-generated 24-char value via `vault kv put nexus/foundation/dc-nexus/dsrm password=$(openssl rand -base64 24)` then `terraform apply` (the dc_rotate_bootstrap_creds overlay syncs KV -> AD)."
   type        = string
-  default     = "NexusDSRM!1"
+  default     = "NexusDSRMBootstrap!2026"
   sensitive   = true
 }
 
 variable "local_administrator_password" {
-  description = "Password to set on the built-in Administrator account before Install-ADDSForest runs. The local Administrator becomes the domain Administrator on forest creation; Install-ADDSForest refuses to promote when its password is blank (sysprep wipes the unattend-provided password on every clone). Pre-Phase-0.D plaintext default; Vault-backed in Phase 0.D."
+  description = "Password to set on the built-in Administrator account before Install-ADDSForest runs. The local Administrator becomes the domain Administrator on forest creation; Install-ADDSForest refuses to promote when its password is blank (sysprep wipes the unattend-provided password on every clone). Default placeholder is >=14 chars to satisfy 0.D.5 MinPasswordLength=14; rotate via Vault KV + dc_rotate_bootstrap_creds overlay."
   type        = string
-  default     = "NexusAdmin!1"
+  default     = "NexusLocalAdminBootstrap!2026"
   sensitive   = true
 }
 
@@ -114,9 +114,9 @@ variable "enable_dc_password_policy" {
 }
 
 variable "dc_password_min_length" {
-  description = "MinPasswordLength on the Default Domain Policy. 12 matches existing bootstrap creds (NexusAdmin!1 = 12 chars); bump to 14+ in Phase 0.D when Vault generates creds."
+  description = "MinPasswordLength on the Default Domain Policy. Bumped 12 -> 14 at Phase 0.D.5 close-out -- Vault now generates 24-char creds via the nexus-ad-rotated password policy (covers svc-vault-ldap + svc-vault-smoke + svc-demo-rotated) AND the foundation env's dc_rotate_bootstrap_creds overlay rotates DSRM + domain Administrator + nexusadmin to KV-generated 24-char values when triggered. Existing AD passwords don't retroactively re-validate; the policy applies to future password writes only."
   type        = number
-  default     = 12
+  default     = 14
   validation {
     condition     = var.dc_password_min_length >= 8 && var.dc_password_min_length <= 128
     error_message = "MinPasswordLength must be between 8 and 128 (AD constraint)."
@@ -395,6 +395,30 @@ variable "vault_ca_bundle_path" {
 
 variable "enable_vault_kv_ad_writeback" {
   description = "Toggle: when the dc_vault_ad_bind / dc_vault_ad_smoke overlays generate a fresh random pwd for an AD account, ALSO write that pwd to Vault KV at nexus/foundation/ad/<account>. Default true. Set false to keep KV as a read-only mirror (e.g. when iterating on the bind/smoke overlays without a Vault cluster up). When false, the legacy JSON-file write at vault_ad_bind_creds_file remains canonical."
+  type        = bool
+  default     = true
+}
+
+# ─── Phase 0.D.5 — bootstrap cred rotation (KV -> AD sync) ───────────────
+#
+# After 0.D.5's MinPasswordLength=14 bump, the DSRM + domain Administrator
+# + nexusadmin passwords need to be >=14 chars. The dc_rotate_bootstrap_creds
+# overlay reads the current values from Vault KV (nexus/foundation/...) and
+# pushes them to AD via:
+#   - DSRM:                 ntdsutil "set dsrm password" "reset password on server null" "<pwd>" "q" "q"
+#   - domain Administrator: Set-ADAccountPassword -Identity Administrator -Reset -NewPassword
+#   - nexusadmin:           Set-ADAccountPassword -Identity nexusadmin    -Reset -NewPassword
+#
+# Triggers on a sha256 hash of the three creds combined; whenever the
+# operator runs `vault kv put nexus/foundation/dc-nexus/dsrm password=...`
+# (or the other paths), the data source picks up the new value, the hash
+# changes, and the overlay re-runs to push the new pwd to AD.
+#
+# Default true so KV becomes the canonical source of truth; set false if
+# operator manages AD pwds outside of Vault.
+
+variable "enable_dc_rotate_bootstrap_creds" {
+  description = "Toggle: sync DSRM + domain Administrator + nexusadmin passwords from Vault KV into live AD whenever KV values change. Default true. Requires enable_dc_promotion=true + enable_vault_kv_creds=true. Set false to manage AD pwds outside Vault."
   type        = bool
   default     = true
 }

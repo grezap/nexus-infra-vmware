@@ -74,6 +74,21 @@ output "vault_ad_state" {
   }
 }
 
+output "bootstrap_creds_rotation_state" {
+  description = "Phase 0.D.5 KV -> AD rotation overlay state. Only meaningful when var.enable_dc_rotate_bootstrap_creds=true (default true). Hash changes when any of dsrm/admin/nexusadmin in Vault KV changes."
+  value = {
+    rotation_enabled      = var.enable_dc_rotate_bootstrap_creds
+    requires_kv_creds     = var.enable_vault_kv_creds
+    requires_dc_promotion = var.enable_dc_promotion
+    rotated_identities    = ["DSRM (via ntdsutil)", "Administrator (via Set-ADAccountPassword)", "nexusadmin (via Set-ADAccountPassword)"]
+    rotation_trigger_paths = var.enable_vault_kv_creds ? [
+      "${var.vault_kv_mount_path}/foundation/dc-nexus/dsrm",
+      "${var.vault_kv_mount_path}/foundation/dc-nexus/local-administrator",
+      "${var.vault_kv_mount_path}/foundation/identity/nexusadmin",
+    ] : []
+  }
+}
+
 output "vault_kv_creds_state" {
   description = "Phase 0.D.4 KV-backed bootstrap creds state. Only meaningful when var.enable_vault_kv_creds=true (default false during 0.D.4 development; flips to true at 0.D.4 close-out)."
   value = {
