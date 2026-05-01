@@ -6,6 +6,267 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Phase 0.D.4 — Foundation cred migration into Vault KV via AppRole — 2026-05-01)
+
+- **`terraform/envs/security/role-overlay-vault-foundation-policy.tf`** — writes
+  the `nexus-foundation-reader` Vault policy: read on
+  `nexus/data/foundation/*` + `nexus/metadata/foundation/*`, write on
+  `nexus/data/foundation/ad/*` only (where the bind/smoke overlays push
+  generated creds at create time), token-self lookup/renew. NO sudo.
+  Idempotent upsert via `vault policy write`.
+
+- **`terraform/envs/security/role-overlay-vault-foundation-approle.tf`** —
+  defines AppRole `nexus-foundation-reader` (`token_policies=
+  nexus-foundation-reader`, `token_ttl=1h`, `token_max_ttl=4h`,
+  `secret_id_ttl=0`, `secret_id_num_uses=0`, `bind_secret_id=true`).
+  Persists role-id (stable) + freshly-generated secret-id to
+  `$HOME\.nexus\vault-foundation-approle.json` on the build host (mode
+  0600 via icacls). Foundation env's `provider "vault"` reads this
+  sidecar at plan/apply time.
+
+- **`terraform/envs/security/role-overlay-vault-foundation-seed.tf`** —
+  one-time sticky seed of plaintext defaults + JSON migration into
+  `nexus/foundation/{dc-nexus,identity,vault,ad}/*`. Six paths considered
+  per apply: `dc-nexus/dsrm`, `dc-nexus/local-administrator`,
+  `identity/nexusadmin`, `vault/userpass-nexusadmin`,
+  `ad/svc-vault-ldap`, `ad/svc-vault-smoke`. Probe-then-write pattern;
+  NEVER overwrites a populated path. Bind + smoke paths source from
+  `$HOME\.nexus\vault-ad-bind.json` legacy artifact when present
+  (greenfield labs without 0.D.3 yet skip those two paths cleanly).
+  Plaintext seed values (dsrm / local-admin / nexusadmin / userpass)
+  come from new sensitive variables in the security env's `variables.tf`
+  with defaults mirroring the foundation env's defaults.
+
+- **`terraform/envs/foundation/vault-provider.tf`** — `hashicorp/vault` ~> 4
+  provider config with `auth_login` block (path `auth/approle/login`,
+  parameters `{role_id, secret_id}` from the JSON sidecar via
+  `pathexpand("~/...") + try(file(...), "")`). `skip_child_token=true`
+  because the AppRole's policy doesn't grant `auth/token/create`. Pinned
+  `~> 4.0` because v5 dropped `auth_login_approle` and changed the auth
+  shape further (canonized in `feedback_terraform_vault_provider_approle.md`).
+
+- **`terraform/envs/foundation/data-vault-kv-foundation.tf`** — three
+  `vault_kv_secret_v2` data sources gated on `enable_vault_kv_creds`:
+  `dc_nexus_dsrm`, `dc_nexus_local_administrator`, `identity_nexusadmin`.
+  `local.foundation_creds` block centralizes the
+  `enable_vault_kv_creds ? KV : variable-default` ternary so consumer
+  overlays read `local.foundation_creds.dsrm` etc. instead of
+  `var.dsrm_password`.
+
+- **`scripts/smoke-0.D.4.ps1`** — chained smoke gate (0.D.3 → 0.D.2 →
+  0.D.1 first, then 0.D.4 layer). Probes: AppRole creds JSON shape,
+  `nexus-foundation-reader` policy paths + capabilities, AppRole role-id
+  stability vs JSON cache, AppRole login → token-with-policy, six
+  `kv get` probes for the seeded paths, AppRole token capability scoping
+  (positive + 2 negative — token CAN read `nexus/foundation/dc-nexus/dsrm`,
+  CANNOT read `nexus/smoke/canary`, CANNOT write
+  `nexus/foundation/dc-nexus/dsrm`).
+
+### Changed (Phase 0.D.4)
+
+- **`terraform/envs/security/role-overlay-vault-ldap-auth.tf` v4 → v5** —
+  bindpass now sourced from Vault KV (`nexus/foundation/ad/svc-vault-ldap`)
+  with JSON-file fallback for resilience. Adds `seed_id` trigger
+  reference + `depends_on null_resource.vault_foundation_seed`. Probe pattern:
+  `vault kv get -format=json nexus/foundation/ad/svc-vault-ldap` first;
+  fall back to `$HOME\.nexus\vault-ad-bind.json` parse if the KV path is
+  empty/unparseable. After 0.D.4 close-out, the JSON file is vestigial
+  and can be deleted operationally.
+
+- **`terraform/envs/foundation/main.tf`** — `hashicorp/vault ~> 4.0`
+  added to `required_providers`. Comment annotates the v5-not-v4
+  pinning rationale.
+
+- **`terraform/envs/foundation/variables.tf`** — adds
+  `enable_vault_kv_creds` (default `true` after close-out flip),
+  `enable_vault_kv_ad_writeback` (default `true`),
+  `vault_kv_mount_path`, `vault_foundation_approle_creds_file`,
+  `vault_ca_bundle_path`. Foundation-side defaults use `~/...` form
+  (Terraform `pathexpand()` resolves `~`, NOT `$HOME` — security env's
+  PowerShell-side defaults using `$HOME/...` resolve via
+  `ExecutionContext.InvokeCommand.ExpandString` to the same physical files).
+
+- **`terraform/envs/foundation/role-overlay-dc-nexus.tf`** — Install-ADDSForest
+  now consumes `local.foundation_creds.{dsrm, local_administrator, nexusadmin}`
+  instead of `var.dsrm_password` / `var.local_administrator_password` /
+  `var.nexusadmin_password`.
+
+- **`terraform/envs/foundation/role-overlay-jumpbox-domainjoin.tf`** —
+  Add-Computer credential consumes `local.foundation_creds.nexusadmin`.
+
+- **`terraform/envs/foundation/role-overlay-dc-vault-ad-bind.tf` v1 → v2** —
+  KV writeback after pwd generation: when the overlay generates a fresh
+  random bindpass, it writes to `nexus/foundation/ad/svc-vault-ldap`
+  via SSH+`vault kv put` on vault-1 using the root token from
+  `$HOME\.nexus\vault-init.json`. Best-effort: WARN+skip when
+  vault-init.json is absent (security env not yet applied).
+
+- **`terraform/envs/foundation/role-overlay-dc-vault-smoke-account.tf` v1 → v2** —
+  Same KV writeback pattern for `nexus/foundation/ad/svc-vault-smoke`
+  (only when the overlay actually generates a fresh pwd, NOT when
+  cached pwd is preserved).
+
+- **`scripts/security.ps1`** — `Phase` ValidateSet extended to
+  `0.D.4`; default phase is now `0.D.4`. Older phases remain runnable
+  explicitly.
+
+- **`README.md`** — phase badge `0.D.3 closed → 0.D.4 closed`. Current-state
+  paragraph + repo-layout block call out the new 0.D.4 deliverables
+  (Vault-KV-backed bootstrap creds via AppRole; nexus-foundation-reader
+  policy + AppRole + KV seed in security env; provider-driven data
+  sources in foundation env). Next signal: 0.D.5 (Transit auto-unseal +
+  GMSA + Vault Agent).
+
+### Validated (Phase 0.D.4 end-to-end 2026-05-01)
+
+- **Foundation cred migration reproducibility CONFIRMED.**
+  `pwsh -File scripts\security.ps1 smoke -Phase 0.D.4` returns ALL GREEN
+  through the chain: 24/24 cluster (0.D.1) + ~16 PKI (0.D.2) + ~13 LDAP
+  (0.D.3) + ~14 KV-foundation (0.D.4) ≈ 67 checks. After security apply
+  + `foundation apply -Vars enable_vault_kv_creds=true`, foundation plan
+  reports `No changes` (steady state; data sources resolve via AppRole;
+  values match seed). Acceptance criterion (`MASTER-PLAN.md` Phase 0.D
+  goal): `vault kv get nexus/foundation/<path>` returns for all 6
+  expected paths.
+
+- **One new lesson canonized**:
+  `feedback_terraform_vault_provider_approle.md` — `hashicorp/vault`
+  provider v4.x has NO `auth_login_approle` typed block; AppRole auth
+  goes through the generic `auth_login { path; parameters }` form.
+  Pin `~> 4.0`; v5 changes the auth shape further. Caught when
+  `terraform validate` rejected the typed block ("Blocks of type
+  'auth_login_approle' are not expected here") even though the
+  community-canonical shape circulates with that name.
+
+- **Bug fix surfaced + canonized**: PowerShell `Select-String -AllMatches`
+  returns null `.Matches` on multi-line strings without trailing
+  newline. The AppRole role-id+secret-id parse from the remote echo
+  output failed with "Cannot index into a null array" even though the
+  remote bash echoed both tokens correctly. Fix: `$out -match
+  '(?m)^TOKEN=(.+)$'` is the canonical PS idiom for line-anchored
+  multi-line regex extraction. Per
+  `feedback_diagnose_before_rewriting.md`, the diagnostic line in the
+  apply error output ("Output: FOUNDATION_APPROLE_ROLE_ID=...") proved
+  the regex parse was the bug, not the remote provisioning.
+
+### Added (Phase 0.D.3 — Vault AD/LDAP integration + LDAPS pulled forward — 2026-05-01)
+
+- **`terraform/envs/foundation/role-overlay-dc-vault-ad-bind.tf`** — creates
+  `svc-vault-ldap` AD service account in `OU=ServiceAccounts`. Generates
+  24-char random bindpass on the build host (not the DC — avoids leaking
+  pwd via DC syslog/eventlog). Writes `{binddn, bindpass, ldap_url, ...}`
+  to `$HOME\.nexus\vault-ad-bind.json` mode 0600 via icacls.
+- **`terraform/envs/foundation/role-overlay-dc-vault-ad-bind-acl.tf`** —
+  delegates 4 ACEs to `svc-vault-ldap` on `OU=ServiceAccounts` via
+  `dsacls /I:S`: Reset Password extended right, Change Password extended
+  right, RP/WP `userAccountControl`. Required for `secrets/ldap` rotate
+  (without these, `vault write -force ldap/rotate-role/<name>` fails
+  `LDAP Result Code 50 INSUFF_ACCESS_RIGHTS`).
+- **`terraform/envs/foundation/role-overlay-dc-vault-groups.tf`** — creates
+  3 AD security groups in `OU=Groups`: `nexus-vault-admins`,
+  `nexus-vault-operators`, `nexus-vault-readers`. Adds `nexusadmin` to
+  the admins group.
+- **`terraform/envs/foundation/role-overlay-dc-vault-demo-rotated-account.tf`** —
+  creates `svc-demo-rotated` (target of Vault `secrets/ldap` static
+  rotate-role) with random initial pwd; Vault rotates on first apply.
+- **`terraform/envs/foundation/role-overlay-dc-vault-smoke-account.tf`** —
+  creates `svc-vault-smoke` for the 0.D.3 end-to-end LDAP login probe;
+  enrolls in `nexus-vault-readers`. Plaintext pwd in vault-ad-bind.json
+  on the build host.
+- **`terraform/envs/security/role-overlay-vault-ldaps-cert.tf`** — issues
+  a leaf cert from `pki_int/issue/vault-server` for
+  `dc-nexus.nexus.lab`, builds PFX via openssl on vault-1, scp's to
+  dc-nexus, installs in `LocalMachine\My`, restarts NTDS. Gets AD
+  serving LDAPS on TCP/636.
+- **`terraform/envs/security/role-overlay-vault-ldap-policies.tf`** —
+  writes Vault policies: `nexus-admin` (full sudo), `nexus-operator`
+  (read/write `nexus/*` + cert issuance, no sudo), `nexus-reader`
+  (read-only `nexus/*`).
+- **`terraform/envs/security/role-overlay-vault-ldap-auth.tf`** —
+  enables `auth/ldap`, configures with LDAPS URL + binddn (from
+  vault-ad-bind.json) + bindpass + userdn (`DC=nexus,DC=lab`) +
+  userattr (`samAccountName`) + **`upndomain=""`** (Vault issue #27276)
+  + userfilter (`(&(objectClass=user)(sAMAccountName={{.Username}}))`)
+  + `certificate=@<root-CA-bundle>` for LDAPS chain validation.
+  Maps AD groups to Vault policies: admins → `nexus-admin`, operators
+  → `nexus-operator`, readers → `nexus-reader`.
+- **`terraform/envs/security/role-overlay-vault-ldap-secret-engine.tf`** —
+  enables `secrets/ldap` (`schema=ad`,
+  `password_policy=nexus-ad-rotated`,
+  `skip_static_role_import_rotation=true`). Replaces deprecated `ad`
+  engine.
+- **`terraform/envs/security/role-overlay-vault-ldap-rotate-role.tf`** —
+  defines static rotate-role for `svc-demo-rotated` with
+  `rotation_period=24h`. `skip_import_rotation=true` + explicit
+  `vault write -force ldap/rotate-role/svc-demo-rotated` to take
+  ownership without trying to bind as the target with an unknown pwd.
+- **`scripts/smoke-0.D.3.ps1`** — chained smoke gate covering LDAPS
+  reachability, auth/ldap config, group → policy mappings, end-to-end
+  smoke login probe (svc-vault-smoke → token with `nexus-reader`),
+  secrets/ldap config, static-role + static-cred reads.
+
+### Validated (Phase 0.D.3 reproducibility 2026-05-01)
+
+- 9 lesson commits to land 0.D.3 fully green (LDAPS forward-pull + 6
+  AD-side gotchas). Final commit chain: `662ae43` → `3691f35` →
+  `93695df` → `d2ed166` → `28826f1` → `a4b0ef6` → `8e1cc53` → `30df59d`
+  → `d0a61a0`. Memory entries:
+  `feedback_diagnose_before_rewriting.md`,
+  `feedback_vault_ldap_static_role_skip_import.md`,
+  `feedback_vault_ldap_ad_acl_delegation.md`,
+  `feedback_vault_ldap_ad_upn_bind.md` (rewritten — original
+  "always set upndomain" advice was wrong),
+  `feedback_terraform_partial_apply_destroys_resources.md`,
+  `feedback_systemd_link_precedence_multi_nic.md`.
+- Two structural fixes committed during recovery: foundation
+  `enable_vault_dhcp_reservations` default flipped false → true (commit
+  `30df59d`) so partial applies don't destroy reservations;
+  `vault-firstboot.sh` rewrites `10-nic0.link` with MAC-specific match
+  (commit `d0a61a0`) so nic1 survives reboot.
+
+### Added (Phase 0.D.2 — Vault PKI overlay — 2026-05-01)
+
+- **`terraform/envs/security/role-overlay-vault-pki-mount.tf`** —
+  mounts `pki/` and `pki_int/` secrets engines (idempotent via probe).
+- **`terraform/envs/security/role-overlay-vault-pki-root.tf`** —
+  generates internal root CA at `pki/` (`CN=NexusPlatform Root CA`,
+  TTL 10 y).
+- **`terraform/envs/security/role-overlay-vault-pki-intermediate.tf`** —
+  generates intermediate CSR at `pki_int/`, signs via root, sets signed
+  cert (`CN=NexusPlatform Intermediate CA`, TTL 5 y).
+- **`terraform/envs/security/role-overlay-vault-pki-roles.tf`** —
+  defines `vault-server` PKI role (`allow_ip_sans=true`,
+  `allowed_domains = nexus.lab + lab + localhost`,
+  `allow_subdomains=true`, leaf TTL 1 y).
+- **`terraform/envs/security/role-overlay-vault-pki-rotate.tf`** —
+  per-node listener cert reissue with atomic-swap into
+  `/etc/vault.d/tls/` + `systemctl reload vault.service` (SIGHUP,
+  zero-downtime). Idempotent via current-cert issuer + days-remaining
+  probe (skips if already PKI-issued + > 30 d remaining).
+- **`terraform/envs/security/role-overlay-vault-pki-distribute.tf`** —
+  writes root CA bundle to build host (`$HOME\.nexus\vault-ca-bundle.crt`,
+  mode 0600 via icacls) + installs on each Vault node's
+  `/usr/local/share/ca-certificates/` + runs `update-ca-certificates`.
+  Hash-compare idempotent.
+- **`terraform/envs/security/role-overlay-vault-pki-cleanup-hack.tf`** —
+  removes the per-clone `/usr/local/share/ca-certificates/vault-leader.crt`
+  residue from followers (the 0.D.1 cold-start hack — distribute step
+  replaces it with the shared root CA).
+- **`scripts/smoke-0.D.2.ps1`** — chained PKI smoke gate (0.D.1 first,
+  then PKI checks): mounts present, CA hierarchy + chain validates,
+  PKI role exists, per-node listener cert (issuer + SAN coverage +
+  days-remaining), build-host CA bundle hash match, build-host TLS
+  validation via `VAULT_CACERT` (no skip-verify), legacy 0.D.1 trust
+  shuffle cleaned up.
+
+### Validated (Phase 0.D.2 reproducibility 2026-05-01)
+
+- Three probe bugs surfaced in first cycle (locale-sensitive datetime
+  parsing on openssl output; .NET `SslStream` custom-root TLS callback
+  missing intermediate `ExtraStore` relay; sudo stderr breaking
+  strict-equality probes) — all canonized in
+  `feedback_smoke_gate_probe_robustness.md`.
+
 ### Validated (Phase 0.D.1 unattended end-to-end 2026-04-30)
 
 - **3-node Vault Raft cluster reproducibility CONFIRMED**. `pwsh -File scripts\security.ps1 cycle`

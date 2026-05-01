@@ -170,6 +170,24 @@ output "next_step" {
       vault kv get nexus/foundation/ad/svc-vault-smoke             # smoke probe cred
       # Acceptance criterion (per MASTER-PLAN.md Phase 0.D goal): kv get returns.
 
+    Rotate a foundation cred (Vault-side; foundation env picks it up on next apply):
+      vault kv put nexus/foundation/dc-nexus/dsrm password='NewStrongPwd!23'
+      pwsh -File scripts\foundation.ps1 apply
+      # Sticky writes: the seed overlay won't overwrite a populated path on
+      # subsequent security applies, so manual rotations stick.
+
+    Force-rotate the AppRole secret-id (foundation env reads the new one on next apply):
+      terraform -chdir=terraform\envs\security taint  null_resource.vault_foundation_approle
+      terraform -chdir=terraform\envs\security apply  -target=null_resource.vault_foundation_approle -auto-approve
+      # role-id is stable; secret-id rotates per security apply by default.
+
+    Verify AppRole token capability scoping:
+      ROLE_ID=$(jq -r .role_id   < $HOME/.nexus/vault-foundation-approle.json)
+      SECRET_ID=$(jq -r .secret_id < $HOME/.nexus/vault-foundation-approle.json)
+      TOKEN=$(vault write -field=token auth/approle/login role_id=$ROLE_ID secret_id=$SECRET_ID)
+      VAULT_TOKEN=$TOKEN vault kv get nexus/foundation/dc-nexus/dsrm  # OK
+      VAULT_TOKEN=$TOKEN vault kv get nexus/smoke/canary              # 403 (out-of-scope, by design)
+
     LDAP login (Phase 0.D.3, LDAPS):
       vault login -method=ldap -username=nexusadmin
       # Member of ${var.vault_ldap_admin_group} -> nexus-admin policy (full sudo)
@@ -203,11 +221,15 @@ output "next_step" {
 
     Selective ops -- per memory/feedback_selective_provisioning.md, every piece is
     independently controllable:
-      pwsh -File scripts\security.ps1 apply -Vars enable_vault_init=false           # bare clones, no init or PKI
-      pwsh -File scripts\security.ps1 apply -Vars enable_vault_pki=false            # 0.D.1 only, no PKI overlay
-      pwsh -File scripts\security.ps1 apply -Vars enable_vault_pki_rotate=false     # PKI mounts but no cert reissue
-      terraform apply -target=module.vault_1                                        # one clone only
-      terraform apply -target=null_resource.vault_pki_rotate_listener               # iterate on rotation alone
+      pwsh -File scripts\security.ps1 apply -Vars enable_vault_init=false                    # bare clones, no init/PKI/LDAP/seed
+      pwsh -File scripts\security.ps1 apply -Vars enable_vault_pki=false                     # 0.D.1 only, no PKI/LDAP/seed
+      pwsh -File scripts\security.ps1 apply -Vars enable_vault_ldap=false                    # 0.D.1 + 0.D.2 only, no LDAP/seed
+      pwsh -File scripts\security.ps1 apply -Vars enable_vault_kv_foundation_seed=false      # 0.D.1-3 only, no 0.D.4 seed/policy/approle
+      pwsh -File scripts\security.ps1 apply -Vars enable_vault_pki_rotate=false              # PKI mounts but no cert reissue
+      pwsh -File scripts\security.ps1 apply -Vars enable_vault_kv_foundation_seed_values=false  # AppRole + policy created, but no plaintext seed (e.g. when KV is already populated)
+      terraform apply -target=module.vault_1                                                 # one clone only
+      terraform apply -target=null_resource.vault_pki_rotate_listener                        # iterate on PKI rotation alone
+      terraform apply -target=null_resource.vault_foundation_seed                            # iterate on 0.D.4 seed alone
 
     Tear down (whole env):
       pwsh -File scripts\security.ps1 destroy

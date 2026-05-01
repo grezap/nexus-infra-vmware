@@ -1226,18 +1226,139 @@ The new `terraform/envs/security/role-overlay-vault-ldaps-cert.tf`:
 
 Vault's `auth/ldap/config` and `secrets/ldap/config` now point at `ldaps://192.168.70.240:636` and pass the PKI root CA bundle via `certificate=@` so Vault trusts the chain.
 
-### 1i.6 NOT in scope for 0.D.3 (still deferred)
+### 1i.6 What closed in 0.D.3 (close-out, 2026-05-01)
 
-- **0.D.4** — migrate foundation plaintext bootstrap creds (DSRM, local Administrator, nexusadmin) into Vault KV; refactor 0.C.* role overlays to read via `vault_kv_secret_v2` data sources
-- **0.D.5** — Transit auto-unseal + GMSA + tighten foundation `MinPasswordLength=14` + Vault Agent on member servers (LDAPS already landed in 0.D.3)
-- **mTLS Vault clients** — Phase 0.D.5+
-- **Multi-realm AD trust** — not in scope for a single-forest lab
-- **Revert `LDAPServerIntegrity=0`** — left as-is. LDAPS doesn't depend on it (TLS satisfies signing structurally), but flipping it back to `2` is a 0.D.5+ housekeeping item.
-- **Tail housekeeping** — `vms.yaml` 2 GB RAM correction + `vault-firstboot.sh` /etc/hosts fix (committed; awaits next template rebuild)
+**Reproducibility:** `pwsh -File scripts\security.ps1 smoke -Phase 0.D.3` returns ALL GREEN through the chain (24/24 cluster + ~16 PKI + ~13 LDAP). End-to-end `vault login -method=ldap -username=svc-vault-smoke` returns a token with `nexus-reader` policy; `vault read ldap/static-cred/svc-demo-rotated` returns a Vault-managed password rotated daily. Total wall-clock for a security cycle (post-template-build): ~6 min including LDAPS cert issue + NTDS restart.
 
-### 1i.6 RAM budget (unchanged)
+**Six lessons canonized to memory** (all referenced from `MEMORY.md` and from inline comments in the affected overlay code):
+
+| # | Lesson file | What it covers |
+|---|---|---|
+| 1 | `feedback_diagnose_before_rewriting.md` | When a TLS handshake fails, dump `X509Chain.Build` + Schannel events / OpenSSL errors BEFORE rewriting the cert pipeline. Saved 2 wasted iterations during 0.D.3 LDAPS rollout. |
+| 2 | `feedback_vault_ldap_static_role_skip_import.md` | Fresh AD onboarding requires `skip_import_rotation=true` (role) + `skip_static_role_import_rotation=true` (engine) + explicit `vault write -force ldap/rotate-role/<name>` to take ownership. Otherwise Vault tries to bind as the target with the AD-side initial pwd it doesn't know, fails AD `data 52e`. |
+| 3 | `feedback_vault_ldap_ad_acl_delegation.md` | Bind account needs 4 ACEs on the target OU (Reset Password + Change Password extended rights + RP/WP `userAccountControl`); delegate via `dsacls /I:S`. Account Operators shortcut over-permissions and is the wrong answer. |
+| 4 | `feedback_vault_ldap_ad_upn_bind.md` (rewritten) | `upndomain` silently rewrites `{{.Username}}` in `userfilter` (Vault issue #27276). Default empty for LDAPS+search-then-bind; set only for pure UPN-bind without binddn+bindpass. |
+| 5 | `feedback_terraform_partial_apply_destroys_resources.md` | `-Vars X=true` is the FULL override set for that apply, not a patch on the previous apply. Variable defaults must reflect steady state; opt-out is the explicit override. |
+| 6 | `feedback_systemd_link_precedence_multi_nic.md` | `OriginalName=en*` matching is non-deterministic with two en* interfaces; `vault-firstboot.sh` must rewrite the .link file with MAC-specific match so nic1 survives reboot. |
+
+**Two structural fixes committed during recovery:**
+
+- Foundation env's `enable_vault_dhcp_reservations` default flipped `false → true` (commit `30df59d`) so partial applies don't destroy gateway dhcp-host reservations.
+- `vault-firstboot.sh` rewrites `10-nic0.link` with MAC-specific match (commit `d0a61a0`) so secondary NIC survives reboot.
+
+**Smoke gate's "vault-1 must be leader" assertion relaxed** to "leader is one of vault-1/2/3" — Raft re-elects after restarts; pinning to vault-1 was over-strict.
+
+**Final commit chain** (9 commits to land 0.D.3 fully green):
+`662ae43` (LDAPS PFX via openssl) → `3691f35` (root CA into dc-nexus LocalMachine\Root) → `93695df` (cert install via scp+powershell -File, command-line length fix) → `d2ed166` (skip_import_rotation) → `28826f1` (AD ACL delegation) → `a4b0ef6` (rotate-role 3-state probe) → `8e1cc53` (clear upndomain) → `30df59d` (dhcp reservations default) → `d0a61a0` (.link MAC-match + smoke leader check).
+
+### 1i.7 RAM budget (unchanged)
 
 0.D.3 adds no VMs. RAM accounting identical to §1g.7.
+
+---
+
+## 1j. Phase 0.D.4 — foundation cred migration into Vault KV via AppRole
+
+Phase 0.D.4 retires the plaintext bootstrap-credential defaults from the foundation env's `variables.tf` (DSRM, local Administrator, nexusadmin) and the build-host JSON sidecar `$HOME\.nexus\vault-ad-bind.json` for the AD svc accounts (`svc-vault-ldap`, `svc-vault-smoke`). All six creds now live at `nexus/foundation/...` in Vault KV. Foundation env's role overlays read via `vault_kv_secret_v2` data sources authenticated by a dedicated AppRole `nexus-foundation-reader`.
+
+**Canon mapping:**
+
+| Choice | Source |
+|---|---|
+| `vault kv get nexus/foundation/<path>` returns | `MASTER-PLAN.md` Phase 0.D goal (line 145, post-housekeeping shape) |
+| AppRole + KV-v2 paths under `nexus/*` | `MASTER-PLAN.md` Phase 0.D goal (original wording) |
+| Read via `vault_kv_secret_v2` data sources | user task scope 2026-05-01 |
+| Provider authenticates via AppRole | [ADR-0014](../../nexus-platform-plan/docs/adr/ADR-0014-foundation-creds-via-approle-kv.md) |
+| `hashicorp/vault ~> 4.0` provider | [`feedback_terraform_vault_provider_approle.md`](../memory/feedback_terraform_vault_provider_approle.md) — v5 dropped `auth_login_approle` block; v4 uses generic `auth_login` |
+| `enable_vault_kv_creds` default `true` after close-out | `feedback_terraform_partial_apply_destroys_resources.md` — defaults reflect steady state |
+
+**Files (added or changed in 0.D.4):**
+
+| Path | Purpose |
+|---|---|
+| `terraform/envs/security/role-overlay-vault-foundation-policy.tf` | Write `nexus-foundation-reader` policy: read on `nexus/data/foundation/*`, write only on `nexus/data/foundation/ad/*` |
+| `terraform/envs/security/role-overlay-vault-foundation-approle.tf` | Define AppRole + persist role-id+secret-id JSON to `$HOME\.nexus\vault-foundation-approle.json` (mode 0600 via icacls) |
+| `terraform/envs/security/role-overlay-vault-foundation-seed.tf` | One-time sticky seed of plaintext defaults + JSON migration into `nexus/foundation/{dc-nexus,identity,vault,ad}/*` (NEVER overwrites a populated path) |
+| `terraform/envs/security/role-overlay-vault-ldap-auth.tf` (v4 → v5) | Bindpass now sourced from Vault KV with JSON-file fallback for resilience |
+| `terraform/envs/foundation/vault-provider.tf` | `hashicorp/vault ~> 4.0` provider with `auth_login` block (path `auth/approle/login`); reads role-id+secret-id JSON via `pathexpand("~/...") + try(file(...), "")` |
+| `terraform/envs/foundation/data-vault-kv-foundation.tf` | Three `vault_kv_secret_v2` data sources gated on `enable_vault_kv_creds`; `local.foundation_creds` ternary (KV when enabled, var-default fallback) |
+| `terraform/envs/foundation/role-overlay-dc-nexus.tf` | Install-ADDSForest consumes `local.foundation_creds.{dsrm,local_administrator,nexusadmin}` |
+| `terraform/envs/foundation/role-overlay-jumpbox-domainjoin.tf` | Add-Computer credential consumes `local.foundation_creds.nexusadmin` |
+| `terraform/envs/foundation/role-overlay-dc-vault-ad-bind.tf` (v1 → v2) | KV writeback after pwd generation: writes to `nexus/foundation/ad/svc-vault-ldap` via SSH+`vault kv put` on vault-1 (best-effort; WARN+skip when vault-init.json absent) |
+| `terraform/envs/foundation/role-overlay-dc-vault-smoke-account.tf` (v1 → v2) | Same KV writeback pattern for `nexus/foundation/ad/svc-vault-smoke` |
+| `scripts/smoke-0.D.4.ps1` | Chained smoke gate (0.D.3 → 0.D.2 → 0.D.1 first, then 0.D.4 layer) with positive + 2 negative AppRole capability scope-guard probes |
+
+### 1j.1 Operator order
+
+```powershell
+cd "F:\_CODING_\Repos\Local Development And Test\Portfolio_Project_Ideas\workspace\nexus-infra-vmware"
+
+# Greenfield bring-up (full sequence):
+# 1. Foundation env first apply, KV creds OFF (plaintext defaults; cluster + AD)
+pwsh -File scripts\foundation.ps1 apply -Vars enable_vault_kv_creds=false
+
+# 2. Security env -- brings up Vault + PKI + LDAP + writes AppRole JSON + seeds KV
+pwsh -File scripts\security.ps1 apply
+
+# 3. Foundation env re-apply (default enable_vault_kv_creds=true post-0.D.4 close-out)
+pwsh -File scripts\foundation.ps1 apply
+
+# Steady-state lab (Vault already up, KV already seeded):
+pwsh -File scripts\foundation.ps1 apply       # default true; consumers read from KV
+pwsh -File scripts\security.ps1 smoke         # smoke -Phase defaults to 0.D.4
+```
+
+### 1j.2 Selective ops
+
+```powershell
+# Iterate on the foundation seed alone (security env)
+terraform -chdir=terraform\envs\security taint  null_resource.vault_foundation_seed
+terraform -chdir=terraform\envs\security apply  -target=null_resource.vault_foundation_seed -auto-approve
+
+# Force-rotate the AppRole secret-id (the JSON gets a fresh secret-id; foundation env reads it on next apply)
+terraform -chdir=terraform\envs\security taint  null_resource.vault_foundation_approle
+terraform -chdir=terraform\envs\security apply  -target=null_resource.vault_foundation_approle -auto-approve
+
+# Skip the entire 0.D.4 layer (e.g., iterating on 0.D.1-3 alone)
+pwsh -File scripts\security.ps1 apply -Vars enable_vault_kv_foundation_seed=false
+
+# Foundation greenfield bypass (back to plaintext defaults)
+pwsh -File scripts\foundation.ps1 apply -Vars enable_vault_kv_creds=false
+```
+
+### 1j.3 Rotating a foundation cred (Vault-side)
+
+```powershell
+$env:VAULT_ADDR   = 'https://192.168.70.121:8200'
+$env:VAULT_CACERT = "$HOME\.nexus\vault-ca-bundle.crt"
+$env:VAULT_TOKEN  = (Get-Content "$HOME\.nexus\vault-init.json" | ConvertFrom-Json).root_token
+
+# Rotate the DSRM password (next foundation apply will pick up the new value)
+vault kv put nexus/foundation/dc-nexus/dsrm password='NewStrongPwd!23'
+
+# Re-apply ONLY the affected overlay
+terraform -chdir=terraform\envs\foundation taint  null_resource.dc_nexus_promote
+terraform -chdir=terraform\envs\foundation apply  -target=null_resource.dc_nexus_promote -auto-approve
+```
+
+### 1j.4 The two non-obvious bugs (canon)
+
+1. **`hashicorp/vault` v4 has NO `auth_login_approle` block.** Community-canonical snippets often show `auth_login_approle { role_id; secret_id }` but `terraform validate` rejects it ("Blocks of type 'auth_login_approle' are not expected here"). v4 uses the generic `auth_login { path = "auth/approle/login"; parameters = { role_id; secret_id } }`. v5 changes the auth shape further. Pin `~> 4.0`. Saved as [`feedback_terraform_vault_provider_approle.md`](../memory/feedback_terraform_vault_provider_approle.md).
+2. **`Select-String -AllMatches` returns null `.Matches` on multi-line strings without trailing newline.** The AppRole role-id+secret-id parse from remote echo output failed with "Cannot index into a null array" even though the remote bash echoed both tokens correctly. Fix: `$out -match '(?m)^TOKEN=(.+)$'` is the canonical PS idiom for line-anchored multi-line regex extraction.
+
+### 1j.5 NOT in scope for 0.D.4 (deferred to 0.D.5)
+
+- **Transit auto-unseal** — eliminates the unseal-on-reboot dance; moves the unseal key off the build host.
+- **Vault Agent on member servers** — auto-renewing client certs + KV cred templates rendered into config files.
+- **Leaf cert TTL drop 1 y → 90 d** — once Agent automates renewal cadence.
+- **GMSA on Windows fleet** — replaces svc-account passwords on Windows services with managed service accounts.
+- **`MinPasswordLength=14` tightening** — current 12 was sized to bootstrap creds (`NexusAdmin!1` = 12 chars). With Vault generating creds (24 chars), bumping to 14 is safe.
+- **Revert `LDAPServerIntegrity=2`** — TLS channel encryption satisfies the signing requirement structurally; left as-is in 0.D.4.
+- **Vault userpass migration** — `vault_userpass_password` still seeded from variable default at `vault_post_init` time (chicken-and-egg: bootstrapping userpass needs the pwd before KV exists).
+
+### 1j.6 RAM budget (unchanged)
+
+0.D.4 adds no VMs. RAM accounting identical to §1g.7. (vms.yaml ratified the 4 GB → 2 GB Vault deviation in this phase's housekeeping batch.)
 
 ---
 
