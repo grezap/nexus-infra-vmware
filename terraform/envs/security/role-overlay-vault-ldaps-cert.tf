@@ -22,19 +22,36 @@
  * AD's integrity requirement structurally. Originally 0.D.5 scope;
  * pulled forward to close 0.D.3 with a working live login + rotate-role.
  *
+ * Trust chain on dc-nexus -- THIS IS LOAD-BEARING:
+ *   - root CA   -> Cert:\LocalMachine\Root
+ *   - intermediate -> Cert:\LocalMachine\CA
+ *   - leaf+key  -> Cert:\LocalMachine\My
+ * All three are required. Schannel walks the chain at startup and only
+ * accepts a leaf cert into its "default server credential" pool if the
+ * full chain builds to a trusted root *locally*. With the root missing
+ * from LocalMachine\Root, X509Chain.Build returns PartialChain and
+ * Schannel logs Event 36886 ("No suitable default server credential
+ * exists on this system... will prevent server applications from
+ * accepting SSL connections"). NTDS sees no usable LDAPS cred and
+ * resets every handshake immediately ("connection forcibly closed by
+ * the remote host"), even though the cert + intermediate are present
+ * with a working private key. The fix is to install the root next to
+ * the other two -- diagnosed via Get-WinEvent + X509Chain.Build on the
+ * DC after iterations 1-3 each missed it. Memory:
+ * feedback_diagnose_before_rewriting.md.
+ *
  * PFX construction: done on vault-1 via `openssl pkcs12 -export`, NOT
  * via .NET X509Certificate2.CreateFromPemFile + Export(Pfx) on the
- * build host. The .NET path produced PFXes whose private keys imported
- * as ephemeral / non-persisted on Windows, which Schannel could not use
- * for the LDAPS server side -- AD reset every TLS handshake mid-flight
- * with "An existing connection was forcibly closed by the remote host"
- * before serving any cert. openssl produces a stock PKCS#12 that
- * Import-PfxCertificate persists into MachineKeys cleanly so Schannel
- * can sign the handshake.
+ * build host. (The .NET path is theoretically suspect -- it can yield
+ * ephemeral keys -- but observed RSA accessibility on the imported
+ * leaf was actually fine. The openssl path is kept because it's the
+ * more correct PKCS#12 source regardless.)
  *
- * Idempotency: probe LocalMachine\My for the leaf AND LocalMachine\CA
- * for the intermediate. Skip if both present + leaf valid >30d. Otherwise
- * re-issue + re-install both stores + restart NTDS.
+ * Idempotency: probe LocalMachine\Root (root) AND LocalMachine\CA
+ * (intermediate) AND LocalMachine\My (leaf with private key, valid
+ * >30d). Skip only if all three are present + the leaf is fresh.
+ * Otherwise re-fetch root from build-host bundle, re-issue leaf via
+ * openssl PFX, and re-install all three stores + restart NTDS.
  *
  * Reachability invariant: SSH/22 + RDP/3389 + Vault API/8200 unaffected.
  * NTDS restart causes ~10-30s of AD outage; LDAP/389 + LDAPS/636
@@ -53,7 +70,7 @@ resource "null_resource" "vault_ldaps_cert" {
     int_common_name = var.vault_pki_intermediate_common_name
     leaf_ttl        = var.vault_ldaps_cert_ttl
     role_name       = var.vault_pki_role_name
-    ldaps_overlay_v = "3" # v3: openssl-built PFX on vault-1 (not .NET on build host) -- avoids ephemeral private key that Schannel could not use, plus diagnostic Schannel/NTDS event dumps on verify failure. v2: leaf+intermediate stores, .NET PFX (still failed). v1: leaf-only.
+    ldaps_overlay_v = "4" # v4: ALSO install root CA into Cert:\LocalMachine\Root on dc-nexus -- without it Schannel chain build returns PartialChain and AD logs Event 36886 ("No suitable default server credential"), resetting every LDAPS handshake. THIS IS THE ACTUAL FIX. v3: openssl PFX on vault-1 (kept; correct in its own right). v2: leaf+intermediate stores. v1: leaf-only.
   }
 
   depends_on = [null_resource.vault_pki_distribute_root, null_resource.vault_pki_roles]
@@ -68,19 +85,25 @@ resource "null_resource" "vault_ldaps_cert" {
       $dcFqdn         = 'dc-nexus.nexus.lab'
       $roleName       = '${var.vault_pki_role_name}'
       $leafTtl        = '${var.vault_ldaps_cert_ttl}'
+      $rootCommonName = '${var.vault_pki_root_common_name}'
       $intCommonName  = '${var.vault_pki_intermediate_common_name}'
       $keysFileRaw    = '${var.vault_init_keys_file}'
       $keysFile       = $ExecutionContext.InvokeCommand.ExpandString($keysFileRaw.Replace('$HOME', $env:USERPROFILE))
+      $caBundleRaw    = '${var.vault_pki_ca_bundle_path}'
+      $caBundlePath   = $ExecutionContext.InvokeCommand.ExpandString($caBundleRaw.Replace('$HOME', $env:USERPROFILE))
 
       if (-not (Test-Path $keysFile)) {
         throw "[ldaps-cert] vault-init.json missing at $keysFile"
       }
+      if (-not (Test-Path $caBundlePath)) {
+        throw "[ldaps-cert] root CA bundle missing at $caBundlePath -- run vault_pki_distribute_root first"
+      }
       $rootToken = (Get-Content $keysFile | ConvertFrom-Json).root_token
 
-      # ─── Idempotency probe: dc-nexus already has valid PKI-issued cert? ──
-      # Probe BOTH the leaf (LocalMachine\My) AND the intermediate
-      # (LocalMachine\CA). If either is missing, re-issue + re-install both
-      # so Schannel always has a full chain to serve.
+      # ─── Idempotency probe: dc-nexus has the FULL chain installed? ──
+      # All three tiers must be present for Schannel to qualify the leaf
+      # as a default server credential. Missing any one (especially root
+      # in LocalMachine\Root) causes Event 36886 + LDAPS handshake reset.
       $probeRemote = @"
         `$leaf = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue | Where-Object {
           (`$_.Subject -match 'CN=$dcFqdn') -and
@@ -91,9 +114,23 @@ resource "null_resource" "vault_ldaps_cert" {
         `$inter = Get-ChildItem Cert:\LocalMachine\CA -ErrorAction SilentlyContinue | Where-Object {
           `$_.Subject -match 'CN=$intCommonName'
         } | Select-Object -First 1;
-        if (`$leaf -and `$inter) {
-          Write-Output ('CERT_OK: leaf=' + `$leaf.Subject + ' valid until ' + `$leaf.NotAfter.ToString('o') + '; intermediate=' + `$inter.Subject)
-        } elseif (`$leaf -and -not `$inter) {
+        `$root = Get-ChildItem Cert:\LocalMachine\Root -ErrorAction SilentlyContinue | Where-Object {
+          `$_.Subject -match 'CN=$rootCommonName'
+        } | Select-Object -First 1;
+        if (`$leaf -and `$inter -and `$root) {
+          # Final guard: actually attempt chain build. Anything less and we
+          # know Schannel will reject regardless of what's in the stores.
+          `$chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain;
+          `$chain.ChainPolicy.RevocationMode = 'NoCheck';
+          if (`$chain.Build(`$leaf)) {
+            Write-Output ('CERT_OK: leaf=' + `$leaf.Subject + ' valid until ' + `$leaf.NotAfter.ToString('o') + '; intermediate=' + `$inter.Subject + '; root=' + `$root.Subject)
+          } else {
+            `$status = (`$chain.ChainStatus | ForEach-Object { `$_.Status }) -join ',';
+            Write-Output ('CERT_INCOMPLETE_CHAIN_BUILD_FAILED: ' + `$status)
+          }
+        } elseif (-not `$root) {
+          Write-Output 'CERT_INCOMPLETE_NO_ROOT'
+        } elseif (-not `$inter) {
           Write-Output 'CERT_INCOMPLETE_NO_INTERMEDIATE'
         } else {
           Write-Output 'CERT_MISSING_OR_EXPIRING_OR_NO_PRIVKEY'
@@ -170,71 +207,99 @@ jq -nc --arg pfx "`$PFX_B64" --arg int "`$INT_PEM" '{pfx_b64: `$pfx, intermediat
       }
       Write-Host "[ldaps-cert] received PFX ($($built.pfx_b64.Length) base64 chars) + intermediate ($($built.intermediate_pem.Length) chars)"
 
-      # ─── Stage PFX + intermediate PEM on build host ───────────────────
+      # ─── Stage PFX + intermediate PEM + root PEM on build host ────────
       $tmpDir = New-Item -ItemType Directory -Force -Path (Join-Path $env:TEMP "vault-ldaps-cert-$(Get-Random)")
-      $pfxFile    = Join-Path $tmpDir 'dc-ldaps.pfx'
-      $pemIntFile = Join-Path $tmpDir 'intermediate.pem'
+      $pfxFile     = Join-Path $tmpDir 'dc-ldaps.pfx'
+      $pemIntFile  = Join-Path $tmpDir 'intermediate.pem'
+      $pemRootFile = Join-Path $tmpDir 'root.pem'
 
       [System.IO.File]::WriteAllBytes($pfxFile, [Convert]::FromBase64String($built.pfx_b64))
       Set-Content -Path $pemIntFile -Value $built.intermediate_pem -Encoding Ascii
+      # Root CA bundle is already on the build host (written by
+      # vault_pki_distribute_root); copy it as-is for the DC.
+      Copy-Item -Path $caBundlePath -Destination $pemRootFile -Force
 
-      # ─── SCP leaf PFX + intermediate PEM to dc-nexus ─────────────────
-      $remotePfxPath = 'C:/Windows/Temp/dc-ldaps.pfx'
-      $remoteIntPath = 'C:/Windows/Temp/dc-ldaps-intermediate.pem'
-      Write-Host "[ldaps-cert] scp PFX + intermediate PEM to $${dcIp}"
-      scp -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $pfxFile     "$${user}@$${dcIp}:$remotePfxPath" 2>&1 | Out-Null
+      # ─── SCP leaf PFX + intermediate PEM + root PEM to dc-nexus ──────
+      $remotePfxPath  = 'C:/Windows/Temp/dc-ldaps.pfx'
+      $remoteIntPath  = 'C:/Windows/Temp/dc-ldaps-intermediate.pem'
+      $remoteRootPath = 'C:/Windows/Temp/dc-ldaps-root.pem'
+      Write-Host "[ldaps-cert] scp PFX + intermediate + root PEM to $${dcIp}"
+      scp -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $pfxFile     "$${user}@$${dcIp}:$remotePfxPath"  2>&1 | Out-Null
       if ($LASTEXITCODE -ne 0) {
         Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
         throw "[ldaps-cert] scp of PFX failed (rc=$LASTEXITCODE)"
       }
-      scp -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $pemIntFile  "$${user}@$${dcIp}:$remoteIntPath" 2>&1 | Out-Null
+      scp -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $pemIntFile  "$${user}@$${dcIp}:$remoteIntPath"  2>&1 | Out-Null
       if ($LASTEXITCODE -ne 0) {
         Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
         throw "[ldaps-cert] scp of intermediate PEM failed (rc=$LASTEXITCODE)"
       }
+      scp -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $pemRootFile "$${user}@$${dcIp}:$remoteRootPath" 2>&1 | Out-Null
+      if ($LASTEXITCODE -ne 0) {
+        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+        throw "[ldaps-cert] scp of root PEM failed (rc=$LASTEXITCODE)"
+      }
 
-      # ─── Import: leaf+key -> LocalMachine\My, intermediate -> LocalMachine\CA ──
+      # ─── Import: root -> LocalMachine\Root, intermediate -> LocalMachine\CA, leaf -> LocalMachine\My ──
+      # Order matters: import root + intermediate FIRST so that when the leaf
+      # lands in My and Schannel walks the chain at NTDS startup, it can build
+      # leaf -> intermediate -> root locally and qualify the leaf as a default
+      # server credential. Without root in LocalMachine\Root, X509Chain.Build
+      # returns PartialChain and Schannel logs Event 36886, resetting every
+      # LDAPS handshake regardless of how good the leaf + intermediate are.
       $importRemote = @"
         try {
-          # Remove any existing leaf cert with our subject (re-issuing case)
-          Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue | Where-Object {
-            `$_.Subject -match 'CN=$dcFqdn'
+          # 1. Root CA -> LocalMachine\Root (idempotent: replace by CN)
+          Get-ChildItem Cert:\LocalMachine\Root -ErrorAction SilentlyContinue | Where-Object {
+            `$_.Subject -match 'CN=$rootCommonName'
           } | ForEach-Object {
-            Write-Output ('removing existing leaf cert: thumbprint=' + `$_.Thumbprint);
+            Write-Output ('removing existing root: thumbprint=' + `$_.Thumbprint);
             Remove-Item `$_.PSPath -Force
           };
+          `$rootImp = Import-Certificate -FilePath 'C:\Windows\Temp\dc-ldaps-root.pem' -CertStoreLocation 'Cert:\LocalMachine\Root';
+          Write-Output ('imported root: thumbprint=' + `$rootImp.Thumbprint + ' subject=' + `$rootImp.Subject);
 
-          `$pwd = ConvertTo-SecureString '$pfxPwd' -AsPlainText -Force;
-          `$imp = Import-PfxCertificate -FilePath 'C:\Windows\Temp\dc-ldaps.pfx' -CertStoreLocation 'Cert:\LocalMachine\My' -Password `$pwd -Exportable;
-          Write-Output ('imported leaf: thumbprint=' + `$imp.Thumbprint + ' subject=' + `$imp.Subject + ' notAfter=' + `$imp.NotAfter.ToString('o'));
-          Write-Output ('imported leaf HasPrivateKey: ' + `$imp.HasPrivateKey);
-
-          # Probe RSA key accessibility -- if Schannel can't read the private
-          # key, GetRSAPrivateKey returns null even when HasPrivateKey is true.
-          try {
-            `$rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey(`$imp);
-            if (`$rsa) {
-              Write-Output ('imported leaf RSA accessible: yes (size=' + `$rsa.KeySize + ')')
-            } else {
-              Write-Output 'imported leaf RSA accessible: NO (GetRSAPrivateKey returned null)'
-            }
-          } catch {
-            Write-Output ('imported leaf RSA accessible: NO -- ' + `$_.Exception.Message)
-          }
-
-          # Remove any existing intermediate with our CN before re-importing
+          # 2. Intermediate CA -> LocalMachine\CA (idempotent: replace by CN)
           Get-ChildItem Cert:\LocalMachine\CA -ErrorAction SilentlyContinue | Where-Object {
             `$_.Subject -match 'CN=$intCommonName'
           } | ForEach-Object {
             Write-Output ('removing existing intermediate: thumbprint=' + `$_.Thumbprint);
             Remove-Item `$_.PSPath -Force
           };
-
           `$intImp = Import-Certificate -FilePath 'C:\Windows\Temp\dc-ldaps-intermediate.pem' -CertStoreLocation 'Cert:\LocalMachine\CA';
           Write-Output ('imported intermediate: thumbprint=' + `$intImp.Thumbprint + ' subject=' + `$intImp.Subject);
 
+          # 3. Leaf+key -> LocalMachine\My (idempotent: replace by subject)
+          Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue | Where-Object {
+            `$_.Subject -match 'CN=$dcFqdn'
+          } | ForEach-Object {
+            Write-Output ('removing existing leaf cert: thumbprint=' + `$_.Thumbprint);
+            Remove-Item `$_.PSPath -Force
+          };
+          `$pwd = ConvertTo-SecureString '$pfxPwd' -AsPlainText -Force;
+          `$imp = Import-PfxCertificate -FilePath 'C:\Windows\Temp\dc-ldaps.pfx' -CertStoreLocation 'Cert:\LocalMachine\My' -Password `$pwd -Exportable;
+          Write-Output ('imported leaf: thumbprint=' + `$imp.Thumbprint + ' subject=' + `$imp.Subject + ' notAfter=' + `$imp.NotAfter.ToString('o'));
+          Write-Output ('imported leaf HasPrivateKey: ' + `$imp.HasPrivateKey);
+
+          # 4. Verify chain BUILDS locally before restarting NTDS. If
+          # X509Chain.Build returns false here, NTDS will reset every LDAPS
+          # handshake -- so fail fast at install time with a clear message
+          # instead of waiting for the handshake-verify retry loop to time out.
+          `$chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain;
+          `$chain.ChainPolicy.RevocationMode = 'NoCheck';
+          `$chainOk = `$chain.Build(`$imp);
+          if (`$chainOk) {
+            Write-Output ('chain build OK: ' + (`$chain.ChainElements | ForEach-Object { `$_.Certificate.Subject }) -join ' -> ');
+          } else {
+            `$status = (`$chain.ChainStatus | ForEach-Object { `$_.Status + ':' + `$_.StatusInformation }) -join '; ';
+            Write-Output ('CHAIN_BUILD_FAILED: ' + `$status);
+            exit 1;
+          }
+
+          # Cleanup transit files
           Remove-Item 'C:\Windows\Temp\dc-ldaps.pfx'              -Force;
           Remove-Item 'C:\Windows\Temp\dc-ldaps-intermediate.pem' -Force;
+          Remove-Item 'C:\Windows\Temp\dc-ldaps-root.pem'         -Force;
 
           Write-Output 'restarting NTDS to pick up new LDAPS cert (~10-30s outage)...';
           Restart-Service NTDS -Force;
@@ -252,8 +317,8 @@ jq -nc --arg pfx "`$PFX_B64" --arg int "`$INT_PEM" '{pfx_b64: `$pfx, intermediat
       # Cleanup build-host tmp dir regardless of success
       Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
 
-      if ($LASTEXITCODE -ne 0 -or $importOut -match 'IMPORT_FAILED:') {
-        throw "[ldaps-cert] dc-nexus PFX import failed. Output:`n$importOut"
+      if ($LASTEXITCODE -ne 0 -or $importOut -match 'IMPORT_FAILED:|CHAIN_BUILD_FAILED:') {
+        throw "[ldaps-cert] dc-nexus cert install failed. Output:`n$importOut"
       }
       Write-Host "[ldaps-cert] $($importOut.Trim())"
 
