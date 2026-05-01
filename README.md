@@ -3,11 +3,14 @@
 [![Packer](https://img.shields.io/badge/Packer-1.11+-blue)](https://www.packer.io/)
 [![Terraform](https://img.shields.io/badge/Terraform-1.9+-purple)](https://www.terraform.io/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![Blueprint](https://img.shields.io/badge/blueprint-nexus--platform--plan%20v0.1.2-orange)](https://github.com/grezap/nexus-platform-plan)
+[![Blueprint](https://img.shields.io/badge/blueprint-nexus--platform--plan%20v0.1.3-orange)](https://github.com/grezap/nexus-platform-plan)
+[![Phase](https://img.shields.io/badge/phase-0.D.3%20closed-brightgreen)](./CHANGELOG.md)
 
 Infrastructure-as-code for the **NexusPlatform 66-VM lab** running on **VMware Workstation Pro** (host `10.0.70.101`). Produces golden VM templates with Packer, provisions the fleet with Terraform, configures guest OS with Ansible.
 
-> **Canon:** This repo implements [Phase 0.B–0.C](https://github.com/grezap/nexus-platform-plan/blob/main/MASTER-PLAN.md) of the NexusPlatform blueprint. Read [`nexus-platform-plan`](https://github.com/grezap/nexus-platform-plan) first.
+> **Canon:** This repo implements [Phase 0.B–0.D](https://github.com/grezap/nexus-platform-plan/blob/main/MASTER-PLAN.md) of the NexusPlatform blueprint. Read [`nexus-platform-plan`](https://github.com/grezap/nexus-platform-plan) first.
+>
+> **Current state (Phase 0.D.3 closed, 0.D.4 starting):** Five Packer templates · `foundation` env (DC promotion + AD DS forest + domain-joined jumpbox + AD hardening) · `security` env (3-node HA Vault on Raft + internal PKI hierarchy + LDAPS to AD + `secrets/ldap` AD password rotation). Next: 0.D.4 — migrate plaintext bootstrap creds from `0.C.*` overlays into Vault KV.
 
 ## What's in here
 
@@ -61,11 +64,14 @@ packer/
   ws2025-core/               Windows Server 2025 Core (Phase 0.B.4)
   ws2025-desktop/            Windows Server 2025 Desktop Experience (Phase 0.B.5)
   _shared/powershell/        DRY-extracted Windows baseline scripts (Phase 0.B.5)
-  win11ent/                  Windows 11 Enterprise    (stub, Phase 0.B.6)
+  win11ent/                  Windows 11 Enterprise    (Phase 0.B.6)
+  vault/                     HashiCorp Vault on deb13 (Phase 0.D.1)
 
 terraform/
   gateway/                   nexus-gateway VM instantiation
-  modules/vm/                Reusable VM module (used by higher-level envs later)
+  modules/vm/                Reusable VM module (used by higher-level envs)
+  envs/foundation/           dc-nexus + nexus-jumpbox + AD DS + AD hardening    (Phase 0.C.* + 0.D.3 AD-for-Vault overlays)
+  envs/security/             3-node Vault Raft + internal PKI + LDAPS auth + secrets/ldap rotate-role (Phase 0.D.1 + 0.D.2 + 0.D.3)
 
 docs/
   architecture.md            Design decisions + diagrams
@@ -73,7 +79,10 @@ docs/
   handbook.md                Operator handbook (cross-cutting command reference)
   licensing.md               Windows licensing canon
 
-scripts/                     Host helpers (invoked from Makefile)
+scripts/                     Host helpers (pwsh-native; Makefile is also available)
+  foundation.ps1             apply / destroy / smoke for the foundation env
+  security.ps1               apply / destroy / smoke for the security (Vault) env
+  smoke-0.D.{1,2,3}.ps1      Per-phase chained smoke gates
 
 .github/workflows/
   packer-validate.yml        CI — packer validate + ansible-lint + tf fmt
@@ -91,7 +100,12 @@ scripts/                     Host helpers (invoked from Makefile)
 
 ## Version
 
-This repo tags `v0.X.Y` aligned with implementation milestones. `v0.1.0` = scaffold + `nexus-gateway` build path. See [`CHANGELOG.md`](./CHANGELOG.md).
+This repo tags `v0.X.Y` aligned with implementation milestones. Tags shipped:
+
+- `v0.1.0` — scaffold + `nexus-gateway` build path (Phase 0.B.1)
+- `v0.1.1` — `deb13` + `ubuntu24` baselines + reusable `terraform/modules/vm/` (Phase 0.B.2 + 0.B.3)
+
+Phases 0.B.4 → 0.D.3 have shipped on `main` ahead of formal v-tags; the next tag will batch the full 0.D close-out (cluster + PKI + LDAPS + AD password rotation + KV cred migration). See [`CHANGELOG.md`](./CHANGELOG.md) for the full work log.
 
 ## License
 
