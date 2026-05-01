@@ -296,10 +296,12 @@ jq -nc --arg pfx "`$PFX_B64" --arg int "`$INT_PEM" '{pfx_b64: `$pfx, intermediat
             exit 1;
           }
 
-          # Cleanup transit files
-          Remove-Item 'C:\Windows\Temp\dc-ldaps.pfx'              -Force;
-          Remove-Item 'C:\Windows\Temp\dc-ldaps-intermediate.pem' -Force;
-          Remove-Item 'C:\Windows\Temp\dc-ldaps-root.pem'         -Force;
+          # Cleanup transit files (PFX has a transit pwd embedded; the
+          # script file itself contains that pwd literal so we delete that too).
+          Remove-Item 'C:\Windows\Temp\dc-ldaps.pfx'              -Force -ErrorAction SilentlyContinue;
+          Remove-Item 'C:\Windows\Temp\dc-ldaps-intermediate.pem' -Force -ErrorAction SilentlyContinue;
+          Remove-Item 'C:\Windows\Temp\dc-ldaps-root.pem'         -Force -ErrorAction SilentlyContinue;
+          Remove-Item 'C:\Windows\Temp\dc-ldaps-import.ps1'       -Force -ErrorAction SilentlyContinue;
 
           Write-Output 'restarting NTDS to pick up new LDAPS cert (~10-30s outage)...';
           Restart-Service NTDS -Force;
@@ -310,9 +312,19 @@ jq -nc --arg pfx "`$PFX_B64" --arg int "`$INT_PEM" '{pfx_b64: `$pfx, intermediat
           exit 1;
         }
 "@
-      $importBytes = [System.Text.Encoding]::Unicode.GetBytes($importRemote)
-      $importB64   = [Convert]::ToBase64String($importBytes)
-      $importOut = ssh -o ConnectTimeout=60 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$dcIp "powershell -NoProfile -EncodedCommand $importB64" 2>&1 | Out-String
+      # Ship the import script as a file rather than -EncodedCommand. The
+      # base64 of the UTF-16 import script is ~10KB which exceeds Windows'
+      # ~8KB command-line limit; cmd.exe rejects with "The command line is
+      # too long." -- scp + powershell -File sidesteps the limit entirely.
+      $importLocalPath  = Join-Path $tmpDir 'dc-ldaps-import.ps1'
+      $remoteScriptPath = 'C:/Windows/Temp/dc-ldaps-import.ps1'
+      Set-Content -Path $importLocalPath -Value $importRemote -Encoding UTF8
+      scp -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $importLocalPath "$${user}@$${dcIp}:$remoteScriptPath" 2>&1 | Out-Null
+      if ($LASTEXITCODE -ne 0) {
+        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+        throw "[ldaps-cert] scp of import script failed (rc=$LASTEXITCODE)"
+      }
+      $importOut = ssh -o ConnectTimeout=60 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$dcIp "powershell -NoProfile -ExecutionPolicy Bypass -File $remoteScriptPath" 2>&1 | Out-String
 
       # Cleanup build-host tmp dir regardless of success
       Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
