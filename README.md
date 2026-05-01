@@ -4,13 +4,13 @@
 [![Terraform](https://img.shields.io/badge/Terraform-1.9+-purple)](https://www.terraform.io/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 [![Blueprint](https://img.shields.io/badge/blueprint-nexus--platform--plan%20v0.1.3-orange)](https://github.com/grezap/nexus-platform-plan)
-[![Phase](https://img.shields.io/badge/phase-0.D.3%20closed-brightgreen)](./CHANGELOG.md)
+[![Phase](https://img.shields.io/badge/phase-0.D.4%20closed-brightgreen)](./CHANGELOG.md)
 
 Infrastructure-as-code for the **NexusPlatform 66-VM lab** running on **VMware Workstation Pro** (host `10.0.70.101`). Produces golden VM templates with Packer, provisions the fleet with Terraform, configures guest OS with Ansible.
 
 > **Canon:** This repo implements [Phase 0.B–0.D](https://github.com/grezap/nexus-platform-plan/blob/main/MASTER-PLAN.md) of the NexusPlatform blueprint. Read [`nexus-platform-plan`](https://github.com/grezap/nexus-platform-plan) first.
 >
-> **Current state (Phase 0.D.3 closed, 0.D.4 starting):** Five Packer templates · `foundation` env (DC promotion + AD DS forest + domain-joined jumpbox + AD hardening) · `security` env (3-node HA Vault on Raft + internal PKI hierarchy + LDAPS to AD + `secrets/ldap` AD password rotation). Next: 0.D.4 — migrate plaintext bootstrap creds from `0.C.*` overlays into Vault KV.
+> **Current state (Phase 0.D.4 closed, 0.D.5 starting):** Five Packer templates · `foundation` env (DC promotion + AD DS forest + domain-joined jumpbox + AD hardening + Vault-KV-backed bootstrap creds via AppRole) · `security` env (3-node HA Vault on Raft + internal PKI hierarchy + LDAPS to AD + `secrets/ldap` AD password rotation + `nexus-foundation-reader` AppRole + `nexus/foundation/*` cred seed). Plaintext bootstrap creds (DSRM, local Administrator, nexusadmin, Vault userpass, AD bind+smoke) migrated to Vault KV; foundation env's role overlays consume them via `vault_kv_secret_v2` data sources. Next: 0.D.5 — Transit auto-unseal + GMSA + Vault Agent on member servers.
 
 ## What's in here
 
@@ -70,8 +70,8 @@ packer/
 terraform/
   gateway/                   nexus-gateway VM instantiation
   modules/vm/                Reusable VM module (used by higher-level envs)
-  envs/foundation/           dc-nexus + nexus-jumpbox + AD DS + AD hardening    (Phase 0.C.* + 0.D.3 AD-for-Vault overlays)
-  envs/security/             3-node Vault Raft + internal PKI + LDAPS auth + secrets/ldap rotate-role (Phase 0.D.1 + 0.D.2 + 0.D.3)
+  envs/foundation/           dc-nexus + nexus-jumpbox + AD DS + AD hardening + Vault-KV-backed creds (Phase 0.C.* + 0.D.3 AD-for-Vault + 0.D.4 KV consumer)
+  envs/security/             3-node Vault Raft + internal PKI + LDAPS auth + secrets/ldap rotate-role + nexus-foundation-reader AppRole + KV seed (Phase 0.D.1 + 0.D.2 + 0.D.3 + 0.D.4)
 
 docs/
   architecture.md            Design decisions + diagrams

@@ -370,9 +370,9 @@ variable "dc_ldap_server_integrity" {
 # flip lands at 0.D.4 close-out.
 
 variable "enable_vault_kv_creds" {
-  description = "Toggle: read bootstrap creds (dsrm, local_administrator, nexusadmin) from Vault KV at nexus/foundation/* instead of variable defaults. Default false during 0.D.4 development (preserves greenfield bring-up path). Flipped to true at 0.D.4 close-out per feedback_terraform_partial_apply_destroys_resources.md (defaults reflect steady state; opt-out is the explicit override)."
+  description = "Toggle: read bootstrap creds (dsrm, local_administrator, nexusadmin) from Vault KV at nexus/foundation/* instead of variable defaults. Default true (flipped from false at 0.D.4 close-out per feedback_terraform_partial_apply_destroys_resources.md -- defaults reflect steady state, opt-out is the explicit override). Set false on greenfield bring-up: foundation apply -Vars enable_vault_kv_creds=false runs first using plaintext defaults; then security apply seeds Vault; then foundation apply (no override) consumes from Vault."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "vault_kv_mount_path" {
