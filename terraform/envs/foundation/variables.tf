@@ -241,6 +241,12 @@ variable "enable_vault_ad_bind_rotate_password" {
   default     = false
 }
 
+variable "enable_vault_ad_bind_acl_delegation" {
+  description = "Toggle: delegate the AD ACEs Vault's secrets/ldap engine needs to rotate passwords on accounts in OU=ServiceAccounts. Per HashiCorp KB, the bind account must hold (a) Reset Password extended right, (b) Change Password extended right, (c) Read+Write Property on userAccountControl -- all on user objects under the OU, via inheritance. Without this, `vault write -force ldap/rotate-role/<name>` fails with LDAP code 50 INSUFF_ACCESS_RIGHTS. Default true (gated under enable_vault_ad_integration). Set false only if you've delegated equivalents through GPO/native AD tooling."
+  type        = bool
+  default     = true
+}
+
 variable "enable_vault_ad_groups" {
   description = "Toggle: create AD security groups nexus-vault-admins, nexus-vault-operators, nexus-vault-readers in OU=Groups; add nexusadmin to nexus-vault-admins. Default true (gated under enable_vault_ad_integration)."
   type        = bool
