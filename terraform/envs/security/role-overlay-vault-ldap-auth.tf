@@ -45,7 +45,7 @@ resource "null_resource" "vault_ldap_auth" {
     admin_group    = var.vault_ldap_admin_group
     operator_group = var.vault_ldap_operator_group
     reader_group   = var.vault_ldap_reader_group
-    auth_overlay_v = "3" # v3 = LDAPS via certificate=@ca-bundle field; depends on vault_ldaps_cert so the DC is serving LDAPS before this writes the config. v2 = upndomain + AD-canonical userfilter (plain LDAP). v1 = initial implementation (plain LDAP, search-then-rebind, broken).
+    auth_overlay_v = "4" # v4 = upndomain="" (search-then-bind via userfilter). Per Vault sdk/helper/ldaputil/client.go RenderUserSearchFilter, setting upndomain rewrites the {{.Username}} value to <user>@<upndomain> before executing the userfilter -- so our (sAMAccountName={{.Username}}) becomes (sAMAccountName=svc-...@nexus.lab) which AD never matches (sAMAccountName has no @-suffix). LDAPS doesn't need the UPN-bind workaround that motivated upndomain under plain-LDAP/389. Vault issue #27276; 1.19+ has enable_samaccountname_login. v3 = LDAPS + upndomain (broke smoke login, search returned 0). v2 = upndomain + plain-LDAP. v1 = plain-LDAP search-then-rebind.
   }
 
   depends_on = [null_resource.vault_ldap_policies, null_resource.vault_ldaps_cert]
@@ -112,21 +112,34 @@ fi
 
 # 2. Configure auth/ldap (upsert)
 # Stage the CA bundle to a tmpfile + reference via @file syntax so Vault
-# trusts the LDAPS cert chain. upndomain stays for AD-canonical UPN bind
-# semantics. userfilter narrows to objectClass=user for the group
-# enumeration searches Vault still does after the user bind succeeds.
+# trusts the LDAPS cert chain. NOTE: upndomain is intentionally NOT set,
+# despite our earlier diagnosis on plain-LDAP/389 saying we needed it.
+# Reason: per Vault's sdk/helper/ldaputil/client.go RenderUserSearchFilter
+# (Vault issue #27276), when upndomain is set the {{.Username}} template
+# value in userfilter gets silently rewritten to "<username>@<upndomain>"
+# before the search executes -- so our literal filter
+# (&(objectClass=user)(sAMAccountName={{.Username}})) becomes
+# (&(objectClass=user)(sAMAccountName=svc-vault-smoke@nexus.lab)) which
+# AD never matches (sAMAccountName is the bare login). Pre-1.19 there
+# is no opt-out flag (1.19 adds enable_samaccountname_login=true). On
+# LDAPS we don't need the UPN bind workaround that motivated upndomain
+# under plain-LDAP/389 (the LDAPServerIntegrity story); the search-then-
+# bind path works correctly when upndomain is empty + we have binddn +
+# bindpass. Vault binds as svc-vault-ldap, searches with our literal
+# userfilter, finds the user's DN, then rebinds as that DN with the
+# user-supplied password.
 TMPCA=`$(mktemp)
 trap 'rm -f "`$TMPCA"' EXIT
 echo '$caBundleB64' | base64 -d > "`$TMPCA"
 
-echo '[ldap-auth] writing auth/ldap/config (LDAPS + upn_domain + AD-canonical userfilter)'
+echo '[ldap-auth] writing auth/ldap/config (LDAPS, search-then-bind, no upndomain)'
 vault write auth/ldap/config \
   url='$ldapUrl' \
   binddn='$bindDn' \
   bindpass='$bindPass' \
   userdn='$userDn' \
   userattr='$userattr' \
-  upndomain='$upnDomain' \
+  upndomain='' \
   userfilter='$userFilter' \
   groupdn='$groupDn' \
   groupattr='$groupattr' \
