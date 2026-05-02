@@ -74,6 +74,17 @@ output "vault_ad_state" {
   }
 }
 
+output "gmsa_state" {
+  description = "Phase 0.D.5 GMSA scaffolding state. Only meaningful when var.enable_dc_gmsa=true (default true). Scaffold-only: KDS root key + nexus-gmsa-consumers group + sample GMSA gmsa-nexus-demo$. Real consumers land when SQL Server / IIS / scheduled-task workloads deploy in 0.G+."
+  value = {
+    gmsa_enabled         = var.enable_dc_gmsa
+    kds_root_enabled     = var.enable_dc_gmsa && var.enable_dc_gmsa_kds_root
+    demo_account_enabled = var.enable_dc_gmsa && var.enable_dc_gmsa_demo_account
+    demo_account_name    = var.gmsa_demo_account_name
+    consumers_group      = var.gmsa_consumers_group
+  }
+}
+
 output "bootstrap_creds_rotation_state" {
   description = "Phase 0.D.5 KV -> AD rotation overlay state. Only meaningful when var.enable_dc_rotate_bootstrap_creds=true (default true). Hash changes when any of dsrm/admin/nexusadmin in Vault KV changes."
   value = {

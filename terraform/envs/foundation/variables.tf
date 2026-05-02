@@ -422,3 +422,82 @@ variable "enable_dc_rotate_bootstrap_creds" {
   type        = bool
   default     = true
 }
+
+# ─── Phase 0.D.5 — GMSA scaffolding ──────────────────────────────────────
+#
+# Group Managed Service Accounts (GMSAs) replace traditional svc-account
+# passwords on Windows services with managed accounts whose passwords are
+# auto-rotated by AD (default 30-day cadence; configurable). Each GMSA
+# can be retrieved by ONLY the computer accounts in its
+# PrincipalsAllowedToRetrieveManagedPassword list.
+#
+# Phase 0.D.5 scope: scaffold-only. KDS root key (one-time per forest;
+# enables GMSA infrastructure) + sample GMSA `gmsa-nexus-demo` + AD group
+# `nexus-gmsa-consumers` for the principals-allowed list. NO actual
+# consumers yet (lab has no SQL Server / IIS / scheduled-task workload
+# that needs GMSA today). Real consumers land when the data env
+# (02-sqlserver) deploys.
+
+variable "enable_dc_gmsa" {
+  description = "Master toggle: scaffold GMSA infrastructure (KDS root key + AD group + sample GMSA). Default true. Set false to skip GMSA setup entirely (e.g. iterating on other 0.D.5 deliverables)."
+  type        = bool
+  default     = true
+}
+
+variable "enable_dc_gmsa_kds_root" {
+  description = "Toggle: add the KDS root key on the forest (Add-KdsRootKey). One-time per forest. Idempotent via Get-KdsRootKey probe. Default true. The KDS root key is the cryptographic seed AD uses to derive every GMSA password; without it, New-ADServiceAccount fails."
+  type        = bool
+  default     = true
+}
+
+variable "enable_dc_gmsa_demo_account" {
+  description = "Toggle: create the sample GMSA `gmsa-nexus-demo$` in OU=ServiceAccounts as a placeholder + smoke probe target. Default true. Real GMSA consumers (SQL Server svc account etc.) land when the data env deploys; this entry just proves the infrastructure works."
+  type        = bool
+  default     = true
+}
+
+variable "gmsa_demo_account_name" {
+  description = "samAccountName of the sample GMSA (without the trailing $; AD adds it automatically because GMSAs are computer accounts). Default 'gmsa-nexus-demo'."
+  type        = string
+  default     = "gmsa-nexus-demo"
+}
+
+variable "gmsa_consumers_group" {
+  description = "AD security group whose members are permitted to retrieve the sample GMSA's password (PrincipalsAllowedToRetrieveManagedPassword). Default 'nexus-gmsa-consumers'. Future Windows servers needing GMSA creds get added to this group."
+  type        = string
+  default     = "nexus-gmsa-consumers"
+}
+
+# ─── Phase 0.D.5 — nexusadmin membership remediation ─────────────────────
+#
+# Diagnostic finding 2026-05-02: nexusadmin is NOT in Domain Admins or
+# Enterprise Admins on the live DC, despite the dc_nexus_promote v4
+# remediation block intending to add it ("Add-ADGroupMember -Identity
+# 'Domain Admins' -Members nexusadmin"). The chained semicolon-separated
+# one-liner in v4's promote script likely silently failed at this step.
+# Most AD operations to date have worked because nexusadmin is in
+# Builtin\Administrators which gives effective DC control -- but
+# Add-KdsRootKey (and presumably some other cmdlets) check for explicit
+# Domain/Enterprise Admins membership and reject otherwise.
+#
+# This overlay idempotently asserts nexusadmin's required group
+# memberships using the domain Administrator's credentials (read from
+# Vault KV at nexus/foundation/dc-nexus/local-administrator). It runs
+# before any overlay that depends on Domain/Enterprise Admins privileges
+# (dc_gmsa_kds_root, dc_rotate_bootstrap_creds when targeting Domain Admin
+# accounts, future Vault Agent + Transit overlays).
+#
+# NOT in scope: Schema Admins (much wider blast radius; only needed for
+# schema modifications which 0.D.* doesn't do).
+
+variable "enable_dc_nexusadmin_membership" {
+  description = "Toggle: idempotently assert nexusadmin's membership in Domain Admins + Enterprise Admins via the domain Administrator's credentials (read from Vault KV). Default true. Restores the intended state from dc_nexus_promote v4 that silently failed during the original promotion. Required for Add-KdsRootKey and other Enterprise-Admins-gated cmdlets used in 0.D.5+."
+  type        = bool
+  default     = true
+}
+
+variable "dc_nexusadmin_required_groups" {
+  description = "AD groups that nexusadmin must be a member of for the foundation env's overlays to succeed. Default ['Domain Admins', 'Enterprise Admins']. Schema Admins NOT included (out of scope). Order matters: groups added in list order."
+  type        = list(string)
+  default     = ["Domain Admins", "Enterprise Admins"]
+}
