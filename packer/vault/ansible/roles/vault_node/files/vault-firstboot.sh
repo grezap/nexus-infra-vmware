@@ -141,12 +141,16 @@ fi
 echo "$LOG_PREFIX nic0 (VMnet11) IP: $VMNET11_IP"
 
 # ─── 4. Map VMnet11 IP -> canonical hostname + VMnet10 IP ──────────────────
+# Phase 0.D.5.5: vault-transit (.124) added as the transit auto-unseal
+# key custodian. Single-node companion to the 3-node cluster; provides
+# the seal key for vault-1/2/3.
 case "$VMNET11_IP" in
-  192.168.70.121) HOSTNAME=vault-1; VMNET10_IP=192.168.10.121 ;;
-  192.168.70.122) HOSTNAME=vault-2; VMNET10_IP=192.168.10.122 ;;
-  192.168.70.123) HOSTNAME=vault-3; VMNET10_IP=192.168.10.123 ;;
+  192.168.70.121) HOSTNAME=vault-1;       VMNET10_IP=192.168.10.121 ;;
+  192.168.70.122) HOSTNAME=vault-2;       VMNET10_IP=192.168.10.122 ;;
+  192.168.70.123) HOSTNAME=vault-3;       VMNET10_IP=192.168.10.123 ;;
+  192.168.70.124) HOSTNAME=vault-transit; VMNET10_IP=192.168.10.124 ;;
   *)
-    echo "$LOG_PREFIX ERROR: unknown VMnet11 IP '$VMNET11_IP' (expected .121/.122/.123)" >&2
+    echo "$LOG_PREFIX ERROR: unknown VMnet11 IP '$VMNET11_IP' (expected .121-.124)" >&2
     exit 1
     ;;
 esac

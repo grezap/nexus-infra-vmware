@@ -216,6 +216,12 @@ variable "mac_vault_3_primary" {
   default     = "00:50:56:3F:00:42"
 }
 
+variable "mac_vault_transit_primary" {
+  description = "vault-transit primary NIC MAC (VMnet11). Used for the dnsmasq dhcp-host reservation pinning vault-transit to 192.168.70.124. Phase 0.D.5.5: vault-transit is the transit auto-unseal key custodian for vault-1/2/3."
+  type        = string
+  default     = "00:50:56:3F:00:43"
+}
+
 # ─── Phase 0.D.3 — Vault LDAP/AD integration (foundation side) ───────────
 # Foundation's role is to create the AD objects Vault needs:
 #   - svc-vault-ldap     : bind account for auth/ldap + secrets/ldap engines

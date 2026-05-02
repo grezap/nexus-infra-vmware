@@ -101,3 +101,21 @@ module "vault_3" {
   vnet_secondary = var.vnet_secondary
   mac_secondary  = var.mac_vault_3_secondary
 }
+
+# Phase 0.D.5.5 -- vault-transit single-node companion. Hosts the transit
+# engine + seal key consumed by vault-1/2/3 for auto-unseal. Per
+# memory/feedback_vmware_per_vm_folders.md: own subdir under foundation tier.
+module "vault_transit" {
+  source = "../../modules/vm"
+  count  = var.enable_vault_transit_unseal && var.enable_vault_transit_vm ? 1 : 0
+
+  vm_name           = "vault-transit"
+  template_vmx_path = var.template_vmx_path
+  vm_output_dir     = "${var.vm_output_dir_root}/vault-transit"
+
+  vnet        = var.vnet_primary
+  mac_address = var.mac_vault_transit_primary
+
+  vnet_secondary = var.vnet_secondary
+  mac_secondary  = var.mac_vault_transit_secondary
+}

@@ -112,25 +112,28 @@ resource "null_resource" "vault_init_leader" {
 
   triggers = {
     ready_id           = null_resource.vault_ready_probe[0].id
+    seal_config_id     = length(null_resource.vault_cluster_seal_config) > 0 ? null_resource.vault_cluster_seal_config[0].id : "disabled"
     init_keys_file     = var.vault_init_keys_file
     init_key_shares    = var.vault_init_key_shares
     init_key_threshold = var.vault_init_key_threshold
-    init_overlay_v     = "1"
+    transit_unseal     = tostring(var.enable_vault_transit_unseal)
+    init_overlay_v     = "2" # v2 = branch on enable_vault_transit_unseal -- recovery-shares (transit-seal) vs key-shares (shamir). v1 = shamir-only.
   }
 
-  depends_on = [null_resource.vault_ready_probe]
+  depends_on = [null_resource.vault_ready_probe, null_resource.vault_cluster_seal_config]
 
   provisioner "local-exec" {
     when        = create
     interpreter = ["pwsh", "-NoProfile", "-Command"]
     command     = <<-PWSH
-      $ip          = '${local.vault_1_ip}'
-      $user        = '${local.ssh_user}'
-      $shares      = ${var.vault_init_key_shares}
-      $threshold   = ${var.vault_init_key_threshold}
-      $keysFileRaw = '${var.vault_init_keys_file}'
+      $ip            = '${local.vault_1_ip}'
+      $user          = '${local.ssh_user}'
+      $shares        = ${var.vault_init_key_shares}
+      $threshold     = ${var.vault_init_key_threshold}
+      $keysFileRaw   = '${var.vault_init_keys_file}'
+      $transitUnseal = [bool]::Parse('${var.enable_vault_transit_unseal}')
       # Expand $HOME on the build host (we don't trust Terraform to do this in a string default)
-      $keysFile    = $ExecutionContext.InvokeCommand.ExpandString($keysFileRaw.Replace('$HOME', $env:USERPROFILE))
+      $keysFile      = $ExecutionContext.InvokeCommand.ExpandString($keysFileRaw.Replace('$HOME', $env:USERPROFILE))
 
       # ─── Step A: idempotency check -- vault status JSON ───────────────
       $statusRaw = ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "VAULT_SKIP_VERIFY=true vault status -format=json -address=https://127.0.0.1:8200" 2>&1 | Out-String
@@ -152,7 +155,14 @@ resource "null_resource" "vault_init_leader" {
         }
       }
 
-      if ($statusJson -and $statusJson.initialized -eq $true -and $statusJson.sealed -eq $true) {
+      # Transit-mode: vault auto-unseals via vault-transit; sealed-but-
+      # initialized state means transit is unreachable. Don't try to
+      # manually unseal -- there are no shamir keys in transit-mode init.
+      if ($transitUnseal -and $statusJson -and $statusJson.initialized -eq $true -and $statusJson.sealed -eq $true) {
+        throw "[vault init-leader] $ip is sealed but transit-mode is on -- vault-transit unreachable? Check 192.168.70.124 + the seal-transit.hcl token validity."
+      }
+
+      if ((-not $transitUnseal) -and $statusJson -and $statusJson.initialized -eq $true -and $statusJson.sealed -eq $true) {
         Write-Host "[vault init-leader] $ip initialized but sealed; attempting unseal from $keysFile..."
         if (-not (Test-Path $keysFile)) {
           throw "[vault init-leader] $ip is sealed but keys file $keysFile is missing -- cannot unseal"
@@ -167,47 +177,76 @@ resource "null_resource" "vault_init_leader" {
       }
 
       # ─── Step B: fresh init ───────────────────────────────────────────
-      Write-Host "[vault init-leader] $ip uninitialized -- running vault operator init (shares=$shares threshold=$threshold)"
+      # Branch on transit-mode:
+      #   - shamir   : -key-shares=N -key-threshold=M  (returns unseal_keys_b64)
+      #   - transit  : -recovery-shares=N -recovery-threshold=M  (returns
+      #                recovery_keys_b64 -- functionally equivalent for
+      #                break-glass; auto-unseal handles the day-to-day)
+      if ($transitUnseal) {
+        Write-Host "[vault init-leader] $ip uninitialized + transit-mode -- vault operator init -recovery-shares=$shares -recovery-threshold=$threshold"
+        $initFlags = "-recovery-shares=$shares -recovery-threshold=$threshold"
+      } else {
+        Write-Host "[vault init-leader] $ip uninitialized + shamir-mode -- vault operator init -key-shares=$shares -key-threshold=$threshold"
+        $initFlags = "-key-shares=$shares -key-threshold=$threshold"
+      }
 
-      $initOutput = ssh -o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "VAULT_SKIP_VERIFY=true vault operator init -format=json -key-shares=$shares -key-threshold=$threshold -address=https://127.0.0.1:8200" 2>&1 | Out-String
+      $initOutput = ssh -o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "VAULT_SKIP_VERIFY=true vault operator init -format=json $initFlags -address=https://127.0.0.1:8200" 2>&1 | Out-String
       if ($LASTEXITCODE -ne 0) {
         throw "[vault init-leader] vault operator init failed (rc=$LASTEXITCODE). Output:`n$initOutput"
       }
 
-      # Parse + persist
       try { $initJson = $initOutput | ConvertFrom-Json } catch {
         throw "[vault init-leader] vault operator init succeeded (rc=0) but output is not valid JSON. Output:`n$initOutput"
       }
-      if (-not $initJson.unseal_keys_b64 -or $initJson.unseal_keys_b64.Count -lt $threshold) {
-        throw "[vault init-leader] init JSON missing unseal keys (got $($initJson.unseal_keys_b64.Count); expected >=$threshold)"
-      }
 
-      # Persist to build-host file (mode 0600 equivalent on Windows: NTFS ACL
-      # restricting to owner; pwsh handles this reasonably via icacls if we
-      # want airtight, but for now just write + warn)
-      $keysDir = Split-Path -Parent $keysFile
-      New-Item -ItemType Directory -Force -Path $keysDir | Out-Null
-      $initOutput.Trim() | Set-Content -Path $keysFile -Encoding UTF8
-
-      Write-Host "[vault init-leader] init keys + root token persisted to $keysFile"
-      Write-Host "[vault init-leader] CRITICAL: this file is the only copy of the unseal keys; back it up and protect it"
-
-      # ─── Step C: unseal leader ─────────────────────────────────────────
-      Write-Host "[vault init-leader] unsealing $ip..."
-      $keys = $initJson.unseal_keys_b64
-      for ($i = 0; $i -lt $threshold; $i++) {
-        $k = $keys[$i]
-        $unsealOut = ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "VAULT_SKIP_VERIFY=true vault operator unseal -address=https://127.0.0.1:8200 $k" 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0) {
-          throw "[vault init-leader] unseal key $($i+1) failed (rc=$LASTEXITCODE). Output:`n$unsealOut"
+      # Validate the right key field is populated for the mode
+      if ($transitUnseal) {
+        if (-not $initJson.recovery_keys_b64 -or $initJson.recovery_keys_b64.Count -lt $threshold) {
+          throw "[vault init-leader] transit-mode init JSON missing recovery_keys_b64 (got $($initJson.recovery_keys_b64.Count); expected >=$threshold)"
+        }
+      } else {
+        if (-not $initJson.unseal_keys_b64 -or $initJson.unseal_keys_b64.Count -lt $threshold) {
+          throw "[vault init-leader] shamir-mode init JSON missing unseal_keys_b64 (got $($initJson.unseal_keys_b64.Count); expected >=$threshold)"
         }
       }
 
-      # Verify unsealed
+      # Persist init JSON. Same path for both modes -- downstream code
+      # always reads .root_token; .recovery_keys_b64 vs .unseal_keys_b64
+      # is the field that differs.
+      $keysDir = Split-Path -Parent $keysFile
+      New-Item -ItemType Directory -Force -Path $keysDir | Out-Null
+      $initOutput.Trim() | Set-Content -Path $keysFile -Encoding UTF8
+      icacls $keysFile /inheritance:r /grant:r "$($env:USERNAME):F" 2>&1 | Out-Null
+
+      Write-Host "[vault init-leader] init JSON persisted to $keysFile"
+      if ($transitUnseal) {
+        Write-Host "[vault init-leader] transit-mode -- recovery_keys_b64 stored (use only for break-glass; day-to-day auto-unseal via vault-transit)"
+      } else {
+        Write-Host "[vault init-leader] shamir-mode -- unseal_keys_b64 stored (CRITICAL: only copy of unseal keys; back it up)"
+      }
+
+      # ─── Step C: unseal leader (shamir only; transit auto-unseals) ───
+      if ($transitUnseal) {
+        Write-Host "[vault init-leader] transit-mode -- skipping manual unseal (vault-transit auto-unseals via seal-transit.hcl)"
+        # Settle: transit-seal handshake takes a moment after init
+        Start-Sleep -Seconds 5
+      } else {
+        Write-Host "[vault init-leader] unsealing $ip (shamir)..."
+        $keys = $initJson.unseal_keys_b64
+        for ($i = 0; $i -lt $threshold; $i++) {
+          $k = $keys[$i]
+          $unsealOut = ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "VAULT_SKIP_VERIFY=true vault operator unseal -address=https://127.0.0.1:8200 $k" 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) {
+            throw "[vault init-leader] unseal key $($i+1) failed (rc=$LASTEXITCODE). Output:`n$unsealOut"
+          }
+        }
+      }
+
+      # Verify unsealed (works in both modes -- check the live state)
       $verifyRaw = ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "VAULT_SKIP_VERIFY=true vault status -format=json -address=https://127.0.0.1:8200" 2>&1 | Out-String
       $verifyJson = $verifyRaw | ConvertFrom-Json
       if ($verifyJson.sealed -eq $true) {
-        throw "[vault init-leader] $ip still sealed after unseal -- something is wrong"
+        throw "[vault init-leader] $ip still sealed -- transit-mode? check vault-transit reachability. shamir-mode? unseal call failed."
       }
       Write-Host "[vault init-leader] $ip initialized + unsealed; HA mode=$($verifyJson.ha_enabled), is_self=$($verifyJson.is_self)"
     PWSH
@@ -220,8 +259,8 @@ resource "null_resource" "vault_join_followers" {
 
   triggers = {
     init_id        = null_resource.vault_init_leader[0].id
-    join_overlay_v = "7" # v7 = same as v6 + fix `$${threshold}:` PS escape (yet ANOTHER `$var:` scope qualifier bug -- I keep making this same mistake when adding new log lines). v6 = post-join settle + retry. v5 = system trust store. v4 = -leader-ca-cert. v3 = (typo). v2 = wrong flag. v1 = no peer cert.
-
+    transit_unseal = tostring(var.enable_vault_transit_unseal)
+    join_overlay_v = "8" # v8 = transit-mode skips manual unseal (auto-unseal handles followers post-join). v7 = $${threshold}: PS escape. v6 = post-join settle + retry. v5 = system trust store. v4 = -leader-ca-cert. v3 = (typo). v2 = wrong flag. v1 = no peer cert.
   }
 
   depends_on = [null_resource.vault_init_leader]
@@ -238,12 +277,17 @@ resource "null_resource" "vault_join_followers" {
       $leaderIp        = '${local.vault_1_ip}'
       $leaderApi       = '${local.vault_leader_api_addr}'
       $leaderCluster   = '${local.vault_leader_cluster_addr}'
+      $transitUnseal   = [bool]::Parse('${var.enable_vault_transit_unseal}')
 
       if (-not (Test-Path $keysFile)) {
         throw "[vault join] keys file $keysFile missing -- run init step first"
       }
       $initJson = Get-Content $keysFile | ConvertFrom-Json
-      $keys = $initJson.unseal_keys_b64
+      # Shamir mode: unseal_keys_b64 used to manually unseal followers.
+      # Transit mode: no keys needed; vault-transit auto-unseals each
+      # follower as it joins. Set $keys=$null for transit-mode + skip
+      # the unseal loop below.
+      $keys = if ($transitUnseal) { $null } else { $initJson.unseal_keys_b64 }
 
       # Fetch the leader's TLS cert ONCE -- each clone has its own self-signed
       # bootstrap cert (per-clone via vault-firstboot.sh), and `vault operator
@@ -331,22 +375,26 @@ resource "null_resource" "vault_join_followers" {
           Start-Sleep -Seconds 15
         }
 
-        # Unseal (whether fresh-joined or just sealed). Capture JSON output
-        # for progress visibility -- previous versions only printed on
-        # failure, making the "is it really unsealing" question impossible
-        # to answer post-mortem.
-        Write-Host "[vault join] unsealing $ip..."
-        for ($i = 0; $i -lt $threshold; $i++) {
-          $k = $keys[$i]
-          $unsealOut = ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "VAULT_SKIP_VERIFY=true vault operator unseal -format=json -address=https://127.0.0.1:8200 $k" 2>&1 | Out-String
-          if ($LASTEXITCODE -ne 0) {
-            throw "[vault join] unseal $ip key $($i+1) failed (rc=$LASTEXITCODE). Output:`n$unsealOut"
-          }
-          try {
-            $j = $unsealOut | ConvertFrom-Json
-            Write-Host "[vault join] $ip unseal key $($i+1)/$${threshold}: progress=$($j.progress)/$($j.t), sealed=$($j.sealed)"
-          } catch {
-            Write-Host "[vault join] $ip unseal key $($i+1) (output unparseable): $($unsealOut.Trim())"
+        # Unseal (shamir mode only -- transit auto-unseals after raft join).
+        # Capture JSON output for progress visibility -- previous versions
+        # only printed on failure, making the "is it really unsealing"
+        # question impossible to answer post-mortem.
+        if ($transitUnseal) {
+          Write-Host "[vault join] $ip transit-mode -- skipping manual unseal (vault-transit auto-unseals)"
+        } else {
+          Write-Host "[vault join] unsealing $ip (shamir)..."
+          for ($i = 0; $i -lt $threshold; $i++) {
+            $k = $keys[$i]
+            $unsealOut = ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "VAULT_SKIP_VERIFY=true vault operator unseal -format=json -address=https://127.0.0.1:8200 $k" 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) {
+              throw "[vault join] unseal $ip key $($i+1) failed (rc=$LASTEXITCODE). Output:`n$unsealOut"
+            }
+            try {
+              $j = $unsealOut | ConvertFrom-Json
+              Write-Host "[vault join] $ip unseal key $($i+1)/$${threshold}: progress=$($j.progress)/$($j.t), sealed=$($j.sealed)"
+            } catch {
+              Write-Host "[vault join] $ip unseal key $($i+1) (output unparseable): $($unsealOut.Trim())"
+            }
           }
         }
 

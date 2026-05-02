@@ -495,3 +495,91 @@ variable "vault_agent_nexus_jumpbox_creds_file" {
   type        = string
   default     = "$HOME/.nexus/vault-agent-nexus-jumpbox.json"
 }
+
+# ─── Phase 0.D.5.5 — Transit auto-unseal (vault-transit + cluster reconfig) ───
+#
+# vault-transit is a single-node Vault VM whose only job is hosting a
+# transit secrets engine + a seal key. The 3-node cluster (vault-1/2/3)
+# uses transit-seal mode with vault-transit as the seal target -- when
+# they boot, they auto-unseal by calling transit/decrypt on vault-transit
+# (no manual unseal keys needed).
+#
+# Greenfield bring-up sequence (per Greg's 0.D.5.5 briefing approval --
+# in-place migration rejected for lab; greenfield is simpler/safer):
+#
+#   1. operator: pwsh -File scripts\security.ps1 destroy   (destroys 3-node cluster)
+#   2. operator: rebuild Vault Packer template (firstboot v2 + vault.service v2)
+#   3. operator: pwsh -File scripts\security.ps1 apply
+#        - vault-transit comes up first (shamir mode; manual init+unseal once)
+#        - transit engine enabled, key created, token issued, JSON sidecar persisted
+#        - vault-1/2/3 come up; TF delivers seal-transit.hcl to each
+#        - cluster init with -recovery-shares (NOT -key-shares); transit auto-unseal works
+#   4. operator: pwsh -File scripts\foundation.ps1 apply   (re-seeds KV-dependent state)
+#   5. operator: pwsh -File scripts\security.ps1 smoke     (chained 0.D.1-5 should green)
+#
+# vault-transit topology:
+#   - VMnet11 service .124 (next free after vault-3=.123)
+#   - VMnet10 backplane 192.168.10.124 (single-node; backplane unused for cluster
+#     traffic but kept for symmetry + future scale-out)
+#   - MAC 00:50:56:3F:00:43 (next free in :40-4F range)
+#   - Same Packer template as cluster (firstboot's hostname-IP map covers .124)
+#   - file storage backend (per Greg's briefing #2 -- single node, no Raft needed)
+#   - own init keys (vault-transit-init.json, mode 0600 on build host)
+#   - shamir seal mode (the unseal key custodian itself can't auto-unseal;
+#     manual unseal once per reboot of vault-transit OR a 0.D.6+ override
+#     using a 4th unseal target)
+
+variable "enable_vault_transit_unseal" {
+  description = "Master toggle: bring up vault-transit + reconfigure 3-node cluster to use transit auto-unseal. Default false through 0.D.5.5 development; flip to true at close-out per feedback_terraform_partial_apply_destroys_resources.md. WARNING: switching this from false->true on a running cluster requires a destroy+apply cycle (vault doesn't support live shamir->transit migration without a separate `vault operator migrate` flow). Greenfield is the canonical path."
+  type        = bool
+  default     = false
+}
+
+variable "enable_vault_transit_vm" {
+  description = "Toggle: clone vault-transit VM. Default true (gated under enable_vault_transit_unseal). Set false to skip the entire transit layer (e.g. iterating on the 3-node cluster's pre-transit config)."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_transit_bringup" {
+  description = "Toggle: init vault-transit + enable transit engine + create key + issue cluster auth token + persist JSON sidecar. Default true. Idempotent via vault status / mount probes. Set false to land the bare clone only."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_cluster_seal_config" {
+  description = "Toggle: deliver /etc/vault.d/seal-transit.hcl to vault-1/2/3 (post-clone, pre-init). Required for transit auto-unseal to work. Default true (gated under enable_vault_transit_unseal)."
+  type        = bool
+  default     = true
+}
+
+# vault-transit clone parameters
+variable "mac_vault_transit_primary" {
+  description = "vault-transit primary NIC MAC (VMnet11). dnsmasq dhcp-host reservation maps this to 192.168.70.124."
+  type        = string
+  default     = "00:50:56:3F:00:43"
+}
+
+variable "mac_vault_transit_secondary" {
+  description = "vault-transit secondary NIC MAC (VMnet10). vault-firstboot.sh assigns 192.168.10.124 statically."
+  type        = string
+  default     = "00:50:56:3F:01:43"
+}
+
+variable "vault_transit_init_keys_file" {
+  description = "Absolute path on the build host where vault-transit's init keys + root token JSON gets written. Separate from vault-init.json (different cluster). mode 0600."
+  type        = string
+  default     = "$HOME/.nexus/vault-transit-init.json"
+}
+
+variable "vault_transit_token_file" {
+  description = "Absolute path on the build host where vault-transit's cluster-auth token JSON gets written. The 3-node cluster's seal-transit.hcl references this token to call transit/decrypt at unseal time. mode 0600."
+  type        = string
+  default     = "$HOME/.nexus/vault-transit-token.json"
+}
+
+variable "vault_transit_key_name" {
+  description = "Name of the transit key in vault-transit that the 3-node cluster uses to wrap its seal data. Default 'nexus-cluster-unseal'."
+  type        = string
+  default     = "nexus-cluster-unseal"
+}

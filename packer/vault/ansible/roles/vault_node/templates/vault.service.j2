@@ -16,7 +16,13 @@ SecureBits=keep-caps
 AmbientCapabilities=CAP_IPC_LOCK
 CapabilityBoundingSet=CAP_SYSLOG CAP_IPC_LOCK
 NoNewPrivileges=yes
-ExecStart=/usr/local/bin/vault server -config={{ vault_node_config_dir }}/vault.hcl
+# -config points at the DIRECTORY -- vault server merges all *.hcl files
+# inside (vault.hcl + optional seal-transit.hcl). The seal-transit.hcl
+# drop-in is delivered post-clone by Terraform on cluster members
+# (vault-1/2/3) for Phase 0.D.5.5 transit auto-unseal. vault-transit
+# itself never receives one (stays in shamir mode; it IS the unseal
+# key custodian for the others).
+ExecStart=/usr/local/bin/vault server -config={{ vault_node_config_dir }}/
 ExecReload=/bin/kill --signal HUP $MAINPID
 KillMode=process
 KillSignal=SIGINT

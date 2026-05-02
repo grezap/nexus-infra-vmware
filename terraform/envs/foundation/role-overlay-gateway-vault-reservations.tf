@@ -40,7 +40,8 @@ resource "null_resource" "gateway_vault_reservations" {
     mac_vault_1          = var.mac_vault_1_primary
     mac_vault_2          = var.mac_vault_2_primary
     mac_vault_3          = var.mac_vault_3_primary
-    vault_reservations_v = "1"
+    mac_vault_transit    = var.mac_vault_transit_primary
+    vault_reservations_v = "2" # v2 = also pins vault-transit (.124) for Phase 0.D.5.5 transit auto-unseal. v1 = vault-1/2/3 only.
   }
 
   provisioner "local-exec" {
@@ -51,21 +52,25 @@ resource "null_resource" "gateway_vault_reservations" {
       $mac_v1      = '${var.mac_vault_1_primary}'
       $mac_v2      = '${var.mac_vault_2_primary}'
       $mac_v3      = '${var.mac_vault_3_primary}'
-      $marker      = '# Vault cluster dhcp-host reservations managed by terraform/envs/foundation/role-overlay-gateway-vault-reservations.tf'
+      $mac_vt      = '${var.mac_vault_transit_primary}'
+      $marker      = '# Vault cluster dhcp-host reservations managed by terraform/envs/foundation/role-overlay-gateway-vault-reservations.tf v2'
 
-      # Idempotent insert: skip if marker already present.
+      # Idempotent insert: marker includes version (v2 adds vault-transit);
+      # v1 marker would no-op match without the new entry, so we look for
+      # the v2 marker specifically.
       $existing = ssh nexusadmin@$gw "test -f /etc/dnsmasq.d/foundation-vault-reservations.conf && cat /etc/dnsmasq.d/foundation-vault-reservations.conf || true"
       if ($existing -match [regex]::Escape($marker)) {
-        Write-Host "[gateway vault-reservations] reservations already present, no-op."
+        Write-Host "[gateway vault-reservations] v2 reservations already present, no-op."
         exit 0
       }
 
-      # Per nexus-platform-plan/docs/infra/vms.yaml lines 55-57.
+      # Per nexus-platform-plan/docs/infra/vms.yaml lines 55-58.
       $confLines = @(
         $marker
         "dhcp-host=$mac_v1,192.168.70.121,vault-1"
         "dhcp-host=$mac_v2,192.168.70.122,vault-2"
         "dhcp-host=$mac_v3,192.168.70.123,vault-3"
+        "dhcp-host=$mac_vt,192.168.70.124,vault-transit"
         ""
       ) -join "`n"
 
@@ -78,7 +83,7 @@ resource "null_resource" "gateway_vault_reservations" {
       Write-Host "[gateway vault-reservations] writing dhcp-host reservations + restarting dnsmasq..."
       ssh nexusadmin@$gw $script
       if ($LASTEXITCODE -ne 0) { throw "[gateway vault-reservations] ssh tee/restart failed (rc=$LASTEXITCODE)" }
-      Write-Host "[gateway vault-reservations] reservations live: vault-1=.121, vault-2=.122, vault-3=.123"
+      Write-Host "[gateway vault-reservations] reservations live: vault-1=.121, vault-2=.122, vault-3=.123, vault-transit=.124"
     PWSH
   }
 
