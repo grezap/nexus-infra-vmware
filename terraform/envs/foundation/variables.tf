@@ -501,3 +501,54 @@ variable "dc_nexusadmin_required_groups" {
   type        = list(string)
   default     = ["Domain Admins", "Enterprise Admins"]
 }
+
+# ─── Phase 0.D.5.4 — Vault Agent on member servers ───────────────────────
+#
+# Installs the Vault Agent service on dc-nexus + nexus-jumpbox, configured
+# with each host's narrow AppRole (defined in security env). Each Agent
+# renders one cred from KV to a file on disk as proof-of-concept. Real
+# consumers (SQL Server config files, IIS app config, scheduled tasks)
+# come when those workloads deploy in 0.G+.
+#
+# Cross-env coupling: reads the security env's AppRole creds JSON sidecars
+# from $HOME/.nexus/vault-agent-{dc-nexus,nexus-jumpbox}.json. Best-effort:
+# WARN+skip if the JSON is absent (security env not yet applied).
+#
+# Vault Agent binary download: from releases.hashicorp.com via nexus-gateway
+# Internet egress. Each host downloads its own copy on first apply.
+
+variable "enable_vault_agent_install" {
+  description = "Master toggle: install Vault Agent on dc-nexus + nexus-jumpbox. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_dc_vault_agent" {
+  description = "Toggle: install Vault Agent on dc-nexus. Default true. Renders nexus/foundation/dc-nexus/dsrm to C:\\ProgramData\\nexus\\agent\\dsrm.txt as a proof-of-concept."
+  type        = bool
+  default     = true
+}
+
+variable "enable_jumpbox_vault_agent" {
+  description = "Toggle: install Vault Agent on nexus-jumpbox. Default true. Renders nexus/foundation/identity/nexusadmin to C:\\ProgramData\\nexus\\agent\\nexusadmin-pwd.txt as a proof-of-concept."
+  type        = bool
+  default     = true
+}
+
+variable "vault_agent_version" {
+  description = "Vault binary version to install on each member server. Should match the Vault cluster's version (default 1.18.4 per packer/vault/variables.pkr.hcl)."
+  type        = string
+  default     = "1.18.4"
+}
+
+variable "vault_agent_dc_nexus_creds_file" {
+  description = "Build-host path where the security env wrote dc-nexus's Vault Agent role-id+secret-id JSON sidecar. Mirrors security env default."
+  type        = string
+  default     = "~/.nexus/vault-agent-dc-nexus.json"
+}
+
+variable "vault_agent_nexus_jumpbox_creds_file" {
+  description = "Build-host path where the security env wrote nexus-jumpbox's Vault Agent role-id+secret-id JSON sidecar. Mirrors security env default."
+  type        = string
+  default     = "~/.nexus/vault-agent-nexus-jumpbox.json"
+}

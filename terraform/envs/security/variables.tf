@@ -453,3 +453,45 @@ variable "foundation_seed_nexusadmin_password" {
   default     = "NexusPackerBuild!1"
   sensitive   = true
 }
+
+# ─── Phase 0.D.5 — Vault Agent AppRoles (dc-nexus + nexus-jumpbox) ───────
+#
+# Two AppRoles, one per Windows host that runs Vault Agent. Each AppRole
+# has a NARROW policy granting read on only the KV paths that host
+# actually consumes. Role-id + secret-id JSON sidecars get written to
+# the build host (operator-private $HOME/.nexus/) and the foundation
+# env's Vault Agent install overlay copies them onto the target host
+# at apply time.
+#
+# Order: agent_policies -> agent_approles -> (foundation env consumes)
+# All steps depend_on null_resource.vault_post_init.
+
+variable "enable_vault_agent_setup" {
+  description = "Master toggle: scaffold Vault Agent infrastructure (policies + AppRoles + JSON sidecars). Default true. Set false to skip 0.D.5.4 entirely."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_agent_policies" {
+  description = "Toggle: write the two narrow Vault policies (nexus-agent-dc-nexus + nexus-agent-nexus-jumpbox). Default true. Idempotent overwrite."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vault_agent_approles" {
+  description = "Toggle: define the two AppRoles + persist role-id+secret-id JSON sidecars on the build host. Default true. role-id is stable; secret-id is regenerated per security apply."
+  type        = bool
+  default     = true
+}
+
+variable "vault_agent_dc_nexus_creds_file" {
+  description = "Absolute path on the build host where the dc-nexus Vault Agent's role-id + secret-id JSON gets written. mode 0600 via icacls. Foundation env's Vault Agent install overlay reads this + scp's role-id/secret-id files to dc-nexus."
+  type        = string
+  default     = "$HOME/.nexus/vault-agent-dc-nexus.json"
+}
+
+variable "vault_agent_nexus_jumpbox_creds_file" {
+  description = "Absolute path on the build host where the nexus-jumpbox Vault Agent's role-id + secret-id JSON gets written. mode 0600 via icacls."
+  type        = string
+  default     = "$HOME/.nexus/vault-agent-nexus-jumpbox.json"
+}
