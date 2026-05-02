@@ -6,6 +6,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Phase 0.D.5 (2026-05-02 + 2026-05-03)
+
+- **5.1 — `MinPasswordLength=14` + KV→AD bootstrap-creds rotation overlay**
+  (foundation env). Foundation env's `dc_password_min_length` default
+  12 → 14; seed-mirror defaults bumped to ≥14 chars. New
+  `role-overlay-dc-rotate-bootstrap-creds.tf` syncs Administrator +
+  nexusadmin pwds from KV → AD whenever the trigger hash changes. DSRM
+  rotation NOT in scope of this overlay (Server 2025 ntdsutil pwd
+  prompt fails under SSH/redirected stdin -- console-mode read APIs;
+  manual ops). New `scripts/rotate-foundation-creds.ps1` operator
+  helper. New `role-overlay-dc-nexusadmin-membership.tf` idempotently
+  asserts nexusadmin is in Domain Admins + Enterprise Admins (the
+  original `dc_nexus_promote` v4 step's chained Add-ADGroupMember
+  silently failed at promotion time; this overlay restores the intended
+  state using domain Administrator credentials from KV).
+  Lessons canonized: `feedback_ntdsutil_dsrm_console_mode_ssh.md`.
+
+- **5.2 — Leaf cert TTL 1y → 90d**. `vault_pki_leaf_ttl` +
+  `vault_ldaps_cert_ttl` defaults `8760h → 2160h`. The
+  `vault_pki_rotate_listener` overlay v1 → v2 + the `vault_ldaps_cert`
+  overlay v4 → v5 gain a 3rd idempotency condition: cert validity span
+  (`notAfter - notBefore`) must be within ±10 % of the desired TTL.
+  Without this, a 1y cert with 360 days remaining would skip rotation
+  forever after the operator dropped TTL to 90 d.
+  `scripts/smoke-0.D.2.ps1` `MinLeafTtlDays` default 300 → 30.
+
+- **5.3 — GMSA scaffolding** (foundation env). New
+  `role-overlay-dc-gmsa.tf` provisions: (a) KDS root key -- probe-only
+  at this phase because `Add-KdsRootKey` on Server 2025 returns
+  ERROR_NOT_SUPPORTED under SSH; manual RDP+console required; (b)
+  `nexus-gmsa-consumers` AD group in `OU=Groups`; (c) sample GMSA
+  `gmsa-nexus-demo$` in `OU=ServiceAccounts` with `PrincipalsAllowed-
+  ToRetrieveManagedPassword` set via idempotent `Set-ADServiceAccount`
+  post-create (some `New-ADServiceAccount` calls silently drop this
+  field when the caller lacks Enterprise Admins). Real GMSA consumers
+  (SQL Server svc account, IIS app pools) come in Phase 0.G+.
+  Lesson canonized: `feedback_kds_rootkey_server2025_ssh.md`.
+
+- **5.4 — Vault Agent on dc-nexus + nexus-jumpbox**. Two narrow Vault
+  policies (`nexus-agent-dc-nexus`, `nexus-agent-nexus-jumpbox`) in
+  security env's new `role-overlay-vault-agent-policies.tf`; two
+  AppRoles + JSON sidecars in `role-overlay-vault-agent-approles.tf`.
+  Foundation env's new `role-overlay-windows-vault-agent.tf` installs
+  the `nexus-vault-agent` Windows service on each host: downloads
+  vault.exe via nexus-gateway egress, stages role-id+secret-id+CA
+  bundle+agent.hcl+template files (NTFS ACL: SYSTEM + Administrators
+  only on sensitive files), creates the service via `New-Service`
+  (NOT `sc.exe` -- PS argv parsing eats embedded double quotes around
+  `binPath`), verifies render within 30 s. Render targets:
+  `dc-nexus/dsrm` → `C:\ProgramData\nexus\agent\dsrm.txt` and
+  `identity/nexusadmin` → `C:\ProgramData\nexus\agent\nexusadmin-pwd.txt`.
+
+- **5.5 (code-complete; greenfield apply pending) — Transit auto-unseal**.
+  New `vault-transit` single-node companion VM (192.168.70.124,
+  MAC `00:50:56:3F:00:43`, own subdir `01-foundation/vault-transit/`
+  per `feedback_vmware_per_vm_folders.md`). Hosts the transit secrets
+  engine + key `nexus-cluster-unseal` consumed by vault-1/2/3 for
+  auto-unseal. Packer template change: `vault.service` ExecStart
+  points at `/etc/vault.d/` DIRECTORY (was single file) so vault server
+  merges `vault.hcl` + `seal-transit.hcl` drop-in delivered post-clone
+  by the new `role-overlay-vault-cluster-seal-config.tf`. New
+  `role-overlay-vault-transit-bringup.tf` brings up vault-transit
+  (init shamir + unseal + enable transit + create key + write policy +
+  issue 720h-period token + persist 2 JSON sidecars). Cluster init
+  branches on `enable_vault_transit_unseal`: shamir-mode unchanged;
+  transit-mode uses `-recovery-shares`/`-recovery-threshold`. Followers
+  skip manual unseal in transit-mode (auto-unseal post-raft-join).
+  Greenfield bring-up (operator-driven; not yet executed): destroy +
+  Packer rebuild + apply with `enable_vault_transit_unseal=true` +
+  re-apply foundation env to re-seed KV-dependent state.
+
+- **`scripts/smoke-0.D.5.ps1`** -- chained smoke gate covering all 5
+  sub-deliverables (KDS root key WARN-only when missing).
+
+- **Lessons canonized** (memory):
+  - `feedback_ntdsutil_dsrm_console_mode_ssh.md`
+  - `feedback_kds_rootkey_server2025_ssh.md`
+  - `feedback_vmware_per_vm_folders.md`
+
 ### Added (Phase 0.D.4 — Foundation cred migration into Vault KV via AppRole — 2026-05-01)
 
 - **`terraform/envs/security/role-overlay-vault-foundation-policy.tf`** — writes

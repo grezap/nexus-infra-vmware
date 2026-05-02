@@ -1362,6 +1362,174 @@ terraform -chdir=terraform\envs\foundation apply  -target=null_resource.dc_nexus
 
 ---
 
+## 1k. Phase 0.D.5 — Transit auto-unseal + Vault Agent + GMSA scaffold + leaf TTL drop + bootstrap-creds rotation
+
+Five orthogonal posture tightenings closing Phase 0.D. Sub-deliverables:
+
+| # | What | Status (2026-05-03) |
+|---|---|---|
+| **5.1** | `MinPasswordLength=14` + KV→AD bootstrap-creds rotation overlay | ✅ Live |
+| **5.2** | Leaf cert TTL 1 y → 90 d (Vault listeners + dc-nexus LDAPS) | ✅ Live |
+| **5.3** | GMSA scaffolding (KDS root probe-only; AD group + sample GMSA live) | ✅ Live (manual KDS root key add still required — see §1k.2) |
+| **5.4** | Vault Agent on dc-nexus + nexus-jumpbox | ✅ Live |
+| **5.5** | Transit auto-unseal | ⏳ Code-complete; greenfield apply pending — see §1k.4 |
+
+**Canon mapping:**
+
+| Choice | Source |
+|---|---|
+| 5 sub-phases under Phase 0.D | [`MASTER-PLAN.md` Phase 0.D row (post-2026-05-02 housekeeping)](../../nexus-platform-plan/MASTER-PLAN.md) |
+| Transit-mode + AppRole shape | [ADR-0015](../../nexus-platform-plan/docs/adr/ADR-0015-transit-auto-unseal-and-agent.md) |
+| vault-transit IP / MAC / dir | [`vms.yaml`](../../nexus-platform-plan/docs/infra/vms.yaml) (`192.168.70.124`, `00:50:56:3F:00:43`, `01-foundation/vault-transit/`) |
+| Manual ops for DSRM rotation | [`feedback_ntdsutil_dsrm_console_mode_ssh.md`](../memory/feedback_ntdsutil_dsrm_console_mode_ssh.md) |
+| Manual ops for KDS root key | [`feedback_kds_rootkey_server2025_ssh.md`](../memory/feedback_kds_rootkey_server2025_ssh.md) |
+| Per-VM-folder layout | [`feedback_vmware_per_vm_folders.md`](../memory/feedback_vmware_per_vm_folders.md) |
+
+### 1k.1 Manual ops — DSRM password rotation
+
+`ntdsutil`'s password prompt uses `GetConsoleMode`/`ReadConsole` APIs that fail under SSH/redirected stdin (`WIN32 Error Code 0x1` `ERROR_INVALID_FUNCTION`). The dc_rotate_bootstrap_creds overlay rotates Administrator + nexusadmin via `Set-ADAccountPassword`, but DSRM has no Set-* equivalent — must run from an interactive console session.
+
+**Procedure** (quarterly or ad-hoc):
+
+```powershell
+# Step 1 (build host) -- rotate the KV value to a fresh 24-char Vault-generated pwd
+$env:VAULT_ADDR   = 'https://192.168.70.121:8200'
+$env:VAULT_CACERT = "$HOME\.nexus\vault-ca-bundle.crt"
+$env:VAULT_TOKEN  = (Get-Content "$HOME\.nexus\vault-init.json" | ConvertFrom-Json).root_token
+vault kv put nexus/foundation/dc-nexus/dsrm `
+  password=$([Convert]::ToBase64String([byte[]](1..18 | ForEach-Object { Get-Random -Maximum 256 })))
+
+# Step 2 (RDP) -- log into dc-nexus (192.168.70.240) as Administrator (pwd from
+# vault kv get nexus/foundation/dc-nexus/local-administrator). Open elevated
+# PowerShell in the RDP session.
+
+# Step 3 (RDP elevated PS) -- rotate DSRM via ntdsutil interactively
+ntdsutil
+> set dsrm password
+> reset password on server null
+# (paste the 24-char value from Step 1's `vault kv get` -- note ntdsutil
+#  prompts twice; some Server 2025 builds prompt once)
+> q
+> q
+
+# Step 4 (RDP) -- verify by reading Get-KdsRootKey or rebooting into DSRM mode
+#  (rare; only if you actually need DSRM; otherwise just trust the rotation)
+```
+
+### 1k.2 Manual ops — KDS root key add
+
+`Add-KdsRootKey` on Server 2025 returns `ERROR_NOT_SUPPORTED` (HRESULT 0x80070032) under SSH; `Invoke-Command -Credential Administrator` returns a fake GUID without persisting. Same console-session-required class as ntdsutil DSRM. Manual remediation — one-time per forest:
+
+```powershell
+# Step 1 (RDP) -- log into dc-nexus as Administrator
+# Step 2 (RDP elevated PS):
+Add-KdsRootKey -EffectiveTime ((Get-Date).AddHours(-10))
+# The -10h back-date trick makes the key usable immediately on a single-DC
+# lab (no replication delay to wait for; production AD requires +10h then
+# wait for replication).
+
+# Step 3 (RDP) -- verify
+Get-KdsRootKey | Format-List KeyId, EffectiveTime, CreationTime
+Test-ADServiceAccount gmsa-nexus-demo  # should now return True
+```
+
+After this lands once, the `dc_gmsa_kds_root` overlay's probe will report `KDS_ROOT_PRESENT` on subsequent applies; the smoke gate's WARN becomes a green check.
+
+### 1k.3 Operator order (5.1 + 5.2 + 5.3 + 5.4 — non-destructive flow, already applied)
+
+```powershell
+cd "F:\_CODING_\Repos\Local Development And Test\Portfolio_Project_Ideas\workspace\nexus-infra-vmware"
+
+# 1. Foundation env apply -- lands 5.1 (MinPasswordLength + rotation overlay,
+#    nexusadmin membership remediation), 5.3 (GMSA scaffold), 5.4 (Vault
+#    Agent on dc-nexus + jumpbox).
+pwsh -File scripts\foundation.ps1 apply
+
+# 2. Operator-time: rotate DSRM + Administrator + nexusadmin to fresh
+#    24-char Vault-generated pwds (run once after 5.1 lands).
+pwsh -File scripts\rotate-foundation-creds.ps1
+pwsh -File scripts\foundation.ps1 apply  # picks up rotated KV; pushes to AD
+
+# 3. Security env apply -- lands 5.2 (leaf cert TTL drop forces re-issue
+#    via the new span-check) + 5.4 (Vault Agent AppRoles + JSON sidecars).
+pwsh -File scripts\security.ps1 apply
+
+# 4. Operator-time (one-time, RDP): KDS root key add (handbook §1k.2)
+#    + DSRM password sync to live AD (handbook §1k.1)
+
+# 5. Smoke (chains 0.D.1-5)
+pwsh -File scripts\security.ps1 smoke
+```
+
+### 1k.4 Operator order (5.5 — DESTRUCTIVE greenfield re-cluster)
+
+WARNING: this destroys the live Vault cluster + all KV data. All state recreates from TF on apply, but the operator must re-apply foundation env to re-seed KV-dependent state. ~40 min total wall-clock (Packer rebuild ~25 min + cluster bring-up ~5 min + foundation re-apply ~10 min).
+
+```powershell
+# 1. Destroy the existing 3-node cluster
+pwsh -File scripts\security.ps1 destroy
+
+# 2. Rebuild the Vault Packer template (firstboot v2 -- 4-host map; vault.service v2 -- /etc/vault.d/ DIRECTORY)
+Push-Location packer\vault
+packer init .
+packer build .
+Pop-Location
+
+# 3. Apply security env with transit unseal enabled
+#    (vault-transit comes up first, inits + creates transit key, then
+#    seal-transit.hcl gets delivered to vault-1/2/3 BEFORE their init)
+pwsh -File scripts\security.ps1 apply -Vars enable_vault_transit_unseal=true
+
+# 4. Re-apply foundation env -- KV got wiped by step 1; security re-seeded
+#    in step 3 via 0.D.4 seed overlay; foundation env re-applies the
+#    KV-dependent state (dc_password_policy reads fresh KV, etc.)
+pwsh -File scripts\foundation.ps1 apply
+
+# 5. Smoke -- chains 0.D.1-5, expects vault-transit + cluster auto-unseal
+#    to all be green
+pwsh -File scripts\security.ps1 smoke
+```
+
+### 1k.5 Selective ops (Phase 0.D.5)
+
+```powershell
+# Skip the entire 0.D.5.5 transit layer (run cluster in shamir-only mode)
+pwsh -File scripts\security.ps1 apply -Vars enable_vault_transit_unseal=false
+
+# Skip JUST the cluster reconfig step (vault-transit comes up but cluster stays shamir)
+pwsh -File scripts\security.ps1 apply -Vars enable_vault_transit_unseal=true,enable_vault_cluster_seal_config=false
+
+# Force-rotate the AppRole secret-id for a Vault Agent (e.g. dc-nexus)
+terraform -chdir=terraform\envs\security taint  null_resource.vault_agent_approles
+terraform -chdir=terraform\envs\security apply  -target=null_resource.vault_agent_approles -auto-approve
+# Then re-apply foundation env so the Agent picks up the new secret-id
+pwsh -File scripts\foundation.ps1 apply
+# (the agent install overlay sees the JSON sidecar's role_id change in
+# its hash-trigger and re-stages role-id/secret-id files + restarts the
+# Windows service)
+
+# Iterate on a single 5.5 overlay
+terraform -chdir=terraform\envs\security taint  null_resource.vault_transit_bringup
+terraform -chdir=terraform\envs\security apply  -target=null_resource.vault_transit_bringup -auto-approve
+
+# Quarterly re-rotate Administrator + nexusadmin (DSRM separate, see §1k.1)
+pwsh -File scripts\rotate-foundation-creds.ps1
+pwsh -File scripts\foundation.ps1 apply
+```
+
+### 1k.6 What didn't work (canon — don't re-derive)
+
+- **`ntdsutil` over SSH** — console-mode read APIs fail (§1k.1). Memory: `feedback_ntdsutil_dsrm_console_mode_ssh.md`.
+- **`Add-KdsRootKey` over SSH on Server 2025** — same class (§1k.2). Memory: `feedback_kds_rootkey_server2025_ssh.md`.
+- **`sc.exe create` with `$binPath` interpolation in PS** — PS argv parser eats embedded double quotes; sc.exe dumps usage help instead of creating the service. Use `New-Service -BinaryPathName` (PS-native; handles quoting via Windows API). Inline comment in `role-overlay-windows-vault-agent.tf`.
+- **`Add-KdsRootKey` returning a non-empty GUID via `Invoke-Command`** — looks like success but key NOT persisted to AD. Verify via `Get-KdsRootKey | Measure-Object` count > 0, NOT by trusting the cmdlet's return value.
+
+### 1k.7 RAM budget delta
+
+Phase 0.D.5 adds 1 VM (`vault-transit`, 2 GB RAM) when 5.5 greenfield re-cluster lands. Foundation tier RAM total: was ~46 GB (dc-nexus 4 + jumpbox 4 + 3×vault 6 + obs 28); becomes ~48 GB. Build host has slack.
+
+---
+
 ## 2. Working with the running gateway
 
 ### 2.1 SSH in
