@@ -222,6 +222,61 @@ variable "mac_vault_transit_primary" {
   default     = "00:50:56:3F:00:43"
 }
 
+# ─── Phase 0.E.1 — Swarm cluster dnsmasq dhcp-host reservations ──────────
+# Same partial-apply landmine class as enable_vault_dhcp_reservations
+# (memory/feedback_terraform_partial_apply_destroys_resources.md): a
+# foundation apply that omits these vars on a lab that had previously
+# enabled them would destroy the Swarm dhcp-host pins, clones would fall
+# back into the dynamic .200-.250 pool, and the canonical .111-.113 /
+# .131-.133 invariants required by nexus-infra-swarm-nomad/terraform/envs/
+# swarm-nomad/ would be violated. Default true.
+#
+# Cross-repo dependency: the canonical IPs pinned here are consumed by
+# nexus-infra-swarm-nomad/terraform/envs/swarm-nomad/. The MAC defaults
+# match that env's variables.tf swarm-cluster MAC pool 1:1.
+
+variable "enable_swarm_dhcp_reservations" {
+  description = "Toggle: write dnsmasq dhcp-host reservations on nexus-gateway for the 3+3 Swarm cluster (Phase 0.E.1). Default true (steady state: lab has the swarm tier active). Set false ONLY when running a foundation-only apply on a lab that has never had the Swarm reservations -- otherwise destruction is silent."
+  type        = bool
+  default     = true
+}
+
+variable "mac_swarm_manager_1_primary" {
+  description = "swarm-manager-1 primary NIC (VMnet11). Pinned to 192.168.70.111."
+  type        = string
+  default     = "00:50:56:3F:00:50"
+}
+
+variable "mac_swarm_manager_2_primary" {
+  description = "swarm-manager-2 primary NIC (VMnet11). Pinned to 192.168.70.112."
+  type        = string
+  default     = "00:50:56:3F:00:51"
+}
+
+variable "mac_swarm_manager_3_primary" {
+  description = "swarm-manager-3 primary NIC (VMnet11). Pinned to 192.168.70.113."
+  type        = string
+  default     = "00:50:56:3F:00:52"
+}
+
+variable "mac_swarm_worker_1_primary" {
+  description = "swarm-worker-1 primary NIC (VMnet11). Pinned to 192.168.70.131."
+  type        = string
+  default     = "00:50:56:3F:00:53"
+}
+
+variable "mac_swarm_worker_2_primary" {
+  description = "swarm-worker-2 primary NIC (VMnet11). Pinned to 192.168.70.132."
+  type        = string
+  default     = "00:50:56:3F:00:54"
+}
+
+variable "mac_swarm_worker_3_primary" {
+  description = "swarm-worker-3 primary NIC (VMnet11). Pinned to 192.168.70.133."
+  type        = string
+  default     = "00:50:56:3F:00:55"
+}
+
 # ─── Phase 0.D.3 — Vault LDAP/AD integration (foundation side) ───────────
 # Foundation's role is to create the AD objects Vault needs:
 #   - svc-vault-ldap     : bind account for auth/ldap + secrets/ldap engines
