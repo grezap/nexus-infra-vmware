@@ -10,6 +10,8 @@ Infrastructure-as-code for the **NexusPlatform 66-VM lab** running on **VMware W
 
 > **Canon:** This repo implements [Phase 0.B–0.D](https://github.com/grezap/nexus-platform-plan/blob/main/MASTER-PLAN.md) of the NexusPlatform blueprint. Read [`nexus-platform-plan`](https://github.com/grezap/nexus-platform-plan) first.
 >
+> **New to Packer / Terraform / Vault / Active Directory / GMSA / LDAPS / AppRole / Transit?** See the [tool stack glossary](https://github.com/grezap/nexus-platform-plan/blob/main/docs/glossary.md) for plain-English definitions.
+>
 > **Current state (Phase 0.D fully closed; Phase 0.E starting in [`nexus-infra-swarm-nomad`](https://github.com/grezap/nexus-infra-swarm-nomad)):** Six Packer templates (incl. `vault`) · `foundation` env (DC promotion + AD DS forest + domain-joined jumpbox + AD hardening + Vault-KV-backed bootstrap creds via AppRole + `MinPasswordLength=14` + KV→AD rotation overlay + GMSA scaffolding + Vault Agent on dc-nexus & jumpbox) · `security` env (3-node HA Vault on Raft with **transit auto-unseal** via `vault-transit` companion + internal PKI hierarchy with 90-day leaf TTL + LDAPS to AD + `secrets/ldap` AD password rotation + `nexus-foundation-reader` AppRole + `nexus/foundation/*` cred seed + 2 narrow Vault Agent AppRoles). All 5 sub-deliverables of 0.D.5 (KV→AD rotation · 90-day TTL · GMSA · Vault Agent · transit unseal) ✅ live; chained smoke gate (~80 checks) ALL GREEN.
 
 ## What's in here
