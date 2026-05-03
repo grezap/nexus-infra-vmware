@@ -43,15 +43,16 @@ resource "null_resource" "dc_nexusadmin_membership" {
 
   triggers = {
     dc_verify_id  = null_resource.dc_nexus_verify[0].id
+    rotate_id     = length(null_resource.dc_rotate_bootstrap_creds) > 0 ? null_resource.dc_rotate_bootstrap_creds[0].id : "disabled"
     target_groups = join(",", var.dc_nexusadmin_required_groups)
     # creds_hash uses Administrator pwd to detect rotations -- if the
     # Administrator pwd in KV changes, the membership overlay re-runs
     # with the new pwd. Idempotent (already-member groups become no-op).
     admin_pwd_hash       = sha256(local.foundation_creds.local_administrator)
-    membership_overlay_v = "1"
+    membership_overlay_v = "2" # v2 = depends_on dc_rotate_bootstrap_creds. v1 raced rotate-creds: KV-resided Administrator pwd didn't match live AD until rotate ran, but membership's PSCredential auth failed in parallel before rotate could sync. Discovered post-greenfield re-cluster 2026-05-03.
   }
 
-  depends_on = [null_resource.dc_nexus_verify]
+  depends_on = [null_resource.dc_nexus_verify, null_resource.dc_rotate_bootstrap_creds]
 
   provisioner "local-exec" {
     when        = create

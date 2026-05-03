@@ -62,8 +62,8 @@ param(
     [ValidateSet('apply', 'destroy', 'smoke', 'cycle', 'plan', 'validate')]
     [string]$Verb,
 
-    [ValidateSet('0.D.1', '0.D.2', '0.D.3', '0.D.4')]
-    [string]$Phase = '0.D.4',
+    [ValidateSet('0.D.1', '0.D.2', '0.D.3', '0.D.4', '0.D.5')]
+    [string]$Phase = '0.D.5',
 
     [string[]]$Vars = @(),
 

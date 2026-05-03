@@ -106,6 +106,16 @@ function Test-Check {
     }
 }
 
+function Invoke-VaultCli {
+    param(
+        [Parameter(Mandatory)][string]$Ip,
+        [Parameter(Mandatory)][string]$VaultCmd,
+        [string]$Token = ''
+    )
+    $tokenPart = if ($Token) { "VAULT_TOKEN='$Token' " } else { '' }
+    ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$Ip "${tokenPart}VAULT_SKIP_VERIFY=true VAULT_ADDR=https://127.0.0.1:8200 vault $VaultCmd"
+}
+
 function Test-Warn {
     # Like Test-Check but emits [WARN] instead of [FAIL] -- used for
     # known-deferred-to-manual-ops items (e.g. KDS root key on Server 2025).
@@ -303,10 +313,92 @@ foreach ($host_ in @(
 }
 
 # ═════════════════════════════════════════════════════════════════════════
-# 5.5 Transit auto-unseal -- placeholder, lands when 5.5 implements
+# 5.5 Transit auto-unseal
 # ═════════════════════════════════════════════════════════════════════════
-Write-Section '5.5 Transit auto-unseal (PENDING IMPLEMENTATION)'
-Write-Host '[INFO] 5.5 checks deferred until vault-transit VM lands.' -ForegroundColor Cyan
+[string]$TransitIp                = '192.168.70.124'
+[string]$TransitInitFile          = Join-Path $env:USERPROFILE '.nexus/vault-transit-init.json'
+[string]$TransitTokenFile         = Join-Path $env:USERPROFILE '.nexus/vault-transit-token.json'
+[string]$TransitKeyName           = 'nexus-cluster-unseal'
+[bool]$transitExpected            = (Test-Path $TransitInitFile)
+
+if (-not $transitExpected) {
+    Write-Section '5.5 Transit auto-unseal'
+    Write-Host '[INFO] vault-transit-init.json not present -- running in legacy shamir mode (greenfield re-cluster with enable_vault_transit_unseal=true not yet executed). Skipping 5.5 checks.' -ForegroundColor Cyan
+} else {
+    Write-Section '5.5 Transit auto-unseal -- vault-transit + cluster reconfig'
+
+    # Need vault-transit's root token to query its mounts/keys
+    $transitRootToken = $null
+    try { $transitRootToken = (Get-Content $TransitInitFile | ConvertFrom-Json).root_token } catch { }
+    if (-not $transitRootToken) {
+        Write-Host "[FAIL] $TransitInitFile unreadable -- cannot probe vault-transit" -ForegroundColor Red
+        $script:failures += '5.5 vault-transit-init.json unreadable'
+    } else {
+        Test-Check 'vault-transit reachable + initialized + unsealed' `
+            { Invoke-VaultCli -Ip $TransitIp -VaultCmd 'status -format=json' -Token $transitRootToken } `
+            {
+                param($o)
+                try {
+                    $j = $o | ConvertFrom-Json
+                    $j.initialized -eq $true -and $j.sealed -eq $false
+                } catch { $false }
+            }
+
+        Test-Check 'vault-transit secrets/transit engine enabled' `
+            { Invoke-VaultCli -Ip $TransitIp -VaultCmd 'secrets list -format=json' -Token $transitRootToken } `
+            {
+                param($o)
+                try {
+                    $j = $o | ConvertFrom-Json
+                    ($j.PSObject.Properties | Where-Object { $_.Name -eq 'transit/' }) -ne $null
+                } catch { $false }
+            }
+
+        Test-Check "vault-transit transit key '$TransitKeyName' exists" `
+            { Invoke-VaultCli -Ip $TransitIp -VaultCmd "read -format=json transit/keys/$TransitKeyName" -Token $transitRootToken } `
+            {
+                param($o)
+                try {
+                    $j = $o | ConvertFrom-Json
+                    $j.data.name -eq $TransitKeyName
+                } catch { $false }
+            }
+    }
+
+    Test-Check "cluster-auth token JSON sidecar exists ($TransitTokenFile)" `
+        { if (Test-Path $TransitTokenFile) { Get-Content $TransitTokenFile -Raw } else { 'MISSING' } } `
+        {
+            param($o)
+            if ($o -match 'MISSING') { return $false }
+            try {
+                $j = $o | ConvertFrom-Json
+                $j.transit_addr -match 'https://192.168.70.124:8200' -and `
+                    $j.transit_key_name -eq $TransitKeyName -and `
+                    $j.transit_token.Length -gt 20
+            } catch { $false }
+        }
+
+    foreach ($node in @(
+        @{ Name='vault-1'; Ip=$Vault1Ip },
+        @{ Name='vault-2'; Ip=$Vault2Ip },
+        @{ Name='vault-3'; Ip=$Vault3Ip }
+    )) {
+        $n = $node
+        Test-Check "$($n.Name): seal-transit.hcl present in /etc/vault.d/" `
+            { ssh -o BatchMode=yes -o StrictHostKeyChecking=no $user@$($n.Ip) 'sudo test -f /etc/vault.d/seal-transit.hcl && echo PRESENT || echo MISSING' 2>&1 } `
+            { param($o) $o -match '\bPRESENT\b' }
+
+        Test-Check "$($n.Name): vault status reports seal_type=transit" `
+            { Invoke-VaultCli -Ip $($n.Ip) -VaultCmd 'status -format=json' -Token $rootToken } `
+            {
+                param($o)
+                try {
+                    $j = $o | ConvertFrom-Json
+                    $j.seal_type -eq 'transit' -or $j.recovery_seal -eq $true
+                } catch { $false }
+            }
+    }
+}
 
 # ─── Summary ──────────────────────────────────────────────────────────────
 Write-Host ''

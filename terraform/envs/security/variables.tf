@@ -530,9 +530,9 @@ variable "vault_agent_nexus_jumpbox_creds_file" {
 #     using a 4th unseal target)
 
 variable "enable_vault_transit_unseal" {
-  description = "Master toggle: bring up vault-transit + reconfigure 3-node cluster to use transit auto-unseal. Default false through 0.D.5.5 development; flip to true at close-out per feedback_terraform_partial_apply_destroys_resources.md. WARNING: switching this from false->true on a running cluster requires a destroy+apply cycle (vault doesn't support live shamir->transit migration without a separate `vault operator migrate` flow). Greenfield is the canonical path."
+  description = "Master toggle: bring up vault-transit + reconfigure 3-node cluster to use transit auto-unseal. Default true (flipped from false at 0.D.5.5 greenfield close-out 2026-05-03 per feedback_terraform_partial_apply_destroys_resources.md -- defaults reflect steady state, opt-out is the explicit override). WARNING: switching this from true->false on a running cluster destroys vault-transit; the cluster's data was encrypted with vault-transit's transit key; ANY node restart after that point auto-unseals via a non-existent target and fails. If you actually want to opt out of transit mode, you must greenfield-destroy+rebuild the cluster in shamir mode, not just flip this back."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "enable_vault_transit_vm" {
