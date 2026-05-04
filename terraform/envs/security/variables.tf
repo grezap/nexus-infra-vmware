@@ -583,3 +583,51 @@ variable "vault_transit_key_name" {
   type        = string
   default     = "nexus-cluster-unseal"
 }
+
+# ─── Phase 0.E.2 — Consul harden setup (PKI + KV seed + 6 swarm AppRoles) ──
+# These variables wire in the PKI role + Vault Agent infrastructure that
+# Phases 0.E.2.1 (gossip encrypt), 0.E.2.2 (TLS), and 0.E.2.3 (ACL) all
+# consume. The actual rendering happens swarm-nomad-side; this env owns
+# the Vault-side state.
+
+variable "enable_swarm_pki" {
+  description = "Toggle: create the pki_int/roles/consul-server PKI role used by the 6 swarm-node Vault Agents. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_pki_consul_role_name" {
+  description = "Name of the PKI role under pki_int/ for Consul leaf certs. Used by 0.E.2.2 TLS. Default 'consul-server'."
+  type        = string
+  default     = "consul-server"
+}
+
+variable "enable_swarm_secrets_seed" {
+  description = "Toggle: write nexus/swarm/consul-gossip-key + placeholder nexus/swarm/consul-bootstrap-token to KV. Sticky one-time seed (preserves populated values). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_swarm_agent_setup" {
+  description = "Master toggle for the 6 swarm-node Vault Agent setup primitives (policies + AppRoles). Default true. Set false on a foundation-only deploy that doesn't bring up the swarm tier."
+  type        = bool
+  default     = true
+}
+
+variable "enable_swarm_agent_policies" {
+  description = "Toggle: write the 6 narrow Vault policies (nexus-agent-swarm-{manager,worker}-{1,2,3}). Default true (gated under enable_swarm_agent_setup)."
+  type        = bool
+  default     = true
+}
+
+variable "enable_swarm_agent_approles" {
+  description = "Toggle: provision the 6 AppRoles + per-host JSON sidecars on the build host. Default true (gated under enable_swarm_agent_setup)."
+  type        = bool
+  default     = true
+}
+
+variable "vault_agent_swarm_creds_dir" {
+  description = "Directory on the build host where the 6 vault-agent-swarm-<host>.json sidecars are written. Each contains role_id + secret_id + CA path + vault address for the corresponding swarm-node Vault Agent. Mode 0700 owner-only via icacls."
+  type        = string
+  default     = "$HOME/.nexus"
+}
