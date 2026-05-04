@@ -34,7 +34,7 @@ resource "null_resource" "vault_agent_swarm_approles" {
   triggers = {
     policies_id      = null_resource.vault_agent_swarm_policies[0].id
     creds_dir        = var.vault_agent_swarm_creds_dir
-    swarm_approles_v = "1"
+    swarm_approles_v = "2" # v2 = $host renamed to $hostName (PowerShell automatic-var collision; v1 wrote 6 sidecars with garbage filename `vault-agent-System.Management.Automation.Internal.Host.InternalHost.json`, all overwriting the same path). v1 = original.
   }
 
   depends_on = [null_resource.vault_agent_swarm_policies]
@@ -72,10 +72,10 @@ resource "null_resource" "vault_agent_swarm_approles" {
 
       foreach ($a in $approles) {
         $approleName = $a.Name
-        $host        = $a.Host
-        $credsFile   = Join-Path $credsDir "vault-agent-$host.json"
+        $hostName        = $a.Host
+        $credsFile   = Join-Path $credsDir "vault-agent-$hostName.json"
 
-        Write-Host "[swarm-approles] provisioning AppRole $approleName for $host"
+        Write-Host "[swarm-approles] provisioning AppRole $approleName for $hostName"
 
         $remoteBash = @"
 set -euo pipefail
@@ -122,7 +122,7 @@ echo "AGENT_SECRET_ID=`$SECRET_ID"
         # consumer can use the same parsing logic).
         $sidecar = [PSCustomObject]@{
           role_name      = $approleName
-          host           = $host
+          host           = $hostName
           role_id        = $roleId
           secret_id      = $secretId
           ca_bundle_path = $caBundlePath

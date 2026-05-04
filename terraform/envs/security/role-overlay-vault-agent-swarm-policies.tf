@@ -44,7 +44,7 @@ resource "null_resource" "vault_agent_swarm_policies" {
     post_init_id             = null_resource.vault_post_init[0].id
     seed_id                  = length(null_resource.vault_swarm_secrets_seed) > 0 ? null_resource.vault_swarm_secrets_seed[0].id : "disabled"
     kv_mount_path            = var.vault_kv_mount_path
-    swarm_policies_overlay_v = "1"
+    swarm_policies_overlay_v = "2" # v2 = $host renamed to $hostName (PowerShell automatic-var collision; v1 wrote 6 policies with `nexus/data/swarm/agent-tokens/System.Management.Automation.Internal.Host.InternalHost` instead of the canonical hostname). v1 = original.
   }
 
   depends_on = [null_resource.vault_post_init, null_resource.vault_swarm_secrets_seed]
@@ -116,9 +116,9 @@ path "auth/token/renew-self" {
 
       foreach ($s in $specs) {
         $name = $s.Name
-        $host = $s.Host
+        $hostName = $s.Host
         $body = if ($s.Role -eq 'manager') { $managerPolicy } else { $workerPolicy }
-        $bodyRendered = $body -replace 'HOSTNAME', $host
+        $bodyRendered = $body -replace 'HOSTNAME', $hostName
 
         $bodyBytes = [System.Text.UTF8Encoding]::new($false).GetBytes($bodyRendered)
         $bodyB64   = [Convert]::ToBase64String($bodyBytes)
@@ -134,7 +134,7 @@ echo "[swarm-policies] wrote policy $name"
         $remoteBytes = [System.Text.UTF8Encoding]::new($false).GetBytes($remoteBash)
         $remoteB64   = [Convert]::ToBase64String($remoteBytes)
 
-        Write-Host "[swarm-policies] writing $name ($($s.Role) policy for $host)"
+        Write-Host "[swarm-policies] writing $name ($($s.Role) policy for $hostName)"
         $output = ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "echo '$remoteB64' | base64 -d | bash" 2>&1 | Out-String
         if ($LASTEXITCODE -ne 0) {
           Write-Host $output.Trim()
