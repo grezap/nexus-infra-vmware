@@ -103,7 +103,7 @@ echo "AGENT_SECRET_ID=`$SECRET_ID"
         $output = ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "echo '$bashB64' | base64 -d | bash" 2>&1 | Out-String
         if ($LASTEXITCODE -ne 0) {
           Write-Host $output.Trim()
-          throw "[swarm-approles] $approleName: vault write failed (rc=$LASTEXITCODE)"
+          throw "[swarm-approles] $${approleName}: vault write failed (rc=$LASTEXITCODE)"
         }
 
         # Parse role_id + secret_id from output via marker lines (per
@@ -115,7 +115,7 @@ echo "AGENT_SECRET_ID=`$SECRET_ID"
         $secretId      = $matches[1].Trim()
 
         if (-not $roleId -or -not $secretId) {
-          throw "[swarm-approles] $approleName: failed to parse role_id/secret_id from output"
+          throw "[swarm-approles] $${approleName}: failed to parse role_id/secret_id from output"
         }
 
         # Build JSON sidecar (matches 0.D.5.4 shape so the swarm-nomad-side
@@ -133,7 +133,7 @@ echo "AGENT_SECRET_ID=`$SECRET_ID"
         # Owner-only ACL on the file
         icacls $credsFile /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
 
-        Write-Host "[swarm-approles] $approleName: role_id=$($roleId.Substring(0,8))..., secret_id captured, sidecar -> $credsFile"
+        Write-Host "[swarm-approles] $${approleName}: role_id=$($roleId.Substring(0,8))..., secret_id captured, sidecar -> $credsFile"
       }
 
       Write-Host "[swarm-approles] all 6 AppRoles + sidecars written"
