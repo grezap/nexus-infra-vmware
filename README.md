@@ -4,7 +4,7 @@
 [![Terraform](https://img.shields.io/badge/Terraform-1.9+-purple)](https://www.terraform.io/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 [![Blueprint](https://img.shields.io/badge/blueprint-nexus--platform--plan%20v0.1.3-orange)](https://github.com/grezap/nexus-platform-plan)
-[![Phase](https://img.shields.io/badge/phase-0.D%20closed%20%E2%80%A2%200.E%20starting-brightgreen)](./CHANGELOG.md)
+[![Phase](https://img.shields.io/badge/phase-0.D%20%E2%9C%85%20%E2%80%A2%200.E.3.3%20%2B%200.E.4a%20landed-brightgreen)](./CHANGELOG.md)
 
 Infrastructure-as-code for the **NexusPlatform 66-VM lab** running on **VMware Workstation Pro** (host `10.0.70.101`). Produces golden VM templates with Packer, provisions the fleet with Terraform, configures guest OS with Ansible.
 
@@ -12,7 +12,7 @@ Infrastructure-as-code for the **NexusPlatform 66-VM lab** running on **VMware W
 >
 > **New to Packer / Terraform / Vault / Active Directory / GMSA / LDAPS / AppRole / Transit?** See the [tool stack glossary](https://github.com/grezap/nexus-platform-plan/blob/main/docs/glossary.md) for plain-English definitions.
 >
-> **Current state (Phase 0.D fully closed; Phase 0.E starting in [`nexus-infra-swarm-nomad`](https://github.com/grezap/nexus-infra-swarm-nomad)):** Six Packer templates (incl. `vault`) · `foundation` env (DC promotion + AD DS forest + domain-joined jumpbox + AD hardening + Vault-KV-backed bootstrap creds via AppRole + `MinPasswordLength=14` + KV→AD rotation overlay + GMSA scaffolding + Vault Agent on dc-nexus & jumpbox) · `security` env (3-node HA Vault on Raft with **transit auto-unseal** via `vault-transit` companion + internal PKI hierarchy with 90-day leaf TTL + LDAPS to AD + `secrets/ldap` AD password rotation + `nexus-foundation-reader` AppRole + `nexus/foundation/*` cred seed + 2 narrow Vault Agent AppRoles). All 5 sub-deliverables of 0.D.5 (KV→AD rotation · 90-day TTL · GMSA · Vault Agent · transit unseal) ✅ live; chained smoke gate (~80 checks) ALL GREEN.
+> **Current state (Phase 0.D closed; Phase 0.E in flight in [`nexus-infra-swarm-nomad`](https://github.com/grezap/nexus-infra-swarm-nomad) — this repo carries the cross-cutting Vault + gateway scaffolding):** Six Packer templates (incl. `vault`) · `foundation` env (DC promotion + AD DS forest + domain-joined jumpbox + AD hardening + Vault-KV-backed bootstrap creds via AppRole + `MinPasswordLength=14` + KV→AD rotation overlay + GMSA scaffolding + Vault Agent on dc-nexus & jumpbox + **NFSv4 export from gateway for Portainer CE shared `/data`** [0.E.4a]) · `security` env (3-node HA Vault on Raft with **transit auto-unseal** via `vault-transit` companion + internal PKI hierarchy with 90-day leaf TTL + LDAPS to AD + `secrets/ldap` AD password rotation + `nexus-foundation-reader` AppRole + `nexus/foundation/*` cred seed + 6 narrow Vault Agent AppRoles for swarm nodes + PKI roles `consul-server` & `nomad-server` & token role **`nomad-cluster`** with `nomad-jobs` policy [0.E.3.3b] + manager Vault Agent policies extended to v4 with `auth/token/create/nomad-cluster` capability). All 5 sub-deliverables of 0.D.5 ✅ live; 0.E.3.3b + 0.E.4a Vault/gateway scaffolding ✅ live. Chained smoke gates: 0.D smoke (~80 checks) + 0.E.3.3 smoke (~155 checks across `nexus-infra-swarm-nomad`) ALL GREEN.
 
 ## What's in here
 

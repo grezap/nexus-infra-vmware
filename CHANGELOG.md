@@ -6,6 +6,132 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Phase 0.E.4 (2026-05-07) — Vault scaffolding + gateway services for Portainer CE clustered Swarm deployment
+
+This entry rolls together all 0.E.4 changes that landed in this repo
+(NFS server, dnsmasq A-record, Vault PKI portainer-server role, Vault
+admin-bcrypt sticky seed, manager Vault Agent policies v4 → v6). The
+swarm-nomad-side stack deploy + per-manager renders live in
+[`nexus-infra-swarm-nomad`](https://github.com/grezap/nexus-infra-swarm-nomad)'s
+CHANGELOG.
+
+**0.E.4b — Vault PKI portainer-server role + manager policies v5**
+- `terraform/envs/security/role-overlay-vault-pki-portainer.tf` (NEW) —
+  `pki_int/roles/portainer-server` with `allowed_domains=portainer.nexus
+  .lab,nexus.lab,localhost`, `allow_ip_sans=true`, server-only EKU.
+  Mirrors `role-overlay-vault-pki-consul.tf` shape. The 3 swarm-manager
+  Vault Agents consume this role to issue Portainer CE's TLS leaf cert
+  (single shared CN `portainer.nexus.lab`).
+- `role-overlay-vault-agent-swarm-policies.tf` v4 → v5 — manager
+  policies extended with `pki_int/issue/portainer-server` (create+update).
+  Workers don't get this — Portainer Server runs only on managers.
+- `enable_vault_pki_portainer` + `vault_pki_portainer_role_name`
+  variables added.
+
+**0.E.4d — Admin password sticky seed + manager policies v6**
+- `terraform/envs/security/role-overlay-vault-portainer-admin-seed.tf`
+  (NEW) — sticky-seeds `nexus/portainer/admin-bcrypt` with `bcrypt_hash`
+  + `plaintext` (lab-only operator-readable password). Generated
+  server-side on vault-1 via `openssl rand -base64 24 | tr -dc ...` +
+  `python3-bcrypt` (auto-installed if missing). Sticky semantic — never
+  overwrites a populated value. Operator retrieval:
+  `vault kv get -field=plaintext -mount=nexus portainer/admin-bcrypt`.
+- `role-overlay-vault-agent-swarm-policies.tf` v5 → v6 — manager
+  policies extended with `read` on `nexus/data/portainer/admin-bcrypt`.
+- `enable_portainer_admin_seed` variable added.
+
+**0.E.4c — dnsmasq portainer.nexus.lab multi-A round-robin**
+- `terraform/envs/foundation/role-overlay-gateway-portainer-dns.tf`
+  (NEW) — drops `/etc/dnsmasq.d/foundation-portainer.conf` with
+  `host-record=portainer.nexus.lab,192.168.70.111,192.168.70.112,
+  192.168.70.113`. Combined with Docker Swarm's routing mesh, a single
+  `https://portainer.nexus.lab:9443` URL routes to whichever manager is
+  hosting the active Portainer Server replica. Mirrors
+  `role-overlay-gateway-dns.tf` idempotency pattern.
+- `enable_gateway_portainer_dns`, `portainer_dns_name`,
+  `portainer_dns_manager_ips` variables added.
+
+### Added — Phase 0.E.4a (2026-05-07) — NFS server on nexus-gateway for Portainer CE shared `/data`
+
+- **`terraform/envs/foundation/role-overlay-gateway-nfs-portainer.tf`**
+  — installs `nfs-kernel-server` on nexus-gateway via SSH, creates
+  `/srv/nfs/portainer-data` (root:root 0755), drops
+  `/etc/exports.d/portainer.exports` exporting that path NFSv4-only
+  (`fsid=0` makes it the NFSv4 pseudo-root) to the 3 swarm-manager
+  VMnet11 IPs (.111-.113) with `rw,sync,no_root_squash,no_subtree_
+  check`. Forces NFSv4-only mode via `RPCNFSDOPTS="-N 2 -N 3"` in
+  `/etc/default/nfs-kernel-server` so only TCP/2049 is needed (no
+  portmapper/mountd dynamic ports). Patches `/etc/nftables.conf`
+  in-place to add inbound `tcp dport 2049 ip saddr <manager>` accept
+  rules just before the canonical `counter drop` -- per memory
+  `feedback_nftables_runtime_add_after_drop.md` runtime `nft add rule`
+  lands AFTER the drop (unreachable); in-place edit + `nft -f` for
+  atomic ruleset reload IS persistent across reboots. v1 →
+  v2 added explicit `mkdir -p /etc/exports.d` (the directory is not
+  created by the `nfs-kernel-server` package on Debian 13).
+
+- **`terraform/envs/foundation/variables.tf`** — three new variables:
+  `enable_gateway_nfs_portainer` (default true),
+  `portainer_nfs_export_path` (default `/srv/nfs/portainer-data`),
+  `portainer_nfs_allowed_clients` (default
+  `192.168.70.111,192.168.70.112,192.168.70.113`).
+
+**Why nexus-gateway as the NFS server:** the gateway already plays
+infra-host role (dnsmasq + nftables + chrony + node_exporter); adding
+nfs-kernel-server doesn't compromise its purpose. No new VM = no new
+tier in vms.yaml. Production would split this onto a dedicated NFS
+appliance; documented as an explicit lab-deviation.
+
+**Lesson canonized:** `feedback_nfsv4_fsid0_pseudo_root.md` (clients
+must mount `server:/` not `server:/srv/nfs/...`; the original path
+doesn't exist in the pseudo-root namespace).
+
+### Added — Phase 0.E.3.3b (2026-05-06) — Vault scaffolding for Nomad-Vault integration
+
+- **`terraform/envs/security/role-overlay-vault-nomad-jobs-policy.tf`**
+  (NEW) — creates Vault policy `nomad-jobs` (lab-scale read on
+  `secret/data/*` + `secret/metadata/*` + token self-management;
+  tighten per-job at workload onboarding) + Vault token role
+  `nomad-cluster` (allowed_policies=`nomad-jobs`, period=`72h`,
+  orphan=`false`, renewable=`true`). The 3 Nomad managers consume
+  this via their `vault {}` agent stanza in
+  `nexus-infra-swarm-nomad`'s `role-overlay-nomad-vault.tf`.
+
+- **`terraform/envs/security/role-overlay-vault-agent-swarm-policies
+  .tf` v3 → v4** — manager Vault Agent policies (3 of 6) extended with
+  `auth/token/create/nomad-cluster` (update) +
+  `auth/token/roles/nomad-cluster` (read) capabilities. Workers don't
+  get this -- the basic Nomad-Vault integration only needs Nomad
+  servers to mint child tokens; client-side nodes inherit child
+  tokens via Nomad job-allocation. Adds `nomad_cluster_role_name`
+  trigger so role-name changes propagate.
+
+- **`terraform/envs/security/variables.tf`** — two new variables:
+  `enable_nomad_vault_jobs` (default true),
+  `vault_nomad_cluster_role_name` (default `nomad-cluster`).
+
+- **Apply-time iteration**: v1 of the manager policy extension had
+  literal markdown backticks in a comment block (e.g. `` `update`,
+  `read` ``) which crash PowerShell's `@"..."@` here-string parser
+  with `Unicode escape sequence is not valid` (per memory
+  `feedback_terraform_heredoc_powershell.md` rule 3 -- NO
+  backtick-letter in inner here-strings). Caught at apply time;
+  comment rephrased without backticks.
+
+### Pre-flight regression recovery (2026-05-06)
+
+- **Vault HA cluster post-host-reboot:** vault-1/2/3 found
+  crash-looping at restart counter 3 (systemd start-rate limit hit)
+  because vault-transit (192.168.70.124) was sealed -- the cluster's
+  transit auto-unseal couldn't proceed. Recovery: 3-of-5 Shamir keys
+  from `~/.nexus/vault-transit-init.json` applied via `vault operator
+  unseal` on vault-transit, then `systemctl reset-failed && start
+  vault.service` on each HA node. Cluster auto-unsealed within 8s.
+  No code changes needed -- this is a documented operational pattern
+  (Shamir keys persist on the build host specifically for this
+  reboot-recovery flow). Worth memorializing in the swarm-nomad
+  handbook (operator-runbook update pending).
+
 ### Added — Phase 0.D.5 (2026-05-02 + 2026-05-03)
 
 - **5.1 — `MinPasswordLength=14` + KV→AD bootstrap-creds rotation overlay**

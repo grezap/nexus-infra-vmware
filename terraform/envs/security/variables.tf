@@ -602,6 +602,12 @@ variable "vault_pki_consul_role_name" {
   default     = "consul-server"
 }
 
+variable "vault_pki_nomad_role_name" {
+  description = "Name of the PKI role under pki_int/ for Nomad leaf certs. Used by 0.E.3.1 Nomad TLS. Default 'nomad-server'. The role's allowed_domains must cover the Nomad-specific SANs `server.<region>.nomad` + `client.<region>.nomad` (region defaults to 'global'); managers + workers all use the same role since the SAN list is permissive enough for both."
+  type        = string
+  default     = "nomad-server"
+}
+
 variable "enable_swarm_secrets_seed" {
   description = "Toggle: write nexus/swarm/consul-gossip-key + placeholder nexus/swarm/consul-bootstrap-token to KV. Sticky one-time seed (preserves populated values). Default true."
   type        = bool
@@ -630,4 +636,40 @@ variable "vault_agent_swarm_creds_dir" {
   description = "Directory on the build host where the 6 vault-agent-swarm-<host>.json sidecars are written. Each contains role_id + secret_id + CA path + vault address for the corresponding swarm-node Vault Agent. Mode 0700 owner-only via icacls."
   type        = string
   default     = "$HOME/.nexus"
+}
+
+# ─── Phase 0.E.3.3b — Nomad ↔ Vault integration scaffolding ───────────────
+
+variable "enable_nomad_vault_jobs" {
+  description = "Phase 0.E.3.3b toggle: provision the Vault `nomad-jobs` policy + `nomad-cluster` token role used by the swarm-nomad env's role-overlay-nomad-vault.tf for the Nomad managers' vault{} agent stanza. Default true (steady state). Pre-req: 0.D.1 vault cluster init."
+  type        = bool
+  default     = true
+}
+
+variable "vault_nomad_cluster_role_name" {
+  description = "Name of the Vault token role that mints periodic tokens for Nomad's vault{} agent stanza on managers. Default 'nomad-cluster'. The role attaches the `nomad-jobs` policy + period=72h + orphan=false. Both the security-env (creates the role) and the swarm-nomad-env (consumes via Nomad's create_from_role) must agree on this name."
+  type        = string
+  default     = "nomad-cluster"
+}
+
+# ─── Phase 0.E.4b — Vault PKI portainer-server role (TLS for Portainer CE) ─
+
+variable "enable_vault_pki_portainer" {
+  description = "Phase 0.E.4b toggle: provision the pki_int/roles/portainer-server PKI role used by the 3 swarm-manager Vault Agents to issue Portainer CE's TLS leaf cert. Single shared CN `portainer.nexus.lab` + IP SANs covering all 3 manager IPs so the same cert validates regardless of which manager Swarm has scheduled the Server replica onto. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_pki_portainer_role_name" {
+  description = "Name of the PKI role under pki_int/ for Portainer leaf certs. Used by 0.E.4b. Default 'portainer-server'."
+  type        = string
+  default     = "portainer-server"
+}
+
+# ─── Phase 0.E.4d — Portainer admin password sticky seed ───────────────────
+
+variable "enable_portainer_admin_seed" {
+  description = "Phase 0.E.4d toggle: sticky-seed nexus/portainer/admin-bcrypt with a 24-char alphanumeric plaintext + bcrypt-hashed admin password for Portainer CE's --admin-password-file. Generated server-side on vault-1 via openssl + python3-bcrypt; never overwrites a populated value (preserves operator rotation). Default true. Pre-req: vault cluster initialized."
+  type        = bool
+  default     = true
 }

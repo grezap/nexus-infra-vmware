@@ -32,7 +32,7 @@ resource "null_resource" "vault_swarm_secrets_seed" {
   triggers = {
     post_init_id   = null_resource.vault_post_init[0].id
     kv_mount_path  = var.vault_kv_mount_path
-    secrets_seed_v = "1"
+    secrets_seed_v = "2" # v2 = add nexus/swarm/nomad-bootstrap-token sticky placeholder for 0.E.3.2 ACL (mirrors consul-bootstrap-token shape; the 0.E.3.2 swarm-nomad-side overlay writes the real mgmt token after `nomad acl bootstrap`). v1 = consul-gossip-key + consul-bootstrap-token only.
   }
 
   depends_on = [null_resource.vault_post_init]
@@ -76,6 +76,19 @@ if [ -z "`$EXISTING_TOKEN" ]; then
   echo "[swarm-seed] nexus/swarm/consul-bootstrap-token placeholder seeded (status=not-bootstrapped)"
 else
   echo "[swarm-seed] nexus/swarm/consul-bootstrap-token already populated -- preserving"
+fi
+
+# ── Sticky placeholder: nexus/swarm/nomad-bootstrap-token ──────────────
+# Same shape + lifecycle as consul-bootstrap-token; consumed by 0.E.3.2
+# Nomad ACL. Writing the placeholder up-front lets per-agent policies
+# (extended in v3 of role-overlay-vault-agent-swarm-policies.tf) grant
+# read on the path before the real token exists.
+EXISTING_NOMAD_TOKEN=`$(vault kv get -field=management_token -mount=$kvPath swarm/nomad-bootstrap-token 2>/dev/null || true)
+if [ -z "`$EXISTING_NOMAD_TOKEN" ]; then
+  vault kv put -mount=$kvPath swarm/nomad-bootstrap-token management_token="" status="not-bootstrapped" >/dev/null
+  echo "[swarm-seed] nexus/swarm/nomad-bootstrap-token placeholder seeded (status=not-bootstrapped)"
+else
+  echo "[swarm-seed] nexus/swarm/nomad-bootstrap-token already populated -- preserving"
 fi
 
 echo "[swarm-seed] complete"

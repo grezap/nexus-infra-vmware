@@ -613,3 +613,41 @@ variable "vault_agent_nexus_jumpbox_creds_file" {
   type        = string
   default     = "~/.nexus/vault-agent-nexus-jumpbox.json"
 }
+
+# ─── Phase 0.E.4a — NFS server on gateway for Portainer CE shared /data ───
+variable "enable_gateway_nfs_portainer" {
+  description = "Phase 0.E.4a toggle: install nfs-kernel-server on nexus-gateway + export /srv/nfs/portainer-data NFSv4-only to the 3 swarm managers. Patches /etc/nftables.conf in-place to allow inbound tcp/2049 from manager IPs (managed via marker comment for idempotent re-applies). Portainer CE has no native HA but Swarm reschedules the single Server replica on manager failure -- shared /data lets the new replica pick up state. Default true (steady state per memory/feedback_terraform_partial_apply_destroys_resources.md). Set false to skip the NFS path (requires alternative shared-storage strategy or accept state loss on replica reschedule)."
+  type        = bool
+  default     = true
+}
+
+variable "portainer_nfs_export_path" {
+  description = "Path on nexus-gateway exported via NFSv4 for Portainer's /data. Default /srv/nfs/portainer-data."
+  type        = string
+  default     = "/srv/nfs/portainer-data"
+}
+
+variable "portainer_nfs_allowed_clients" {
+  description = "Comma-separated list of client IPs permitted to mount the Portainer NFS export. Defaults to the 3 swarm-manager VMnet11 IPs (.111-.113) -- workers don't run Portainer Server so they don't need access."
+  type        = string
+  default     = "192.168.70.111,192.168.70.112,192.168.70.113"
+}
+
+# ─── Phase 0.E.4c — dnsmasq A-record portainer.nexus.lab ──────────────────
+variable "enable_gateway_portainer_dns" {
+  description = "Phase 0.E.4c toggle: register a multi-A host-record for portainer.nexus.lab on nexus-gateway's dnsmasq, mapping to the 3 swarm-manager VMnet11 IPs. Combined with Docker Swarm's routing mesh, this gives a single canonical URL `https://portainer.nexus.lab:9443` that works regardless of which manager has the active Portainer Server replica scheduled. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "portainer_dns_name" {
+  description = "DNS hostname registered on nexus-gateway dnsmasq for the Portainer CE Server. Default `portainer.nexus.lab`. The TLS cert (issued by security env's portainer-server PKI role) MUST cover this CN."
+  type        = string
+  default     = "portainer.nexus.lab"
+}
+
+variable "portainer_dns_manager_ips" {
+  description = "List of swarm-manager VMnet11 IPs registered as A-records for the Portainer DNS name. Defaults to .111-.113 (3-manager round-robin)."
+  type        = list(string)
+  default     = ["192.168.70.111", "192.168.70.112", "192.168.70.113"]
+}

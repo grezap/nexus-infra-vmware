@@ -43,11 +43,17 @@ resource "null_resource" "vault_agent_swarm_policies" {
   triggers = {
     post_init_id             = null_resource.vault_post_init[0].id
     seed_id                  = length(null_resource.vault_swarm_secrets_seed) > 0 ? null_resource.vault_swarm_secrets_seed[0].id : "disabled"
+    nomad_jobs_policy_id     = length(null_resource.vault_nomad_jobs_policy) > 0 ? null_resource.vault_nomad_jobs_policy[0].id : "disabled"
+    portainer_role_id        = length(null_resource.vault_pki_portainer_role) > 0 ? null_resource.vault_pki_portainer_role[0].id : "disabled"
+    portainer_admin_seed_id  = length(null_resource.vault_portainer_admin_seed) > 0 ? null_resource.vault_portainer_admin_seed[0].id : "disabled"
     kv_mount_path            = var.vault_kv_mount_path
-    swarm_policies_overlay_v = "2" # v2 = $host renamed to $hostName (PowerShell automatic-var collision; v1 wrote 6 policies with `nexus/data/swarm/agent-tokens/System.Management.Automation.Internal.Host.InternalHost` instead of the canonical hostname). v1 = original.
+    nomad_role_name          = var.vault_pki_nomad_role_name
+    nomad_cluster_role_name  = var.vault_nomad_cluster_role_name
+    portainer_role_name      = var.vault_pki_portainer_role_name
+    swarm_policies_overlay_v = "6" # v6 = managers get `read` on nexus/data/portainer/admin-bcrypt (the sticky-seeded bcrypt-hashed admin password from 0.E.4d's role-overlay-vault-portainer-admin-seed.tf). The manager-side Vault Agent template renders this to /etc/portainer/admin-password.txt for Portainer's --admin-password-file flag. Workers don't need this -- Portainer Server runs only on managers. v5 = managers get `pki_int/issue/<portainer_role_name>` for Portainer TLS cert issuance (0.E.4b). v4 = managers get `auth/token/create/<nomad_cluster_role>` for the Nomad-Vault integration (0.E.3.3b). v3 = managers + workers get `pki_int/issue/<nomad_role_name>` for 0.E.3.1 Nomad TLS. v2 = $host -> $hostName fix. v1 = original.
   }
 
-  depends_on = [null_resource.vault_post_init, null_resource.vault_swarm_secrets_seed]
+  depends_on = [null_resource.vault_post_init, null_resource.vault_swarm_secrets_seed, null_resource.vault_nomad_jobs_policy, null_resource.vault_pki_portainer_role, null_resource.vault_portainer_admin_seed]
 
   provisioner "local-exec" {
     when        = create
@@ -65,7 +71,7 @@ resource "null_resource" "vault_agent_swarm_policies" {
       # Build all 6 policy bodies. Manager policies get extra read+write on
       # consul-bootstrap-token; workers don't.
       $managerPolicy = @"
-# Phase 0.E.2 setup -- agent policy for swarm managers (HOSTNAME placeholder
+# Phase 0.E.2-3 setup -- agent policy for swarm managers (HOSTNAME placeholder
 # substituted per-policy below).
 path "$kvPath/data/swarm/consul-gossip-key" {
   capabilities = ["read"]
@@ -76,8 +82,44 @@ path "$kvPath/data/swarm/consul-bootstrap-token" {
 path "$kvPath/data/swarm/agent-tokens/HOSTNAME" {
   capabilities = ["read"]
 }
+path "$kvPath/data/swarm/nomad-bootstrap-token" {
+  capabilities = ["read", "create", "update"]
+}
+path "$kvPath/data/swarm/nomad-agent-tokens/HOSTNAME" {
+  capabilities = ["read"]
+}
 path "pki_int/issue/${var.vault_pki_consul_role_name}" {
   capabilities = ["create", "update"]
+}
+path "pki_int/issue/${var.vault_pki_nomad_role_name}" {
+  capabilities = ["create", "update"]
+}
+# v5: managers issue Portainer CE TLS leaf certs from the portainer-server
+# PKI role (0.E.4b). Workers don't run Portainer Server (Swarm constraint
+# node.role==manager) so they don't need this capability.
+path "pki_int/issue/${var.vault_pki_portainer_role_name}" {
+  capabilities = ["create", "update"]
+}
+# v6: managers read the bcrypt-hashed admin password (0.E.4d) for
+# Portainer's --admin-password-file. Sticky-seeded by security env
+# at nexus/portainer/admin-bcrypt; rendered to /etc/portainer/admin-
+# password.txt on managers by the swarm-nomad-side Vault Agent template.
+path "$kvPath/data/portainer/admin-bcrypt" {
+  capabilities = ["read"]
+}
+# v4: Nomad managers vault{} agent stanza (0.E.3.3b) mints child tokens
+# via the nomad-cluster periodic-token role. The vault-agent template
+# pattern '{{ with secret "auth/token/create/...nomad-cluster" }}' needs
+# update on the create endpoint + read on the role definition (Vault
+# Agent reads the role to derive token attributes).
+# (NOTE: no backticks in this comment block per memory feedback_terraform_
+# heredoc_powershell.md -- this body renders inside a PS @"..."@ here-
+# string and a backtick before any letter triggers PS escape interpretation.)
+path "auth/token/create/${var.vault_nomad_cluster_role_name}" {
+  capabilities = ["update"]
+}
+path "auth/token/roles/${var.vault_nomad_cluster_role_name}" {
+  capabilities = ["read"]
 }
 path "auth/token/lookup-self" {
   capabilities = ["read"]
@@ -88,7 +130,7 @@ path "auth/token/renew-self" {
 "@
 
       $workerPolicy = @"
-# Phase 0.E.2 setup -- agent policy for swarm workers (HOSTNAME placeholder
+# Phase 0.E.2-3 setup -- agent policy for swarm workers (HOSTNAME placeholder
 # substituted per-policy below).
 path "$kvPath/data/swarm/consul-gossip-key" {
   capabilities = ["read"]
@@ -96,7 +138,13 @@ path "$kvPath/data/swarm/consul-gossip-key" {
 path "$kvPath/data/swarm/agent-tokens/HOSTNAME" {
   capabilities = ["read"]
 }
+path "$kvPath/data/swarm/nomad-agent-tokens/HOSTNAME" {
+  capabilities = ["read"]
+}
 path "pki_int/issue/${var.vault_pki_consul_role_name}" {
+  capabilities = ["create", "update"]
+}
+path "pki_int/issue/${var.vault_pki_nomad_role_name}" {
   capabilities = ["create", "update"]
 }
 path "auth/token/lookup-self" {
