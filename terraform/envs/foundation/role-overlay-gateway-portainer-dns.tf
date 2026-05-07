@@ -30,10 +30,10 @@ resource "null_resource" "gateway_portainer_dns" {
   count = var.enable_gateway_portainer_dns ? 1 : 0
 
   triggers = {
-    gateway_ip                = "192.168.70.1"
-    portainer_hostname        = var.portainer_dns_name
-    manager_ips               = join(",", var.portainer_dns_manager_ips)
-    portainer_dns_overlay_v   = "1"
+    gateway_ip              = "192.168.70.1"
+    portainer_hostname      = var.portainer_dns_name
+    manager_ips             = join(",", var.portainer_dns_manager_ips)
+    portainer_dns_overlay_v = "1"
   }
 
   # Decoupled from dc_nexus_wait_promoted (this DNS entry is purely a

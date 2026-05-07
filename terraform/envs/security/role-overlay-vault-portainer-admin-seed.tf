@@ -35,9 +35,9 @@ resource "null_resource" "vault_portainer_admin_seed" {
   count = var.enable_vault_cluster && var.enable_vault_init && var.enable_portainer_admin_seed ? 1 : 0
 
   triggers = {
-    post_init_id        = null_resource.vault_post_init[0].id
-    kv_mount_path       = var.vault_kv_mount_path
-    portainer_seed_v    = "1"
+    post_init_id     = null_resource.vault_post_init[0].id
+    kv_mount_path    = var.vault_kv_mount_path
+    portainer_seed_v = "1"
   }
 
   depends_on = [null_resource.vault_post_init]
