@@ -6,6 +6,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+(Empty — next release accumulates here.)
+
+## [0.2.0] — 2026-05-07 — "Phase 0.C foundation + 0.D Vault hardening + 0.E.3 + 0.E.4 swarm scaffolding"
+
+This release tags the work that accumulated since `v0.1.1` (2026-04-22).
+It covers Phase 0.C (foundation env: dc-nexus + jumpbox + AD DS forest +
+domain-join + AD hardening + Vault-KV-backed bootstrap creds via
+AppRole), Phase 0.D.1–0.D.5 (3-node Vault Raft + internal PKI + LDAPS
+to AD + foundation cred migration into KV + transit auto-unseal +
+GMSA scaffolding + Vault Agent on member servers + leaf TTL drop), and
+the cross-cutting Vault scaffolding for Phase 0.E.3 (PKI nomad-server
+role + Nomad-Vault `nomad-jobs` policy + `nomad-cluster` token role) +
+Phase 0.E.4 (NFS server on nexus-gateway for Portainer CE shared
+`/data` + dnsmasq portainer.nexus.lab multi-A record + PKI
+portainer-server role + sticky-seeded admin bcrypt KV path). Manager
+Vault Agent policies progressed v1 → v6 across these phases.
+
+The orchestration tier swarm-side work (Swarm + Consul + Nomad +
+Portainer CE on the 6 swarm-nodes) lives in `nexus-infra-swarm-nomad`
+v0.1.0.
+
+Detailed change log per sub-phase below; the headline-grouping mirrors
+the Phase-0 build-phase taxonomy in
+[`MASTER-PLAN.md`](https://github.com/grezap/nexus-platform-plan/blob/main/MASTER-PLAN.md).
+
 ### Added — Phase 0.E.4 (2026-05-07) — Vault scaffolding + gateway services for Portainer CE clustered Swarm deployment
 
 This entry rolls together all 0.E.4 changes that landed in this repo
