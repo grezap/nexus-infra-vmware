@@ -8,7 +8,9 @@
  *   nexus-agent-kafka-{east,west}-{1,2,3}  -- the 6 KRaft brokers (0.H.2)
  *   nexus-agent-schema-registry-{1,2}      -- 0.H.3
  *   nexus-agent-kafka-rest-1               -- 0.H.3
- *   (kafka-connect / ksqldb join in 0.H.4, mm2 in 0.H.5)
+ *   nexus-agent-kafka-connect-{1,2}        -- 0.H.4
+ *   nexus-agent-ksqldb-{1,2}               -- 0.H.4
+ *   (mm2 joins in 0.H.5)
  *
  * Each AppRole's token_policies is the like-named policy from
  * role-overlay-vault-agent-kafka-policies.tf.
@@ -38,7 +40,7 @@ resource "null_resource" "vault_agent_kafka_approles" {
   triggers = {
     policies_id      = null_resource.vault_agent_kafka_policies[0].id
     creds_dir        = var.vault_agent_kafka_creds_dir
-    kafka_approles_v = "2" # v2 (0.H.3) = +3 ecosystem AppRoles + sidecars (schema-registry-1/2, kafka-rest-1). v1 = 6 brokers only; per-host sidecars use $hostName (NOT $host -- PowerShell automatic-var collision, per memory/feedback_powershell_automatic_variables.md).
+    kafka_approles_v = "3" # v3 (0.H.4) = +4 ecosystem AppRoles + sidecars (kafka-connect-1/2, ksqldb-1/2). v2 (0.H.3) = +3 (schema-registry-1/2, kafka-rest-1). v1 = 6 brokers only; per-host sidecars use $hostName (NOT $host -- PowerShell automatic-var collision, per memory/feedback_powershell_automatic_variables.md).
   }
 
   depends_on = [null_resource.vault_agent_kafka_policies]
@@ -75,7 +77,12 @@ resource "null_resource" "vault_agent_kafka_approles" {
         # 0.H.3 ecosystem nodes:
         @{ Name = 'nexus-agent-schema-registry-1'; Host = 'schema-registry-1' },
         @{ Name = 'nexus-agent-schema-registry-2'; Host = 'schema-registry-2' },
-        @{ Name = 'nexus-agent-kafka-rest-1';      Host = 'kafka-rest-1' }
+        @{ Name = 'nexus-agent-kafka-rest-1';      Host = 'kafka-rest-1' },
+        # 0.H.4 ecosystem nodes:
+        @{ Name = 'nexus-agent-kafka-connect-1'; Host = 'kafka-connect-1' },
+        @{ Name = 'nexus-agent-kafka-connect-2'; Host = 'kafka-connect-2' },
+        @{ Name = 'nexus-agent-ksqldb-1';        Host = 'ksqldb-1' },
+        @{ Name = 'nexus-agent-ksqldb-2';        Host = 'ksqldb-2' }
       )
 
       foreach ($a in $approles) {
