@@ -673,3 +673,50 @@ variable "enable_portainer_admin_seed" {
   type        = bool
   default     = true
 }
+
+# ─── Phase 0.H.2 — Kafka broker mTLS (PKI role + 6 kafka-node AppRoles) ────
+#
+# Wires in the PKI role + Vault Agent infrastructure that nexus-infra-kafka's
+# Phase 0.H.2 (broker mTLS) consumes. The actual rendering happens kafka-side
+# (role-overlay-kafka-vault-agents.tf + role-overlay-kafka-tls.tf); this env
+# owns the Vault-side state. Mirrors the 0.E.2 swarm PKI/AppRole pattern.
+#
+# Order: pki-kafka -> kafka-policies -> kafka-approles -> (kafka env consumes)
+# All steps depend_on null_resource.vault_post_init (+ the intermediate CA
+# for the PKI role).
+
+variable "enable_kafka_pki" {
+  description = "Phase 0.H.2 toggle: create the pki_int/roles/kafka-broker PKI role used by the 6 kafka-node Vault Agents to issue broker TLS leaf certs (server+client EKU, 90-day TTL). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_pki_kafka_role_name" {
+  description = "Name of the PKI role under pki_int/ for Kafka broker leaf certs. Used by nexus-infra-kafka's 0.H.2 mTLS overlay. Default 'kafka-broker'. The role's allowed_domains must cover every broker hostname + <host>.nexus.lab + <host>.kafka.nexus.lab + localhost; all 6 brokers share the one role (the per-broker CN/SAN distinction happens at issue time in the Vault Agent template)."
+  type        = string
+  default     = "kafka-broker"
+}
+
+variable "enable_kafka_agent_setup" {
+  description = "Master toggle for the 6 kafka-node Vault Agent setup primitives (policies + AppRoles). Default true. Set false on a deploy that doesn't bring up the Kafka tier."
+  type        = bool
+  default     = true
+}
+
+variable "enable_kafka_agent_policies" {
+  description = "Toggle: write the 6 narrow Vault policies (nexus-agent-kafka-{east,west}-{1,2,3}) -- each grants pki_int/issue/<kafka_role> + token self-lookup/renew. Default true (gated under enable_kafka_agent_setup). Idempotent overwrite."
+  type        = bool
+  default     = true
+}
+
+variable "enable_kafka_agent_approles" {
+  description = "Toggle: provision the 6 AppRoles + per-host JSON sidecars on the build host. Default true (gated under enable_kafka_agent_setup). role-id is stable; secret-id is regenerated per security apply."
+  type        = bool
+  default     = true
+}
+
+variable "vault_agent_kafka_creds_dir" {
+  description = "Directory on the build host where the 6 vault-agent-kafka-<host>.json sidecars are written. Each contains role_id + secret_id + CA path + vault address for the corresponding kafka-node Vault Agent. Mode 0700 owner-only via icacls. nexus-infra-kafka's role-overlay-kafka-vault-agents.tf reads these."
+  type        = string
+  default     = "$HOME/.nexus"
+}
