@@ -1,28 +1,31 @@
 /*
- * role-overlay-vault-pki-kafka.tf -- Phase 0.H.2 setup
+ * role-overlay-vault-pki-kafka.tf -- Phase 0.H.2 setup (extended in 0.H.3)
  *
- * Defines the `kafka-broker` PKI role at pki_int/. Used by the 6 kafka-node
- * Vault Agents (nexus-infra-kafka, Phase 0.H.2) to issue Kafka broker TLS
- * leaf certs that cover:
+ * Defines the `kafka-broker` PKI role at pki_int/. The leaf-cert role for the
+ * WHOLE 03-kafka tier -- the 6 KRaft brokers (0.H.2) plus all 9 ecosystem
+ * nodes (schema-registry / kafka-connect / ksqldb / mm2 / kafka-rest, brought
+ * up in 0.H.3-0.H.5). The role NAME is historical (it predates the ecosystem
+ * nodes); functionally it issues for every kafka-node Vault Agent. Certs
+ * cover:
  *
  *   - Subject CN: <hostname>.kafka.nexus.lab
  *   - SANs: <hostname>, <hostname>.nexus.lab, <hostname>.kafka.nexus.lab,
  *           localhost
- *           IPs: 192.168.10.21-26 (VMnet10 backplane), 192.168.70.21-26
- *           (VMnet11 service), 127.0.0.1
+ *           IPs: VMnet10 backplane + VMnet11 service IP + 127.0.0.1
  *
  * Per nexus-platform-plan/MASTER-PLAN.md line 160 (Phase 0.H) + ADR-0012 PKI
  * hierarchy: 90-day leaf TTL (matches the consul-server / nomad-server roles).
- * server+client EKU because Kafka brokers BOTH listen (client + controller
- * + inter-broker SSL listeners) AND dial peers (inter-broker replication +
- * controller-quorum RPC). Same shape as the `consul-server` role; differs
- * from the single-purpose `vault-server` role (server-only).
+ * server+client EKU because every kafka-tier node BOTH listens (SSL broker
+ * listeners / Schema Registry + REST HTTPS listeners) AND dials peers
+ * (inter-broker + controller RPC / Kafka-client connections to the brokers).
+ * Same shape as the `consul-server` role.
  *
  * Why allowed_domains enumerates every literal name: allow_subdomains=false
  * + allow_bare_domains=true means each CN/SAN must match a literal entry.
- * The kafka-node Vault Agent template (nexus-infra-kafka's
- * role-overlay-kafka-tls.tf) passes per-broker common_name + alt_names that
- * must all be covered here.
+ * The kafka-node Vault Agent templates (nexus-infra-kafka's
+ * role-overlay-kafka-tls.tf + role-overlay-ecosystem-tls.tf) pass per-node
+ * common_name + alt_names that must all be covered here -- so the list spans
+ * all 15 tier hostnames.
  *
  * `vault write` on roles is upsert -- always-overwrite is naturally
  * idempotent. Triggers track config so a knob change re-applies.
@@ -37,7 +40,7 @@ resource "null_resource" "vault_pki_kafka_role" {
     int_id               = length(null_resource.vault_pki_intermediate_ca) > 0 ? null_resource.vault_pki_intermediate_ca[0].id : "disabled"
     role_name            = var.vault_pki_kafka_role_name
     leaf_ttl             = var.vault_pki_leaf_ttl
-    kafka_role_overlay_v = "1"
+    kafka_role_overlay_v = "2" # v2 (0.H.3) = allowed_domains extended from the 6 brokers to all 15 kafka-tier hostnames (+ the 9 ecosystem nodes) so role-overlay-ecosystem-tls.tf can issue for schema-registry / kafka-connect / ksqldb / mm2 / kafka-rest. v1 = 6 brokers only.
   }
 
   depends_on = [null_resource.vault_pki_intermediate_ca]
@@ -64,7 +67,7 @@ export VAULT_ADDR=https://127.0.0.1:8200
 
 echo "[pki-kafka] writing pki_int/roles/$roleName (idempotent overwrite)"
 vault write pki_int/roles/$roleName \
-  allowed_domains='nexus.lab,kafka.nexus.lab,kafka-east-1,kafka-east-2,kafka-east-3,kafka-west-1,kafka-west-2,kafka-west-3,kafka-east-1.nexus.lab,kafka-east-2.nexus.lab,kafka-east-3.nexus.lab,kafka-west-1.nexus.lab,kafka-west-2.nexus.lab,kafka-west-3.nexus.lab,kafka-east-1.kafka.nexus.lab,kafka-east-2.kafka.nexus.lab,kafka-east-3.kafka.nexus.lab,kafka-west-1.kafka.nexus.lab,kafka-west-2.kafka.nexus.lab,kafka-west-3.kafka.nexus.lab,localhost' \
+  allowed_domains='nexus.lab,kafka.nexus.lab,kafka-east-1,kafka-east-2,kafka-east-3,kafka-west-1,kafka-west-2,kafka-west-3,schema-registry-1,schema-registry-2,kafka-connect-1,kafka-connect-2,ksqldb-1,ksqldb-2,mm2-1,mm2-2,kafka-rest-1,kafka-east-1.nexus.lab,kafka-east-2.nexus.lab,kafka-east-3.nexus.lab,kafka-west-1.nexus.lab,kafka-west-2.nexus.lab,kafka-west-3.nexus.lab,schema-registry-1.nexus.lab,schema-registry-2.nexus.lab,kafka-connect-1.nexus.lab,kafka-connect-2.nexus.lab,ksqldb-1.nexus.lab,ksqldb-2.nexus.lab,mm2-1.nexus.lab,mm2-2.nexus.lab,kafka-rest-1.nexus.lab,kafka-east-1.kafka.nexus.lab,kafka-east-2.kafka.nexus.lab,kafka-east-3.kafka.nexus.lab,kafka-west-1.kafka.nexus.lab,kafka-west-2.kafka.nexus.lab,kafka-west-3.kafka.nexus.lab,schema-registry-1.kafka.nexus.lab,schema-registry-2.kafka.nexus.lab,kafka-connect-1.kafka.nexus.lab,kafka-connect-2.kafka.nexus.lab,ksqldb-1.kafka.nexus.lab,ksqldb-2.kafka.nexus.lab,mm2-1.kafka.nexus.lab,mm2-2.kafka.nexus.lab,kafka-rest-1.kafka.nexus.lab,localhost' \
   allow_subdomains=false \
   allow_bare_domains=true \
   allow_glob_domains=false \

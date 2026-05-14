@@ -1,11 +1,14 @@
 /*
  * role-overlay-vault-agent-kafka-policies.tf -- Phase 0.H.2 setup
+ *   (extended in 0.H.3: +3 ecosystem policies)
  *
- * Six narrow Vault policies, one per kafka-node Vault Agent. Mirrors the
- * 0.E.2 `nexus-agent-swarm-*` shape, scaled to the Kafka tier:
+ * One narrow Vault policy per kafka-node Vault Agent. Mirrors the 0.E.2
+ * `nexus-agent-swarm-*` shape, scaled to the Kafka tier:
  *
- *   nexus-agent-kafka-east-{1,2,3}  (kafka-east KRaft cluster)
- *   nexus-agent-kafka-west-{1,2,3}  (kafka-west KRaft cluster, DR)
+ *   nexus-agent-kafka-{east,west}-{1,2,3}  -- the 6 KRaft brokers (0.H.2)
+ *   nexus-agent-schema-registry-{1,2}      -- 0.H.3
+ *   nexus-agent-kafka-rest-1               -- 0.H.3
+ *   (kafka-connect / ksqldb join in 0.H.4, mm2 in 0.H.5)
  *
  * Permissions (minimal -- broker mTLS needs only a PKI leaf, no KV secret):
  *   - PKI issue on pki_int/issue/<kafka_role>   (all 6 -- broker TLS cert)
@@ -24,6 +27,9 @@
  */
 
 locals {
+  # One spec per kafka-node Vault Agent. The 6 brokers landed in 0.H.2; the
+  # ecosystem nodes are added per sub-phase (schema-registry + kafka-rest in
+  # 0.H.3; kafka-connect + ksqldb in 0.H.4; mm2 in 0.H.5).
   kafka_agent_policy_specs = {
     "nexus-agent-kafka-east-1" = { cluster = "east", host = "kafka-east-1" }
     "nexus-agent-kafka-east-2" = { cluster = "east", host = "kafka-east-2" }
@@ -31,6 +37,10 @@ locals {
     "nexus-agent-kafka-west-1" = { cluster = "west", host = "kafka-west-1" }
     "nexus-agent-kafka-west-2" = { cluster = "west", host = "kafka-west-2" }
     "nexus-agent-kafka-west-3" = { cluster = "west", host = "kafka-west-3" }
+    # 0.H.3 ecosystem nodes:
+    "nexus-agent-schema-registry-1" = { cluster = "east", host = "schema-registry-1" }
+    "nexus-agent-schema-registry-2" = { cluster = "east", host = "schema-registry-2" }
+    "nexus-agent-kafka-rest-1"      = { cluster = "east", host = "kafka-rest-1" }
   }
 }
 
@@ -41,7 +51,7 @@ resource "null_resource" "vault_agent_kafka_policies" {
     post_init_id             = null_resource.vault_post_init[0].id
     kafka_role_id            = length(null_resource.vault_pki_kafka_role) > 0 ? null_resource.vault_pki_kafka_role[0].id : "disabled"
     kafka_role_name          = var.vault_pki_kafka_role_name
-    kafka_policies_overlay_v = "1" # v1 = original. Minimal per-broker policy: pki_int/issue/<kafka_role> + token self-lookup/renew.
+    kafka_policies_overlay_v = "2" # v2 (0.H.3) = +3 ecosystem policies (schema-registry-1/2, kafka-rest-1) -- same minimal policy body. v1 = 6 brokers only.
   }
 
   depends_on = [null_resource.vault_post_init, null_resource.vault_pki_kafka_role]
@@ -111,7 +121,7 @@ echo "[kafka-policies] wrote policy $name"
         Write-Host $output.Trim()
       }
 
-      Write-Host "[kafka-policies] all 6 kafka-node policies written"
+      Write-Host "[kafka-policies] all $($specs.Count) kafka-node policies written"
     PWSH
   }
 }

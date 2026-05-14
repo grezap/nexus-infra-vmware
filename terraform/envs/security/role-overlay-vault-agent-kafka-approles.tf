@@ -1,11 +1,17 @@
 /*
  * role-overlay-vault-agent-kafka-approles.tf -- Phase 0.H.2 setup
+ *   (extended in 0.H.3: +3 ecosystem AppRoles)
  *
- * Six AppRoles -- one per kafka-node Vault Agent. Mirrors the 0.E.2
+ * One AppRole per kafka-node Vault Agent. Mirrors the 0.E.2
  * `nexus-agent-swarm-*` AppRole shape, scaled to the Kafka tier:
  *
- *   nexus-agent-kafka-east-{1,2,3} -> nexus-agent-kafka-east-{1,2,3} policy
- *   nexus-agent-kafka-west-{1,2,3} -> nexus-agent-kafka-west-{1,2,3} policy
+ *   nexus-agent-kafka-{east,west}-{1,2,3}  -- the 6 KRaft brokers (0.H.2)
+ *   nexus-agent-schema-registry-{1,2}      -- 0.H.3
+ *   nexus-agent-kafka-rest-1               -- 0.H.3
+ *   (kafka-connect / ksqldb join in 0.H.4, mm2 in 0.H.5)
+ *
+ * Each AppRole's token_policies is the like-named policy from
+ * role-overlay-vault-agent-kafka-policies.tf.
  *
  * AppRole shape (matches 0.E.2):
  *   - token_policies = [<policy>]
@@ -15,7 +21,7 @@
  *   - bind_secret_id = true
  *
  * Per-host JSON sidecar on the build host at:
- *   $HOME\.nexus\vault-agent-kafka-{east,west}-{1,2,3}.json
+ *   $HOME\.nexus\vault-agent-<hostname>.json
  *
  * nexus-infra-kafka's role-overlay-kafka-vault-agents.tf reads each sidecar
  * + scp's role-id / secret-id text files onto the corresponding VM. role-id
@@ -32,7 +38,7 @@ resource "null_resource" "vault_agent_kafka_approles" {
   triggers = {
     policies_id      = null_resource.vault_agent_kafka_policies[0].id
     creds_dir        = var.vault_agent_kafka_creds_dir
-    kafka_approles_v = "1" # v1 = original. Per-host sidecars use $hostName (NOT $host -- PowerShell automatic-var collision, per memory/feedback_powershell_automatic_variables.md).
+    kafka_approles_v = "2" # v2 (0.H.3) = +3 ecosystem AppRoles + sidecars (schema-registry-1/2, kafka-rest-1). v1 = 6 brokers only; per-host sidecars use $hostName (NOT $host -- PowerShell automatic-var collision, per memory/feedback_powershell_automatic_variables.md).
   }
 
   depends_on = [null_resource.vault_agent_kafka_policies]
@@ -65,7 +71,11 @@ resource "null_resource" "vault_agent_kafka_approles" {
         @{ Name = 'nexus-agent-kafka-east-3'; Host = 'kafka-east-3' },
         @{ Name = 'nexus-agent-kafka-west-1'; Host = 'kafka-west-1' },
         @{ Name = 'nexus-agent-kafka-west-2'; Host = 'kafka-west-2' },
-        @{ Name = 'nexus-agent-kafka-west-3'; Host = 'kafka-west-3' }
+        @{ Name = 'nexus-agent-kafka-west-3'; Host = 'kafka-west-3' },
+        # 0.H.3 ecosystem nodes:
+        @{ Name = 'nexus-agent-schema-registry-1'; Host = 'schema-registry-1' },
+        @{ Name = 'nexus-agent-schema-registry-2'; Host = 'schema-registry-2' },
+        @{ Name = 'nexus-agent-kafka-rest-1';      Host = 'kafka-rest-1' }
       )
 
       foreach ($a in $approles) {
@@ -134,7 +144,7 @@ echo "AGENT_SECRET_ID=`$SECRET_ID"
         Write-Host "[kafka-approles] $${approleName}: role_id=$($roleId.Substring(0,8))..., secret_id captured, sidecar -> $credsFile"
       }
 
-      Write-Host "[kafka-approles] all 6 AppRoles + sidecars written"
+      Write-Host "[kafka-approles] all $($approles.Count) AppRoles + sidecars written"
     PWSH
   }
 }
