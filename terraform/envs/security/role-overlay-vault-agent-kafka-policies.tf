@@ -10,7 +10,7 @@
  *   nexus-agent-kafka-rest-1               -- 0.H.3
  *   nexus-agent-kafka-connect-{1,2}        -- 0.H.4
  *   nexus-agent-ksqldb-{1,2}               -- 0.H.4
- *   (mm2 joins in 0.H.5)
+ *   nexus-agent-mm2-{1,2}                  -- 0.H.5 (all 15 tier nodes)
  *
  * Permissions (minimal -- broker mTLS needs only a PKI leaf, no KV secret):
  *   - PKI issue on pki_int/issue/<kafka_role>   (all 6 -- broker TLS cert)
@@ -48,6 +48,9 @@ locals {
     "nexus-agent-kafka-connect-2" = { cluster = "east", host = "kafka-connect-2" }
     "nexus-agent-ksqldb-1"        = { cluster = "east", host = "ksqldb-1" }
     "nexus-agent-ksqldb-2"        = { cluster = "east", host = "ksqldb-2" }
+    # 0.H.5 ecosystem nodes (MirrorMaker 2 -- spans both clusters):
+    "nexus-agent-mm2-1" = { cluster = "both", host = "mm2-1" }
+    "nexus-agent-mm2-2" = { cluster = "both", host = "mm2-2" }
   }
 }
 
@@ -58,7 +61,7 @@ resource "null_resource" "vault_agent_kafka_policies" {
     post_init_id             = null_resource.vault_post_init[0].id
     kafka_role_id            = length(null_resource.vault_pki_kafka_role) > 0 ? null_resource.vault_pki_kafka_role[0].id : "disabled"
     kafka_role_name          = var.vault_pki_kafka_role_name
-    kafka_policies_overlay_v = "3" # v3 (0.H.4) = +4 ecosystem policies (kafka-connect-1/2, ksqldb-1/2). v2 (0.H.3) = +3 (schema-registry-1/2, kafka-rest-1). v1 = 6 brokers only. Same minimal policy body throughout.
+    kafka_policies_overlay_v = "4" # v4 (0.H.5) = +2 ecosystem policies (mm2-1/2) -- all 15 tier nodes now. v3 (0.H.4) = +4 (kafka-connect-1/2, ksqldb-1/2). v2 (0.H.3) = +3 (schema-registry-1/2, kafka-rest-1). v1 = 6 brokers only. Same minimal policy body throughout.
   }
 
   depends_on = [null_resource.vault_post_init, null_resource.vault_pki_kafka_role]
