@@ -6,7 +6,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-(Empty — next release accumulates here.)
+### Added — Phase 0.H (2026-05-14 → 2026-05-15) — `security` env Vault-side state for the Kafka tier
+
+Cross-env scaffolding consumed by `grezap/nexus-infra-kafka` (Phase 0.H —
+the Kafka ecosystem, 15 VMs on the `03-kafka` tier). Phase 0.H closed
+2026-05-15; `nexus-infra-kafka` tagged `v0.1.0`.
+
+- **`role-overlay-vault-pki-kafka.tf`** — the `kafka-broker` PKI role under
+  `pki_int/` (server + client EKU, 90-day leaf TTL). `allowed_domains`
+  covers all 15 kafka-tier hostnames (brokers + ecosystem). Every
+  kafka-node Vault Agent issues its leaf from `pki_int/issue/kafka-broker`.
+- **`role-overlay-vault-agent-kafka-policies.tf`** + **`role-overlay-vault-agent-kafka-approles.tf`**
+  — 15 narrow Vault policies (minimal: PKI leaf issuance + token
+  self-management; no KV grant — broker mTLS needs only a PKI leaf) + 15
+  AppRoles + 15 per-host JSON credential sidecars at
+  `$HOME/.nexus/vault-agent-<host>.json`. Grown per sub-phase: v1 = 6
+  brokers (0.H.2), v2 = +3 (0.H.3 Schema Registry + REST Proxy), v3 = +4
+  (0.H.4 Connect + ksqlDB), v4 = +2 (0.H.5 MirrorMaker 2 — the MM2 policy
+  is `cluster = "both"`, it spans both KRaft clusters).
+- **`role-overlay-gateway-kafka-reservations.tf`** (foundation env) — 15
+  dnsmasq `dhcp-host` reservations pinning the kafka-tier MACs
+  (`00:50:56:3F:00:60-6E`) to the canonical VMnet11 IPs.
+
+Operator order: `security.ps1 apply` (writes the PKI role + AppRoles +
+sidecars) must run before `nexus-infra-kafka`'s `kafka.ps1 apply` — the
+kafka env reads the sidecars at plan time.
 
 ## [0.2.0] — 2026-05-07 — "Phase 0.C foundation + 0.D Vault hardening + 0.E.3 + 0.E.4 swarm scaffolding"
 
