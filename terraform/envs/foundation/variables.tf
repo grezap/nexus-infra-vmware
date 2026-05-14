@@ -277,6 +277,100 @@ variable "mac_swarm_worker_3_primary" {
   default     = "00:50:56:3F:00:55"
 }
 
+# ─── Phase 0.H — Kafka tier dnsmasq reservations (foundation side) ────────
+# nexus-infra-kafka clones the 15 kafka VMs but the gateway is foundation's
+# responsibility -- the dhcp-host reservations live here so two terraform
+# repos never race on /etc/dnsmasq.d/. The 15 mac_kafka_*_primary defaults
+# MUST match nexus-infra-kafka/terraform/envs/kafka/variables.tf's MAC pool
+# 1:1 (00:50:56:3F:00:60-6E primaries). role-overlay-gateway-kafka-
+# reservations.tf consumes these.
+
+variable "enable_kafka_dhcp_reservations" {
+  description = "Toggle: write dnsmasq dhcp-host reservations on nexus-gateway for the 15-VM Kafka tier (Phase 0.H). Default true (steady state once Phase 0.H starts). Same partial-apply-destruction landmine class as enable_swarm_dhcp_reservations -- a foundation apply WITHOUT this var on a lab that had it enabled would silently destroy the reservations + the kafka clones would lose their canonical IPs on next DHCP renew. Opt out with -Vars enable_kafka_dhcp_reservations=false ONLY on a pre-Phase-0.H lab."
+  type        = bool
+  default     = true
+}
+
+# Brokers (kafka-east/west, 0.H.1) -- canon vms.yaml lines 88-98.
+variable "mac_kafka_east_1_primary" {
+  description = "kafka-east-1 primary NIC (VMnet11). Pinned to 192.168.70.21."
+  type        = string
+  default     = "00:50:56:3F:00:60"
+}
+variable "mac_kafka_east_2_primary" {
+  description = "kafka-east-2 primary NIC (VMnet11). Pinned to 192.168.70.22."
+  type        = string
+  default     = "00:50:56:3F:00:61"
+}
+variable "mac_kafka_east_3_primary" {
+  description = "kafka-east-3 primary NIC (VMnet11). Pinned to 192.168.70.23."
+  type        = string
+  default     = "00:50:56:3F:00:62"
+}
+variable "mac_kafka_west_1_primary" {
+  description = "kafka-west-1 primary NIC (VMnet11). Pinned to 192.168.70.24."
+  type        = string
+  default     = "00:50:56:3F:00:63"
+}
+variable "mac_kafka_west_2_primary" {
+  description = "kafka-west-2 primary NIC (VMnet11). Pinned to 192.168.70.25."
+  type        = string
+  default     = "00:50:56:3F:00:64"
+}
+variable "mac_kafka_west_3_primary" {
+  description = "kafka-west-3 primary NIC (VMnet11). Pinned to 192.168.70.26."
+  type        = string
+  default     = "00:50:56:3F:00:65"
+}
+# Ecosystem (schema-registry / connect / ksqldb / mm2 / rest, 0.H.3-0.H.5)
+# -- canon vms.yaml lines 104-112. ksqldb-2 pinned to .98 (vms.yaml line 109
+# .99 is a typo, fixed in vms.yaml at the 0.H.6 close-out canon batch).
+variable "mac_kafka_schema_registry_1_primary" {
+  description = "schema-registry-1 primary NIC (VMnet11). Pinned to 192.168.70.91."
+  type        = string
+  default     = "00:50:56:3F:00:66"
+}
+variable "mac_kafka_schema_registry_2_primary" {
+  description = "schema-registry-2 primary NIC (VMnet11). Pinned to 192.168.70.92."
+  type        = string
+  default     = "00:50:56:3F:00:67"
+}
+variable "mac_kafka_connect_1_primary" {
+  description = "kafka-connect-1 primary NIC (VMnet11). Pinned to 192.168.70.95."
+  type        = string
+  default     = "00:50:56:3F:00:68"
+}
+variable "mac_kafka_connect_2_primary" {
+  description = "kafka-connect-2 primary NIC (VMnet11). Pinned to 192.168.70.96."
+  type        = string
+  default     = "00:50:56:3F:00:69"
+}
+variable "mac_kafka_ksqldb_1_primary" {
+  description = "ksqldb-1 primary NIC (VMnet11). Pinned to 192.168.70.97."
+  type        = string
+  default     = "00:50:56:3F:00:6A"
+}
+variable "mac_kafka_ksqldb_2_primary" {
+  description = "ksqldb-2 primary NIC (VMnet11). Pinned to 192.168.70.98."
+  type        = string
+  default     = "00:50:56:3F:00:6B"
+}
+variable "mac_kafka_mm2_1_primary" {
+  description = "mm2-1 primary NIC (VMnet11). Pinned to 192.168.70.85."
+  type        = string
+  default     = "00:50:56:3F:00:6C"
+}
+variable "mac_kafka_mm2_2_primary" {
+  description = "mm2-2 primary NIC (VMnet11). Pinned to 192.168.70.86."
+  type        = string
+  default     = "00:50:56:3F:00:6D"
+}
+variable "mac_kafka_rest_1_primary" {
+  description = "kafka-rest-1 primary NIC (VMnet11). Pinned to 192.168.70.88."
+  type        = string
+  default     = "00:50:56:3F:00:6E"
+}
+
 # ─── Phase 0.D.3 — Vault LDAP/AD integration (foundation side) ───────────
 # Foundation's role is to create the AD objects Vault needs:
 #   - svc-vault-ldap     : bind account for auth/ldap + secrets/ldap engines
