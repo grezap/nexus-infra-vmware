@@ -4,6 +4,138 @@ A command-reference cheat sheet for rebuilding the lab from cold metal. Per-VM d
 
 All commands assume **PowerShell 7+ (`pwsh`)** on the Windows host unless noted otherwise. Repo root: `F:\_CODING_\Repos\Local Development And Test\Portfolio_Project_Ideas\workspace\nexus-infra-vmware`.
 
+> **Two ways to use this handbook.** **(A)** If you want **the exact short-path replay** for a single tier — "build the foundation tier from zero" or "rebuild the security tier" — start at **§Quick replay paths** below. **(B)** If you want the **historical per-phase walkthrough** with every decision, gotcha, and lesson recorded — read §0 → §1 → §1a … §1k in order; the chronological sections are the deep canon.
+
+---
+
+## Quick replay paths
+
+The canonical "from absolute zero, in order" command paths for this repo's two envs. Both replay paths assume **§0 One-time host prep** has been done once (VMnet10/VMnet11 created, toolchain installed, ssh-agent loaded). The §1.x detail sections referenced here are the per-phase walkthrough with all gotchas.
+
+### A. Foundation tier — `envs/foundation` from zero (~45-60 min)
+
+The always-on plumbing: `nexus-gateway` (VM #0, edge), `dc-nexus` (AD DS forest), `nexus-jumpbox` (domain-joined ops box).
+
+**Machine-order precedence** (which VM comes alive in what order):
+
+1. **`nexus-gateway`** — must come up FIRST. Everything else depends on its dnsmasq DHCP + DNS forwarder + nftables masquerade. (§1)
+2. **`dc-nexus`** — clones from `ws2025-desktop`, promotes to the `nexus.lab` forest root DC, becomes the LAN's authoritative DNS for `nexus.lab`. (§1c bare clone + §1d AD DS overlay)
+3. **`nexus-jumpbox`** — clones from `ws2025-desktop`, joins the `nexus.lab` domain via `Add-Computer` overlay. (§1c bare clone + §1e domain-join overlay)
+4. **AD hardening on `dc-nexus`** — `MinPasswordLength=14`, `nexusadmin` promoted into DA+EA, `Server Operators` cleanup. (§1f)
+
+Replay command sequence:
+
+```pwsh
+# Pre-req (one-time, before first replay): build the templates.
+cd packer\deb13     && packer init . && packer build .   # 1-2 min
+cd ..\ws2025-desktop && packer init . && packer build .  # 8-12 min
+cd ..\vault          && packer init . && packer build .  # 6-8 min (used by §B security tier)
+cd ..\..
+
+# Foundation env apply -- clones the 3 VMs + runs all overlays.
+pwsh -File scripts\foundation.ps1 apply
+
+# Verify -- chained 0.B/0.C/0.D.1 smoke gate (~30 checks).
+pwsh -File scripts\foundation.ps1 smoke
+# Expect: ALL FOUNDATION SMOKE CHECKS PASSED
+```
+
+**Selective ops — set up only part of the foundation tier.** Every VM has an `enable_*` toggle; every overlay is independently `-target`-able.
+
+```pwsh
+# Bring up ONLY nexus-gateway (skip dc-nexus + jumpbox + AD DS + hardening).
+pwsh -File scripts\foundation.ps1 apply -Vars `
+    enable_dc_nexus=false, enable_jumpbox=false, `
+    enable_ad_ds=false, enable_jumpbox_join=false, enable_ad_hardening=false
+
+# Bring up gateway + dc-nexus only (skip jumpbox + the AD overlays).
+pwsh -File scripts\foundation.ps1 apply -Vars `
+    enable_jumpbox=false, enable_jumpbox_join=false
+
+# Iterate on AD hardening alone (assumes dc-nexus is up + promoted).
+pwsh -File scripts\foundation.ps1 apply -Vars enable_ad_hardening=true
+```
+
+> **Vars-is-replacement gotcha** (`feedback_terraform_partial_apply_destroys_resources.md`): every `-Vars` invocation is the FULL override set for that apply; vars not passed default back, and `count = var.X ? 1 : 0` resources get destroyed. The defaults reflect steady state (everything enabled), so omitting `-Vars` is the safe operator path.
+
+### B. Security tier — `envs/security` from zero (~30-45 min)
+
+The 3-node Vault HA cluster + the small one-node `vault-transit` companion + PKI hierarchy + LDAPS auth + AD password rotation + the foundation-cred KV migration + the cross-tier scaffolding (consumed by 0.E + 0.H downstream).
+
+**Hard prerequisite:** the foundation tier (§A above) must be ALIVE — `dc-nexus` promoted, `nexus-jumpbox` joined, AD DS forest healthy. The security env's LDAPS auth + `secrets/ldap` rotation depends on `dc-nexus`.
+
+**Machine-order precedence:**
+
+1. **`vault-transit`** — single-node companion (192.168.70.124). Built FIRST. Hosts the `transit` secrets engine the HA cluster will use for auto-unseal. (§1k.5)
+2. **`vault-1`, `vault-2`, `vault-3`** — the 3-node Raft HA cluster (.121-.123). vault-1 initialises; vault-2/3 join. (§1g)
+3. **PKI hierarchy** — `pki/` root + `pki_int/` intermediate + the `vault-server` role + per-node listener cert reissue + CA bundle distributed to the build host. (§1h)
+4. **LDAPS + `secrets/ldap`** — leaf cert for `dc-nexus.nexus.lab`, restart NTDS, `auth/ldap` + `secrets/ldap` overlays. (§1i)
+5. **Foundation cred migration into KV** — `nexus-foundation-reader` AppRole + sticky one-time seed of plaintext defaults into `nexus/foundation/*`. (§1j)
+6. **Vault Agent on member servers + GMSA + leaf TTL drop + AD-cred KV rotation** — the five sub-deliverables of 0.D.5. (§1k)
+
+Replay command sequence:
+
+```pwsh
+# Pre-req: foundation tier alive (§A). Verify:
+pwsh -File scripts\foundation.ps1 smoke   # must be ALL GREEN
+
+# Security env apply -- builds vault-transit + the HA cluster + all overlays.
+pwsh -File scripts\security.ps1 apply
+
+# Verify -- chained 0.D.1-0.D.5 smoke gate (~80 checks total).
+pwsh -File scripts\security.ps1 smoke
+# Expect: ALL SECURITY SMOKE CHECKS PASSED
+```
+
+**Selective ops — set up only part of the security tier.**
+
+```pwsh
+# Bring up ONLY the 3-node Vault HA cluster (skip vault-transit + PKI + LDAPS + everything else).
+pwsh -File scripts\security.ps1 apply -Vars `
+    enable_vault_transit=false, enable_vault_pki=false, `
+    enable_vault_ldap=false, enable_foundation_cred_seed=false, `
+    enable_vault_agent_swarm=false, enable_kafka_agent_setup=false
+
+# Re-apply ONLY the kafka-tier Vault-side state (consumed by nexus-infra-kafka).
+# Per nexus-infra-kafka/docs/handbook.md §1.2: this MUST run before the kafka env's apply.
+pwsh -File scripts\security.ps1 apply -Vars enable_kafka_agent_setup=true
+```
+
+### C. Tear down (either tier)
+
+```pwsh
+pwsh -File scripts\foundation.ps1 destroy   # tears down gateway + dc-nexus + jumpbox
+pwsh -File scripts\security.ps1   destroy   # tears down vault-1/2/3 + vault-transit
+```
+
+Foundation env's destroy reclaims the 3 VMs + dhcp leases. Security env's destroy reclaims the 4 Vault VMs + the Vault state. Cross-tier state (e.g. `$HOME\.nexus\vault-*.json` sidecars) survives — wipe by hand if you want a true greenfield.
+
+### D. Cold-rebuild canon — foundation + security from zero
+
+The full lab rebuild is the union of §A then §B (foundation must be alive before security can apply its LDAPS overlay). No KV-wipe prerequisite — both envs are idempotent re-applies, secret-ids regenerate fresh each apply.
+
+```pwsh
+# 1. Tear down both envs.
+pwsh -File scripts\security.ps1   destroy
+pwsh -File scripts\foundation.ps1 destroy
+
+# 2. (Optional) rebuild Packer templates from cold -- only if you suspect template drift.
+cd packer\deb13          && packer init . && packer build .
+cd ..\ws2025-desktop     && packer init . && packer build .
+cd ..\vault              && packer init . && packer build .
+cd ..\..
+
+# 3. Foundation first.
+pwsh -File scripts\foundation.ps1 apply
+pwsh -File scripts\foundation.ps1 smoke      # ALL GREEN
+
+# 4. Then security.
+pwsh -File scripts\security.ps1   apply
+pwsh -File scripts\security.ps1   smoke      # ALL GREEN
+```
+
+Cold-rebuild proven across Phase 0.D close-out. Downstream tiers (`nexus-infra-swarm-nomad`, `nexus-infra-kafka`) build on top — see their own handbooks for the next layer.
+
 ---
 
 ## 0. One-time host prep
