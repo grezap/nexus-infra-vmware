@@ -421,6 +421,25 @@ variable "mac_oltp_redis_6_primary" {
   default     = "00:50:56:3F:00:75"
 }
 
+# ─── Phase 0.G.2 -- MongoDB Replica Set MACs (3 nodes) ────────────────────
+# Next 3 in the 0.G OLTP pool after redis (:70-:75). Pinned to .71/.72/.73
+# on VMnet11 per nexus-platform-plan/docs/infra/vms.yaml (cluster: mongo).
+variable "mac_oltp_mongo_1_primary" {
+  description = "mongo-1 primary NIC (VMnet11). Pinned to 192.168.70.71 (initial PRIMARY for rs.initiate; replica set elects after that)."
+  type        = string
+  default     = "00:50:56:3F:00:76"
+}
+variable "mac_oltp_mongo_2_primary" {
+  description = "mongo-2 primary NIC (VMnet11). Pinned to 192.168.70.72 (replica set member 1)."
+  type        = string
+  default     = "00:50:56:3F:00:77"
+}
+variable "mac_oltp_mongo_3_primary" {
+  description = "mongo-3 primary NIC (VMnet11). Pinned to 192.168.70.73 (replica set member 2)."
+  type        = string
+  default     = "00:50:56:3F:00:78"
+}
+
 # ─── Phase 0.D.3 — Vault LDAP/AD integration (foundation side) ───────────
 # Foundation's role is to create the AD objects Vault needs:
 #   - svc-vault-ldap     : bind account for auth/ldap + secrets/ldap engines
