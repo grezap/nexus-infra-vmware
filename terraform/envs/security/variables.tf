@@ -802,6 +802,12 @@ variable "enable_mongo_keyfile_seed" {
   default     = true
 }
 
+variable "enable_mongo_smoke_user_seed" {
+  description = "Phase 0.G.2 ratification fix toggle: sticky-seed a 32-char base64 random password at nexus/oltp/mongo/smoke-user-password. The mongo-tls overlay renders it to /etc/nexus-mongo/smoke-user-password on each RS member; the rs-initiate overlay uses it to create a `smoke-rw` user (role readWrite on `nexus_smoke` DB) during the localhost-auth-bypass bootstrap window. After the first user is created, MongoDB's localhost-exception auto-deactivates per its normal rule -- subsequent operations (incl. the smoke gate's write/read round-trip) authenticate as smoke-rw with this password. Sticky-seed: never overwrites a populated value (operator rotation requires manual `db.updateUser` step too -- see handbook). Default true."
+  type        = bool
+  default     = true
+}
+
 variable "enable_mongo_agent_setup" {
   description = "Master toggle for the 3 mongo-node Vault Agent setup primitives (policies + AppRoles). Default true. Set false on a deploy that doesn't bring up the MongoDB replica set (e.g. iterating on a different 0.G.* tier alone)."
   type        = bool

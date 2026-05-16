@@ -41,7 +41,7 @@ resource "null_resource" "vault_agent_mongo_policies" {
     post_init_id             = null_resource.vault_post_init[0].id
     mongo_role_id            = length(null_resource.vault_pki_mongo_role) > 0 ? null_resource.vault_pki_mongo_role[0].id : "disabled"
     mongo_role_name          = var.vault_pki_mongo_role_name
-    mongo_policies_overlay_v = "1" # v1 (0.G.2) = initial 3-node MongoDB RS. Adds KV read on nexus/data/oltp/mongo/keyfile (vs redis which had no KV grant) -- the keyFile is the RS internal auth shared secret.
+    mongo_policies_overlay_v = "2" # v2 (0.G.2 ratification fix 2026-05-17) = +KV read on nexus/data/oltp/mongo/smoke-user-password (sticky-seeded by role-overlay-vault-mongo-smoke-user-seed.tf; mongo-tls overlay renders it to /etc/nexus-mongo/smoke-user-password for the rs-initiate createUser flow + smoke gate auth). v1 = initial 3-node MongoDB RS; added KV read on nexus/data/oltp/mongo/keyfile for RS internal auth.
   }
 
   depends_on = [null_resource.vault_post_init, null_resource.vault_pki_mongo_role, null_resource.vault_mongo_keyfile_seed]
@@ -70,6 +70,9 @@ path "pki_int/issue/${var.vault_pki_mongo_role_name}" {
   capabilities = ["create", "update"]
 }
 path "nexus/data/oltp/mongo/keyfile" {
+  capabilities = ["read"]
+}
+path "nexus/data/oltp/mongo/smoke-user-password" {
   capabilities = ["read"]
 }
 path "auth/token/lookup-self" {
