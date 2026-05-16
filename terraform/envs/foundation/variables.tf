@@ -371,6 +371,56 @@ variable "mac_kafka_rest_1_primary" {
   default     = "00:50:56:3F:00:6E"
 }
 
+# ─── Phase 0.G.1 — OLTP tier: Redis Cluster dnsmasq reservations ──────────
+# nexus-infra-oltp clones the 6 Redis VMs but the gateway is foundation's
+# responsibility -- the dhcp-host reservations live here so two terraform
+# repos never race on /etc/dnsmasq.d/. The 6 mac_oltp_redis_*_primary
+# defaults MUST match nexus-infra-oltp/terraform/envs/oltp/variables.tf's
+# MAC allocation 1:1 (00:50:56:3F:00:70-75). role-overlay-gateway-oltp-
+# reservations.tf consumes these.
+#
+# Later OLTP-tier sub-phases (0.G.2 Mongo / 0.G.3 Percona / 0.G.4 Patroni /
+# 0.G.7 SQL FCI/AG) add their own MAC variables + reservations here as they
+# ship. MAC pool reserved for 0.G OLTP per the 0.G.0 audit allocation:
+# :70-:88 (25 contiguous MACs for the 25 OLTP-tier VMs).
+
+variable "enable_oltp_dhcp_reservations" {
+  description = "Toggle: write dnsmasq dhcp-host reservations on nexus-gateway for the OLTP tier (Phase 0.G). Currently 6 Redis reservations (0.G.1); later sub-phases extend this overlay with Mongo / Percona / Patroni / SQL FCI/AG reservations. Default true (steady state once Phase 0.G starts). Same partial-apply-destruction landmine class as enable_kafka_dhcp_reservations -- a foundation apply WITHOUT this var on a lab that had it enabled would silently destroy the reservations + the redis clones would lose their canonical IPs on next DHCP renew. Opt out with -Vars enable_oltp_dhcp_reservations=false ONLY on a pre-Phase-0.G lab."
+  type        = bool
+  default     = true
+}
+
+variable "mac_oltp_redis_1_primary" {
+  description = "redis-1 primary NIC (VMnet11). Pinned to 192.168.70.81 (shard 1 primary)."
+  type        = string
+  default     = "00:50:56:3F:00:70"
+}
+variable "mac_oltp_redis_2_primary" {
+  description = "redis-2 primary NIC (VMnet11). Pinned to 192.168.70.82 (shard 1 replica)."
+  type        = string
+  default     = "00:50:56:3F:00:71"
+}
+variable "mac_oltp_redis_3_primary" {
+  description = "redis-3 primary NIC (VMnet11). Pinned to 192.168.70.83 (shard 2 primary)."
+  type        = string
+  default     = "00:50:56:3F:00:72"
+}
+variable "mac_oltp_redis_4_primary" {
+  description = "redis-4 primary NIC (VMnet11). Pinned to 192.168.70.84 (shard 2 replica)."
+  type        = string
+  default     = "00:50:56:3F:00:73"
+}
+variable "mac_oltp_redis_5_primary" {
+  description = "redis-5 primary NIC (VMnet11). Pinned to 192.168.70.87 (shard 3 primary). Note: .85/.86 are mm2 (kafka), .88 is kafka-rest, so redis-5 jumps to .87 per vms.yaml."
+  type        = string
+  default     = "00:50:56:3F:00:74"
+}
+variable "mac_oltp_redis_6_primary" {
+  description = "redis-6 primary NIC (VMnet11). Pinned to 192.168.70.89 (shard 3 replica). Note: .88 is kafka-rest, so redis-6 jumps to .89 per vms.yaml."
+  type        = string
+  default     = "00:50:56:3F:00:75"
+}
+
 # ─── Phase 0.D.3 — Vault LDAP/AD integration (foundation side) ───────────
 # Foundation's role is to create the AD objects Vault needs:
 #   - svc-vault-ldap     : bind account for auth/ldap + secrets/ldap engines
