@@ -768,3 +768,60 @@ variable "vault_agent_redis_creds_dir" {
   type        = string
   default     = "$HOME/.nexus"
 }
+
+# ─── Phase 0.G.2 — MongoDB Replica Set mTLS (PKI role + 3 mongo-node ─────
+#                  AppRoles + sticky-seed keyFile)
+#
+# Wires in the PKI role + Vault Agent infrastructure that nexus-infra-oltp's
+# Phase 0.G.2 (MongoDB RS mTLS) consumes. The actual rendering happens
+# oltp-side (role-overlay-mongo-vault-agents.tf + role-overlay-mongo-tls.tf
+# + role-overlay-mongo-config.tf); this env owns the Vault-side state.
+# Mirrors the 0.G.1 Redis pattern, plus a sticky-seeded KV path for the RS
+# internal-auth shared keyFile.
+#
+# Order: pki-mongo -> keyfile-seed -> mongo-policies -> mongo-approles
+#        -> (oltp env consumes)
+# All steps depend_on null_resource.vault_post_init (+ the intermediate CA
+# for the PKI role; + the keyfile-seed for the policies).
+
+variable "enable_mongo_pki" {
+  description = "Phase 0.G.2 toggle: create the pki_int/roles/mongo-server PKI role used by the 3 mongo-node Vault Agents to issue TLS leaf certs (server+client EKU, 90-day TTL). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_pki_mongo_role_name" {
+  description = "Name of the PKI role under pki_int/ for MongoDB leaf certs. Used by nexus-infra-oltp's 0.G.2 mTLS overlay. Default 'mongo-server'. The role's allowed_domains must cover every mongo-N hostname + <host>.nexus.lab + <host>.mongo.nexus.lab + localhost; all 3 nodes share the one role. Server+client EKU because every mongo node BOTH listens (--tlsMode requireTLS on 27017) AND dials peers (heartbeat + replication + election traffic between RS members)."
+  type        = string
+  default     = "mongo-server"
+}
+
+variable "enable_mongo_keyfile_seed" {
+  description = "Phase 0.G.2 toggle: sticky-seed a 1024-char base64 random keyFile at nexus/oltp/mongo/keyfile for MongoDB replica set internal auth (shared secret between RS members for heartbeat / replication / election). Generated server-side on vault-1 via openssl rand -base64 756 | tr -d '\\n'. Never overwrites a populated value (operator rotation is preserved). Default true. Pre-req: vault cluster initialized + KV-v2 mount at nexus/. Mirrors the 0.E.4d enable_portainer_admin_seed sticky-seed pattern."
+  type        = bool
+  default     = true
+}
+
+variable "enable_mongo_agent_setup" {
+  description = "Master toggle for the 3 mongo-node Vault Agent setup primitives (policies + AppRoles). Default true. Set false on a deploy that doesn't bring up the MongoDB replica set (e.g. iterating on a different 0.G.* tier alone)."
+  type        = bool
+  default     = true
+}
+
+variable "enable_mongo_agent_policies" {
+  description = "Toggle: write the 3 narrow Vault policies (nexus-agent-mongo-{1,2,3}) -- each grants pki_int/issue/<mongo_role> + KV read on nexus/data/oltp/mongo/keyfile + token self-lookup/renew. Default true (gated under enable_mongo_agent_setup). Idempotent overwrite."
+  type        = bool
+  default     = true
+}
+
+variable "enable_mongo_agent_approles" {
+  description = "Toggle: provision the 3 AppRoles + per-host JSON sidecars on the build host. Default true (gated under enable_mongo_agent_setup). role-id is stable; secret-id is regenerated per security apply."
+  type        = bool
+  default     = true
+}
+
+variable "vault_agent_mongo_creds_dir" {
+  description = "Directory on the build host where the 3 vault-agent-oltp-mongo-<host>.json sidecars are written. Each contains role_id + secret_id + CA path + vault address for the corresponding mongo-node Vault Agent. Mode 0700 owner-only via icacls. The `oltp-mongo-` filename prefix mirrors the 0.G.1 `oltp-redis-` prefix -- namespaces per tier+cluster so future 0.G.* oltp clusters share $HOME/.nexus without collisions. nexus-infra-oltp's role-overlay-mongo-vault-agents.tf reads these."
+  type        = string
+  default     = "$HOME/.nexus"
+}
