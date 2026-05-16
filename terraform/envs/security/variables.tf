@@ -720,3 +720,51 @@ variable "vault_agent_kafka_creds_dir" {
   type        = string
   default     = "$HOME/.nexus"
 }
+
+# ─── Phase 0.G.1 — Redis Cluster mTLS (PKI role + 6 redis-node AppRoles) ───
+#
+# Wires in the PKI role + Vault Agent infrastructure that nexus-infra-oltp's
+# Phase 0.G.1 (Redis Cluster mTLS) consumes. The actual rendering happens
+# oltp-side (role-overlay-redis-vault-agents.tf + role-overlay-redis-tls.tf);
+# this env owns the Vault-side state. Mirrors the 0.H.2 kafka PKI/AppRole
+# pattern.
+#
+# Order: pki-redis -> redis-policies -> redis-approles -> (oltp env consumes)
+# All steps depend_on null_resource.vault_post_init (+ the intermediate CA
+# for the PKI role).
+
+variable "enable_redis_pki" {
+  description = "Phase 0.G.1 toggle: create the pki_int/roles/redis-server PKI role used by the 6 redis-node Vault Agents to issue TLS leaf certs (server+client EKU, 90-day TTL). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_pki_redis_role_name" {
+  description = "Name of the PKI role under pki_int/ for Redis leaf certs. Used by nexus-infra-oltp's 0.G.1 mTLS overlay. Default 'redis-server'. The role's allowed_domains must cover every redis-N hostname + <host>.nexus.lab + <host>.redis.nexus.lab + localhost; all 6 nodes share the one role (the per-node CN/SAN distinction happens at issue time in the Vault Agent template). Both server+client EKU because Redis Cluster's cluster bus (port 16379) is a full mesh -- every node opens connections to every other node for gossip + failover voting, so each node both listens AND dials."
+  type        = string
+  default     = "redis-server"
+}
+
+variable "enable_redis_agent_setup" {
+  description = "Master toggle for the 6 redis-node Vault Agent setup primitives (policies + AppRoles). Default true. Set false on a deploy that doesn't bring up the Redis cluster (e.g. iterating on a different 0.G.* tier alone)."
+  type        = bool
+  default     = true
+}
+
+variable "enable_redis_agent_policies" {
+  description = "Toggle: write the 6 narrow Vault policies (nexus-agent-redis-{1,2,3,4,5,6}) -- each grants pki_int/issue/<redis_role> + token self-lookup/renew. Default true (gated under enable_redis_agent_setup). Idempotent overwrite."
+  type        = bool
+  default     = true
+}
+
+variable "enable_redis_agent_approles" {
+  description = "Toggle: provision the 6 AppRoles + per-host JSON sidecars on the build host. Default true (gated under enable_redis_agent_setup). role-id is stable; secret-id is regenerated per security apply."
+  type        = bool
+  default     = true
+}
+
+variable "vault_agent_redis_creds_dir" {
+  description = "Directory on the build host where the 6 vault-agent-oltp-redis-<host>.json sidecars are written. Each contains role_id + secret_id + CA path + vault address for the corresponding redis-node Vault Agent. Mode 0700 owner-only via icacls. The `oltp-redis-` filename prefix (vs swarm/kafka's bare `vault-agent-<host>.json`) namespaces sidecars per tier+cluster so future 0.G.* oltp clusters (mongo / percona / postgres) share $HOME/.nexus without collisions. nexus-infra-oltp's role-overlay-redis-vault-agents.tf reads these."
+  type        = string
+  default     = "$HOME/.nexus"
+}
