@@ -440,6 +440,37 @@ variable "mac_oltp_mongo_3_primary" {
   default     = "00:50:56:3F:00:78"
 }
 
+# Phase 0.G.3: 5 MACs for the Percona XtraDB Cluster + ProxySQL pair, pinned
+# to .51-.55 on VMnet11 per nexus-platform-plan/docs/infra/vms.yaml (cluster:
+# percona). pxc-node-1/2/3 are the Galera-replicated data plane; proxysql-1/2
+# sit in front as the connection pooler + LB, with a VRRP-floated VIP at .50
+# (configured per-node by the oltp env, NOT a dhcp reservation).
+variable "mac_oltp_pxc_1_primary" {
+  description = "pxc-node-1 primary NIC (VMnet11). Pinned to 192.168.70.51 (Galera node, candidate bootstrap node)."
+  type        = string
+  default     = "00:50:56:3F:00:79"
+}
+variable "mac_oltp_pxc_2_primary" {
+  description = "pxc-node-2 primary NIC (VMnet11). Pinned to 192.168.70.52 (Galera node)."
+  type        = string
+  default     = "00:50:56:3F:00:7A"
+}
+variable "mac_oltp_pxc_3_primary" {
+  description = "pxc-node-3 primary NIC (VMnet11). Pinned to 192.168.70.53 (Galera node)."
+  type        = string
+  default     = "00:50:56:3F:00:7B"
+}
+variable "mac_oltp_proxysql_1_primary" {
+  description = "proxysql-1 primary NIC (VMnet11). Pinned to 192.168.70.54 (ProxySQL instance 1; keepalived MASTER candidate for VIP .50)."
+  type        = string
+  default     = "00:50:56:3F:00:7C"
+}
+variable "mac_oltp_proxysql_2_primary" {
+  description = "proxysql-2 primary NIC (VMnet11). Pinned to 192.168.70.55 (ProxySQL instance 2; keepalived BACKUP for VIP .50)."
+  type        = string
+  default     = "00:50:56:3F:00:7D"
+}
+
 # ─── Phase 0.D.3 — Vault LDAP/AD integration (foundation side) ───────────
 # Foundation's role is to create the AD objects Vault needs:
 #   - svc-vault-ldap     : bind account for auth/ldap + secrets/ldap engines
