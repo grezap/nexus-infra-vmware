@@ -831,3 +831,56 @@ variable "vault_agent_mongo_creds_dir" {
   type        = string
   default     = "$HOME/.nexus"
 }
+
+# ─── Phase 0.G.3 — Percona XtraDB Cluster + ProxySQL ─────────────────────
+# 5 nodes in the percona tier: 3 PXC (Galera-replicated MySQL data plane) +
+# 2 ProxySQL (connection pooler + load balancer in front of PXC with a
+# VRRP-floated VIP at 192.168.70.50). All 5 nodes get TLS leaves from the
+# same pki_int/roles/percona-server role, plus narrow per-host Vault
+# policies + AppRoles. 4 KV-v2 secrets sticky-seeded for the cluster:
+#   - cluster-password   (SST/IST replication user; needed by all 5)
+#   - monitor-password   (clustercheck health probe user; needed by all 5)
+#   - root-password      (mysql root for bootstrap; only the 3 PXC nodes)
+#   - proxysql-admin     (ProxySQL admin :6032 interface; only the 2 PSQL)
+
+variable "enable_percona_pki" {
+  description = "Phase 0.G.3 toggle: create the pki_int/roles/percona-server PKI role used by the 3 PXC + 2 ProxySQL Vault Agents to issue TLS leaf certs (server+client EKU, 90-day TTL). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_pki_percona_role_name" {
+  description = "Name of the PKI role under pki_int/ for Percona/ProxySQL leaf certs. Used by nexus-infra-oltp's 0.G.3 mTLS overlay. Default 'percona-server'. The role's allowed_domains must cover every pxc-node-N + proxysql-N hostname + <host>.nexus.lab + <host>.percona.nexus.lab + localhost; all 5 nodes share the one role. Server+client EKU because PXC nodes both listen (MySQL on 3306, Galera SST/IST on 4444/4567/4568) AND dial peers (Galera replication is a full mesh)."
+  type        = string
+  default     = "percona-server"
+}
+
+variable "enable_percona_cluster_creds_seed" {
+  description = "Phase 0.G.3 toggle: sticky-seed the 4 Percona cluster creds in Vault KV (nexus/oltp/percona/{cluster,monitor,root,proxysql-admin}-password). Each is a random 32-char password generated server-side via `openssl rand -hex 16` if absent. Sticky: operator rotation via `vault kv put` is preserved. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_percona_agent_setup" {
+  description = "Master toggle for the 5 percona/proxysql Vault Agent setup primitives (policies + AppRoles). Default true. Set false on a deploy that doesn't bring up the Percona cluster (e.g. iterating on a different 0.G.* tier alone)."
+  type        = bool
+  default     = true
+}
+
+variable "enable_percona_agent_policies" {
+  description = "Toggle: write the 5 narrow Vault policies (nexus-agent-pxc-{1,2,3} + nexus-agent-proxysql-{1,2}). PXC policies grant PKI issue + KV read on cluster/monitor/root passwords; ProxySQL policies grant PKI issue + KV read on cluster/monitor/proxysql-admin passwords. All 5 get token self-lookup/renew. Default true (gated under enable_percona_agent_setup). Idempotent overwrite."
+  type        = bool
+  default     = true
+}
+
+variable "enable_percona_agent_approles" {
+  description = "Toggle: provision the 5 AppRoles + per-host JSON sidecars on the build host. Default true (gated under enable_percona_agent_setup). role-id is stable; secret-id is regenerated per security apply."
+  type        = bool
+  default     = true
+}
+
+variable "vault_agent_percona_creds_dir" {
+  description = "Directory on the build host where the 5 vault-agent-oltp-percona-<host>.json sidecars are written (3 PXC + 2 ProxySQL). The `oltp-percona-` filename prefix mirrors the 0.G.1/0.G.2 `oltp-redis-`/`oltp-mongo-` pattern -- namespaces per tier+cluster so future 0.G.* oltp clusters share $HOME/.nexus without collisions. nexus-infra-oltp's 0.G.3 role-overlay-percona-vault-agents.tf reads these."
+  type        = string
+  default     = "$HOME/.nexus"
+}
