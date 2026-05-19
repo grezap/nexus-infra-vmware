@@ -522,6 +522,72 @@ variable "mac_oltp_haproxy_pg_2_primary" {
   default     = "00:50:56:3F:00:85"
 }
 
+# Phase 0.G.7: 4 MACs for the SQL Server FCI + AG cluster (2 FCI nodes
+# sharing an iSCSI LUN + 2 async AG replicas), pinned to .11-.14 on VMnet11
+# per nexus-platform-plan/docs/infra/vms.yaml (cluster: sqlserver). All 4
+# nodes are WSFC members forming a single 4-node node-majority cluster;
+# sql-fci-1/2 own the FCI virtual server (VIP .16) sharing iSCSI data on
+# the LUN from nexus-gateway; sql-ag-rep-1/2 hold async AG replicas of the
+# AG'd user databases. The WSFC cluster IP .15, FCI virtual server .16, and
+# AG Listener .17 are NOT dhcp reservations -- they are floating VIPs owned
+# by WSFC and migrate with cluster role failover. Per ADR-0025, the AG
+# Listener (.17) is the LB-tier HA primitive (WSFC-managed; client connection
+# strings target the Listener IP). The Listener's TLS cert has .17 in its
+# IP-SAN so `Encrypt=True;TrustServerCertificate=False` validates against
+# the floating VIP across failover.
+variable "mac_oltp_sql_fci_1_primary" {
+  description = "sql-fci-1 primary NIC (VMnet11). Pinned to 192.168.70.11 (FCI node 1; WSFC member; iSCSI initiator)."
+  type        = string
+  default     = "00:50:56:3F:00:86"
+}
+variable "mac_oltp_sql_fci_2_primary" {
+  description = "sql-fci-2 primary NIC (VMnet11). Pinned to 192.168.70.12 (FCI node 2; WSFC member; iSCSI initiator)."
+  type        = string
+  default     = "00:50:56:3F:00:87"
+}
+variable "mac_oltp_sql_ag_rep_1_primary" {
+  description = "sql-ag-rep-1 primary NIC (VMnet11). Pinned to 192.168.70.13 (AG async replica 1; WSFC member; no iSCSI -- local storage only)."
+  type        = string
+  default     = "00:50:56:3F:00:88"
+}
+variable "mac_oltp_sql_ag_rep_2_primary" {
+  description = "sql-ag-rep-2 primary NIC (VMnet11). Pinned to 192.168.70.14 (AG async replica 2; WSFC member; no iSCSI -- local storage only)."
+  type        = string
+  default     = "00:50:56:3F:00:89"
+}
+
+# ─── Phase 0.G.7 -- iSCSI target on nexus-gateway for FCI shared storage ─
+# Per ADR-0026 (SQL FCI iSCSI shared storage on nexus-gateway). The FCI
+# pair (sql-fci-1/-2) requires a shared block device for the SQL Server
+# data + log directories. VMware Workstation Pro has no shared-disk
+# primitive (no multi-writer flag, no shared-SCSI bus support in the UI;
+# only ESXi has these). The smallest tractable shim is an iSCSI target
+# running on nexus-gateway (.70.1) exporting a single LUN to both FCI
+# nodes via VMnet11. CHAP authentication; per-IP ACL restricting the
+# target to .70.11/.12 only. The LUN is a sparse-file backing on the
+# gateway's local disk (60 GB default -- room for SQL system DBs + a
+# few user DBs).
+variable "enable_iscsi_target_sqlfci" {
+  description = "Toggle: install tgt + write the iSCSI target export for the SQL FCI shared LUN on nexus-gateway (Phase 0.G.7). Default true (steady state once Phase 0.G.7 starts). Same partial-apply-destruction landmine class as the kafka/oltp reservations -- a foundation apply WITHOUT this var on a lab that had it enabled would silently destroy the iSCSI export + the FCI pair would lose access to their shared cluster disk on next reboot. Opt out with -Vars enable_iscsi_target_sqlfci=false ONLY on a pre-0.G.7 lab."
+  type        = bool
+  default     = true
+}
+variable "iscsi_sqlfci_lun_size_gb" {
+  description = "Size (GB) of the iSCSI LUN backing file at /srv/iscsi/sql-fci-shared.img on nexus-gateway. 60 GB is enough for SQL system DBs + ~30 GB user DBs at lab scale. Sparse-allocated (uses ~0 disk until written)."
+  type        = number
+  default     = 60
+}
+variable "iscsi_sqlfci_target_iqn" {
+  description = "iSCSI Qualified Name for the SQL FCI shared LUN. Convention: iqn.<YYYY-MM>.<reverse-dns>:<service>.<lun>. 2026-05 was when 0.G.7 landed; reverse-dns is local.nexus (lab-internal)."
+  type        = string
+  default     = "iqn.2026-05.local.nexus:sql-fci.lun1"
+}
+variable "iscsi_sqlfci_chap_username" {
+  description = "CHAP username for the SQL FCI iSCSI target. CHAP secret is sticky-seeded in Vault KV at nexus/oltp/sqlserver/iscsi-chap-secret by the security env."
+  type        = string
+  default     = "sql-fci-initiator"
+}
+
 # ─── Phase 0.D.3 — Vault LDAP/AD integration (foundation side) ───────────
 # Foundation's role is to create the AD objects Vault needs:
 #   - svc-vault-ldap     : bind account for auth/ldap + secrets/ldap engines

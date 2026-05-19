@@ -940,3 +940,81 @@ variable "vault_agent_patroni_creds_dir" {
   type        = string
   default     = "$HOME/.nexus"
 }
+
+# ─── Phase 0.G.7 -- SQL Server FCI + Always On AG (sqlserver tier) ───────
+# 4 nodes (sql-fci-1/2 FCI pair sharing iSCSI LUN + sql-ag-rep-1/2 AG async
+# replicas), 3 WSFC-managed VIPs (cluster .15 + FCI .16 + Listener .17), 1
+# shared PKI role (`sqlserver-server`, server+client EKU, 90-day leaf).
+# Listener cert + FCI virtual server cert additionally carry the floating
+# VIPs in IP-SANs so client TLS handshakes against the VIP validate across
+# WSFC failover (per ADR-0025 -- the LB-tier HA primitive for SQL is the AG
+# Listener; WSFC owns the IP migration). Per-node KV-seeded creds for:
+#   - sa-password                        (SQL Server `sa` -- disabled by default but
+#                                          available for emergency operator access)
+#   - ag-endpoint-cert-password          (X.509 pwd protecting the AG endpoint
+#                                          certs used for HADR endpoint AUTHENTICATION = CERTIFICATE)
+#   - wsfc-cluster-admin-password        (Local-admin password used during WSFC
+#                                          bootstrap before nexus.lab\Domain Admins
+#                                          takes over)
+#   - iscsi-chap-secret                  (CHAP secret for the tgt target on
+#                                          nexus-gateway; read by sql-fci-1/2 +
+#                                          by the foundation's iscsi overlay)
+#   - listener-cert-password             (X.509 pwd protecting the AG Listener
+#                                          leaf cert)
+#   - gmsa-info                          (Pointer to the `gmsa-sql-engine$` GMSA
+#                                          in nexus.lab; not the password -- GMSA
+#                                          passwords are AD-managed)
+
+variable "enable_sqlserver_pki" {
+  description = "Phase 0.G.7 toggle: create the pki_int/roles/sqlserver-server PKI role used by the 4 SQL Server FCI+AG Vault Agents to issue TLS leaf certs (server+client EKU, 90-day TTL). One role serves all 4 nodes + the FCI virtual server cert + the AG Listener cert. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_pki_sqlserver_role_name" {
+  description = "Name of the PKI role under pki_int/ for SQL Server FCI+AG leaf certs (covers all 4 sql-fci-1/2 + sql-ag-rep-1/2 nodes + the FCI virtual server `sql-fci-cluster` + the AG Listener `sql-ag-listener`). Used by nexus-infra-oltp's 0.G.7 mTLS overlay. Default 'sqlserver-server'. The role's allowed_domains must cover every hostname in bare + .nexus.lab + .sqlserver.nexus.lab forms; plus the listener hostname; plus the FCI virtual hostname. FCI virtual server cert IP-SAN includes .70.16; AG Listener cert IP-SAN includes .70.17. Server+client EKU because SQL Server endpoints both listen (1433/5022 AG endpoint) AND dial peers (AG synchronous replica seeding + LSN streaming)."
+  type        = string
+  default     = "sqlserver-server"
+}
+
+variable "enable_sqlserver_cluster_creds_seed" {
+  description = "Phase 0.G.7 toggle: sticky-seed the 5 SQL Server cluster creds + 1 pointer-object in Vault KV (nexus/oltp/sqlserver/{sa-password,ag-endpoint-cert-password,wsfc-cluster-admin-password,iscsi-chap-secret,listener-cert-password}-password + gmsa-info). All passwords are 32-char hex via openssl rand -hex 16. gmsa-info is a structured JSON pointer (gmsa name + AD domain) written at security apply time -- not regenerated. Sticky: operator rotation via `vault kv put` is preserved. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_sqlserver_agent_setup" {
+  description = "Master toggle for the 4 SQL Server Vault Agent setup primitives (policies + AppRoles). Default true. Set false on a deploy that doesn't bring up the SQL Server cluster (e.g. iterating on a different 0.G.* tier alone)."
+  type        = bool
+  default     = true
+}
+
+variable "enable_sqlserver_agent_policies" {
+  description = "Toggle: write the 4 narrow Vault policies (nexus-agent-sql-{fci-1,fci-2,ag-rep-1,ag-rep-2}). FCI policies grant PKI issue + KV read on sa/ag-endpoint-cert/wsfc-cluster-admin/iscsi-chap/listener-cert. AG-replica policies grant PKI issue + KV read on sa/ag-endpoint-cert/listener-cert (no iSCSI, no WSFC bootstrap). All 4 get token self-lookup/renew. Default true (gated under enable_sqlserver_agent_setup). Idempotent overwrite."
+  type        = bool
+  default     = true
+}
+
+variable "enable_sqlserver_agent_approles" {
+  description = "Toggle: provision the 4 AppRoles + per-host JSON sidecars on the build host. Default true (gated under enable_sqlserver_agent_setup). role-id is stable; secret-id is regenerated per security apply."
+  type        = bool
+  default     = true
+}
+
+variable "vault_agent_sqlserver_creds_dir" {
+  description = "Directory on the build host where the 4 vault-agent-oltp-sqlserver-<host>.json sidecars are written (sql-fci-1/2 + sql-ag-rep-1/2). The `oltp-sqlserver-` filename prefix mirrors the 0.G.4 `oltp-patroni-` pattern -- namespaces per tier+cluster. nexus-infra-oltp's 0.G.7 role-overlay-sqlserver-vault-agents.tf reads these."
+  type        = string
+  default     = "$HOME/.nexus"
+}
+
+variable "enable_sqlserver_gmsa" {
+  description = "Phase 0.G.7 toggle: create the `gmsa-sql-engine$` Group Managed Service Account in AD (nexus.lab) + the `nexus-sql-cluster-members` AD group containing the 4 SQL Server computer accounts. PrincipalsAllowedToRetrieveManagedPassword binds the GMSA to the group. The 4 SQL nodes' computer accounts are NOT added here -- they get added by the oltp env's role-overlay-sqlserver-domain-join.tf after the nodes successfully domain-join. This overlay only creates the GMSA + group + ACL. KDS root key was provisioned in 0.D.5 (role-overlay-dc-gmsa.tf). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "iscsi_sqlfci_initiator_ips" {
+  description = "List of VMnet11 IPs of the SQL FCI initiators (sql-fci-1, sql-fci-2). Used by role-overlay-vault-sqlserver-cluster-creds-seed.tf's iscsi-chap-secret + the sidecar JSON it writes to $HOME/.nexus/iscsi-sqlfci-chap.json (consumed by foundation's iSCSI target overlay)."
+  type        = list(string)
+  default     = ["192.168.70.11", "192.168.70.12"]
+}
