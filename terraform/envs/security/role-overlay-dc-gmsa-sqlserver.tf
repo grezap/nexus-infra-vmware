@@ -50,10 +50,10 @@ resource "null_resource" "dc_gmsa_sqlserver" {
   count = var.enable_sqlserver_gmsa ? 1 : 0
 
   triggers = {
-    dc_ip            = "192.168.70.240"
-    gmsa_name        = "gmsa-sql-engine"
-    consumers_group  = "nexus-sql-cluster-members"
-    gmsa_overlay_v   = "1" # v1 (0.G.7) = initial gmsa-sql-engine + nexus-sql-cluster-members group; group is empty at security-apply time; populated by oltp env's domain-join overlay.
+    dc_ip           = "192.168.70.240"
+    gmsa_name       = "gmsa-sql-engine"
+    consumers_group = "nexus-sql-cluster-members"
+    gmsa_overlay_v  = "1" # v1 (0.G.7) = initial gmsa-sql-engine + nexus-sql-cluster-members group; group is empty at security-apply time; populated by oltp env's domain-join overlay.
   }
 
   provisioner "local-exec" {

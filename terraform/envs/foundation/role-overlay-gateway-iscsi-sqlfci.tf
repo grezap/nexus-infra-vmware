@@ -62,13 +62,13 @@ resource "null_resource" "gateway_iscsi_sqlfci" {
   depends_on = [null_resource.gateway_oltp_reservations]
 
   triggers = {
-    gateway_ip          = "192.168.70.1"
-    lun_size_gb         = var.iscsi_sqlfci_lun_size_gb
-    target_iqn          = var.iscsi_sqlfci_target_iqn
-    chap_username       = var.iscsi_sqlfci_chap_username
-    initiator_ip_fci_1  = "192.168.70.11"
-    initiator_ip_fci_2  = "192.168.70.12"
-    iscsi_target_v      = "1" # v1 (0.G.7) = initial target export with 1 LUN + CHAP + per-IP ACL for FCI pair.
+    gateway_ip         = "192.168.70.1"
+    lun_size_gb        = var.iscsi_sqlfci_lun_size_gb
+    target_iqn         = var.iscsi_sqlfci_target_iqn
+    chap_username      = var.iscsi_sqlfci_chap_username
+    initiator_ip_fci_1 = "192.168.70.11"
+    initiator_ip_fci_2 = "192.168.70.12"
+    iscsi_target_v     = "1" # v1 (0.G.7) = initial target export with 1 LUN + CHAP + per-IP ACL for FCI pair.
   }
 
   provisioner "local-exec" {
