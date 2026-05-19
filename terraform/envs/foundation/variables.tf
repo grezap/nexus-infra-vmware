@@ -471,6 +471,57 @@ variable "mac_oltp_proxysql_2_primary" {
   default     = "00:50:56:3F:00:7D"
 }
 
+# Phase 0.G.4: 8 MACs for the Patroni PostgreSQL HA stack (3 patroni + 3 etcd
+# + 2 haproxy), pinned to .61-.68 on VMnet11 per nexus-platform-plan/docs/infra/
+# vms.yaml (cluster: postgres). The 3 patroni nodes form a streaming-replication
+# cluster with Patroni 4 orchestration (etcd DCS for leader election). The 3
+# etcd nodes form a 3-member raft quorum dedicated to Patroni's DCS (NOT the
+# foundation vault-transit cluster). The 2 haproxy nodes form an HA pair with
+# a keepalived-floated VIP at 192.168.70.60 (priority 110 MASTER + 100 BACKUP,
+# unicast mode -- mirrors the 0.G.3 proxysql-1/2 pattern). The VIP is NOT a
+# dhcp reservation -- it floats between haproxy-pg-1/-2 via VRRP, configured
+# per-node by the oltp env (which owns the per-node haproxy + keepalived config).
+variable "mac_oltp_pg_primary_primary" {
+  description = "pg-primary primary NIC (VMnet11). Pinned to 192.168.70.61 (Patroni candidate leader at first apply; cluster elects after that)."
+  type        = string
+  default     = "00:50:56:3F:00:7E"
+}
+variable "mac_oltp_pg_replica_1_primary" {
+  description = "pg-replica-1 primary NIC (VMnet11). Pinned to 192.168.70.62 (Patroni replica)."
+  type        = string
+  default     = "00:50:56:3F:00:7F"
+}
+variable "mac_oltp_pg_replica_2_primary" {
+  description = "pg-replica-2 primary NIC (VMnet11). Pinned to 192.168.70.63 (Patroni replica)."
+  type        = string
+  default     = "00:50:56:3F:00:80"
+}
+variable "mac_oltp_etcd_1_primary" {
+  description = "etcd-1 primary NIC (VMnet11). Pinned to 192.168.70.64 (etcd member for Patroni DCS)."
+  type        = string
+  default     = "00:50:56:3F:00:81"
+}
+variable "mac_oltp_etcd_2_primary" {
+  description = "etcd-2 primary NIC (VMnet11). Pinned to 192.168.70.65 (etcd member for Patroni DCS)."
+  type        = string
+  default     = "00:50:56:3F:00:82"
+}
+variable "mac_oltp_etcd_3_primary" {
+  description = "etcd-3 primary NIC (VMnet11). Pinned to 192.168.70.66 (etcd member for Patroni DCS)."
+  type        = string
+  default     = "00:50:56:3F:00:83"
+}
+variable "mac_oltp_haproxy_pg_1_primary" {
+  description = "haproxy-pg-1 primary NIC (VMnet11). Pinned to 192.168.70.67 (HAProxy LB; keepalived MASTER candidate for VIP .60)."
+  type        = string
+  default     = "00:50:56:3F:00:84"
+}
+variable "mac_oltp_haproxy_pg_2_primary" {
+  description = "haproxy-pg-2 primary NIC (VMnet11). Pinned to 192.168.70.68 (HAProxy LB; keepalived BACKUP for VIP .60)."
+  type        = string
+  default     = "00:50:56:3F:00:85"
+}
+
 # ─── Phase 0.D.3 — Vault LDAP/AD integration (foundation side) ───────────
 # Foundation's role is to create the AD objects Vault needs:
 #   - svc-vault-ldap     : bind account for auth/ldap + secrets/ldap engines

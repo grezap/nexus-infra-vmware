@@ -884,3 +884,59 @@ variable "vault_agent_percona_creds_dir" {
   type        = string
   default     = "$HOME/.nexus"
 }
+
+# ─── Phase 0.G.4 -- Patroni PostgreSQL HA (PKI + KV + AppRoles + sidecars) ─
+# 8 VMs total: 3 patroni nodes (pg-primary, pg-replica-1, pg-replica-2) + 3
+# etcd nodes (etcd-1, etcd-2, etcd-3) for Patroni DCS + 2 haproxy nodes
+# (haproxy-pg-1/-2) HA pair for the :5432 LB with VRRP-floated VIP .60.
+# One shared PKI role; 8 role-differentiated policies + AppRoles. 5 KV-v2
+# secrets sticky-seeded for the cluster:
+#   - etcd-root-password               (etcd root user; needed by 3 etcd)
+#   - patroni-rest-password            (Patroni REST :8008 HTTP basic; needed
+#                                        by 3 patroni + 3 etcd + 1 haproxy)
+#   - postgres-superuser-password      (PG `postgres` role; needed by 3 patroni)
+#   - postgres-replication-password    (PG `replicator` role for streaming
+#                                        replication; needed by 3 patroni)
+#   - haproxy-stats-password           (HAProxy :7000 stats UI; needed by 1 hp)
+
+variable "enable_patroni_pki" {
+  description = "Phase 0.G.4 toggle: create the pki_int/roles/patroni-server PKI role used by the 3 Patroni + 3 etcd + 2 HAProxy Vault Agents to issue TLS leaf certs (server+client EKU, 90-day TTL). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_pki_patroni_role_name" {
+  description = "Name of the PKI role under pki_int/ for Patroni-tier leaf certs (covers Patroni nodes + etcd nodes + HAProxy HA pair). Used by nexus-infra-oltp's 0.G.4 mTLS overlay. Default 'patroni-server'. The role's allowed_domains must cover every pg-{primary,replica-1,replica-2} + etcd-{1,2,3} + haproxy-pg-{1,2} hostname + <host>.nexus.lab + <host>.patroni.nexus.lab + localhost; all 8 nodes share the one role. HAProxy nodes additionally carry the VIP 192.168.70.60 in their cert IP-SANs (set by the oltp env tls overlay) so handshakes against the floating VIP validate regardless of which haproxy currently holds it. Server+client EKU because Patroni nodes both listen (PG on 5432, Patroni REST on 8008) AND dial peers (streaming replication mesh + REST cross-calls); etcd nodes both listen (2379 client + 2380 peer) AND dial peers (raft mesh); HAProxy nodes both listen (5432 LB) AND dial Patroni REST for health probes."
+  type        = string
+  default     = "patroni-server"
+}
+
+variable "enable_patroni_cluster_creds_seed" {
+  description = "Phase 0.G.4 toggle: sticky-seed the 5 Patroni-tier cluster creds in Vault KV (nexus/oltp/patroni/{etcd-root,patroni-rest,postgres-superuser,postgres-replication,haproxy-stats}-password). Each is a random 32-char password generated server-side via `openssl rand -hex 16` if absent. Sticky: operator rotation via `vault kv put` is preserved. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_patroni_agent_setup" {
+  description = "Master toggle for the 8 Patroni-tier Vault Agent setup primitives (policies + AppRoles). Default true. Set false on a deploy that doesn't bring up the Patroni cluster (e.g. iterating on a different 0.G.* tier alone)."
+  type        = bool
+  default     = true
+}
+
+variable "enable_patroni_agent_policies" {
+  description = "Toggle: write the 8 narrow Vault policies (nexus-agent-pg-{primary,replica-1,replica-2} + nexus-agent-etcd-{1,2,3} + nexus-agent-haproxy-pg-{1,2}). Patroni node policies grant PKI issue + KV read on etcd-root/patroni-rest/postgres-superuser/postgres-replication. etcd node policies grant PKI issue + KV read on etcd-root/patroni-rest. HAProxy policies grant PKI issue + KV read on patroni-rest/haproxy-stats. All 8 get token self-lookup/renew. Default true (gated under enable_patroni_agent_setup). Idempotent overwrite."
+  type        = bool
+  default     = true
+}
+
+variable "enable_patroni_agent_approles" {
+  description = "Toggle: provision the 8 AppRoles + per-host JSON sidecars on the build host. Default true (gated under enable_patroni_agent_setup). role-id is stable; secret-id is regenerated per security apply."
+  type        = bool
+  default     = true
+}
+
+variable "vault_agent_patroni_creds_dir" {
+  description = "Directory on the build host where the 8 vault-agent-oltp-patroni-<host>.json sidecars are written (3 patroni + 3 etcd + 2 haproxy HA pair). The `oltp-patroni-` filename prefix mirrors the 0.G.1/0.G.2/0.G.3 `oltp-redis-`/`oltp-mongo-`/`oltp-percona-` pattern -- namespaces per tier+cluster so future 0.G.* oltp clusters share $HOME/.nexus without collisions. nexus-infra-oltp's 0.G.4 role-overlay-patroni-vault-agents.tf reads these."
+  type        = string
+  default     = "$HOME/.nexus"
+}
