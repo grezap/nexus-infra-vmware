@@ -53,7 +53,7 @@ resource "null_resource" "dc_gmsa_sqlserver" {
     dc_ip           = "192.168.70.240"
     gmsa_name       = "gmsa-sql-engine"
     consumers_group = "nexus-sql-cluster-members"
-    gmsa_overlay_v  = "1" # v1 (0.G.7) = initial gmsa-sql-engine + nexus-sql-cluster-members group; group is empty at security-apply time; populated by oltp env's domain-join overlay.
+    gmsa_overlay_v  = "2" # v2 (0.G.7 ratify 2026-05-20) = trimmed remote PS script to dodge Windows cmdline limit on `powershell -EncodedCommand` (transient #2; handbook §3.5). v1 was verbose multi-step with try/catch -- exceeded 8191 chars when UTF-16+base64'd.
   }
 
   provisioner "local-exec" {
@@ -66,68 +66,18 @@ resource "null_resource" "dc_gmsa_sqlserver" {
 
       Write-Host "[dc-gmsa-sqlserver] ensuring AD group $consumersGrp + GMSA $gmsa exist on dc-nexus ($ip)"
 
-      # The remote script runs on dc-nexus as nexusadmin (who is a member
-      # of Enterprise Admins per 0.D.5 role-overlay-dc-nexusadmin-membership).
-      # Both creates are idempotent via Get-ADGroup / Get-ADServiceAccount
-      # ErrorAction SilentlyContinue probes.
+      # Compact remote script -- the verbose version hit Windows' 8191-char
+      # cmdline limit on `powershell -EncodedCommand <base64>` (UTF-16
+      # encoding doubles the byte count, base64 adds ~33%, so a 4KB script
+      # source becomes a ~10KB cmdline arg). Transient #2 at 0.G.7 ratify
+      # 2026-05-20 (handbook §3.5). Fix: trim to the minimal Group + GMSA
+      # creates; rely on the standalone KDS probe in §0 pre-flight rather
+      # than re-checking inline.
       $remote = @"
-        Import-Module ActiveDirectory;
-        `$ErrorActionPreference = 'Stop';
-
-        # ── Step 1: nexus-sql-cluster-members AD group in OU=Groups ──────
-        `$existingGroup = Get-ADGroup -Filter 'Name -eq ''nexus-sql-cluster-members''' -ErrorAction SilentlyContinue;
-        if (`$existingGroup) {
-          Write-Output ('GROUP_PRESENT: ' + `$existingGroup.DistinguishedName);
-        } else {
-          New-ADGroup -Name 'nexus-sql-cluster-members' ``
-            -GroupScope DomainLocal ``
-            -GroupCategory Security ``
-            -Path 'OU=Groups,DC=nexus,DC=lab' ``
-            -Description 'SQL Server FCI+AG (Phase 0.G.7) cluster member computer accounts -- PrincipalsAllowedToRetrieveManagedPassword for gmsa-sql-engine. Populated by oltp env role-overlay-sqlserver-domain-join.tf after node domain-join.';
-          Write-Output ('GROUP_CREATED: CN=nexus-sql-cluster-members,OU=Groups,DC=nexus,DC=lab');
-        }
-
-        # ── Step 2: KDS root key probe (warn but proceed; manual ops if
-        #    Server 2025 + missing per memory feedback) ──
-        `$kds = Get-KdsRootKey -ErrorAction SilentlyContinue;
-        if (-not `$kds -or `$kds.Count -eq 0) {
-          Write-Output 'KDS_ROOT_MISSING: GMSA creation may succeed but Test-ADServiceAccount + Install-ADServiceAccount will fail until manual add. RDP dc-nexus + Add-KdsRootKey -EffectiveTime ((Get-Date).AddHours(-10))';
-        } else {
-          Write-Output ('KDS_ROOT_PRESENT: ' + `$kds[0].KeyId);
-        }
-
-        # ── Step 3: gmsa-sql-engine GMSA in OU=ServiceAccounts ──────────
-        `$existingGmsa = Get-ADServiceAccount -Filter 'Name -eq ''gmsa-sql-engine''' -ErrorAction SilentlyContinue;
-        if (`$existingGmsa) {
-          Write-Output ('GMSA_PRESENT: ' + `$existingGmsa.DistinguishedName);
-          # Re-set PrincipalsAllowedToRetrieveManagedPassword to ensure the
-          # consumer group is the (one) allowed retriever -- idempotent.
-          Set-ADServiceAccount -Identity 'gmsa-sql-engine' ``
-            -PrincipalsAllowedToRetrieveManagedPassword 'nexus-sql-cluster-members';
-          Write-Output ('GMSA_RECONFIGURED: PrincipalsAllowedToRetrieveManagedPassword = nexus-sql-cluster-members');
-        } else {
-          # New-ADServiceAccount requires the DNSHostName parameter even for
-          # GMSAs that are service-account-only (the sAMAccountName itself
-          # ends in `$`; DNSHostName is what services advertise). Use the
-          # FCI virtual server name as the DNS hostname -- it's the
-          # canonical SQL identity that clients connect to.
-          try {
-            New-ADServiceAccount -Name 'gmsa-sql-engine' ``
-              -DNSHostName 'sql-fci-cluster.nexus.lab' ``
-              -PrincipalsAllowedToRetrieveManagedPassword 'nexus-sql-cluster-members' ``
-              -Path 'OU=ServiceAccounts,DC=nexus,DC=lab' ``
-              -Description 'SQL Server service identity for the 02-sqlserver tier FCI+AG cluster (Phase 0.G.7). Consumed by sql-fci-1/2 + sql-ag-rep-1/2 after they join nexus-sql-cluster-members. Password rotated by AD every 30 days.' ``
-              -ManagedPasswordIntervalInDays 30;
-            Write-Output ('GMSA_CREATED: CN=gmsa-sql-engine,OU=ServiceAccounts,DC=nexus,DC=lab');
-          } catch {
-            Write-Output ('GMSA_CREATE_FAILED: ' + `$_.Exception.Message);
-            if (`$_.Exception.Message -match 'Key does not exist' -or `$_.Exception.Message -match 'KDS') {
-              Write-Output 'GMSA_CREATE_FAILED_REASON: KDS root key missing (see KDS_ROOT_MISSING above). Manually add the key via RDP then re-apply.';
-              exit 1;
-            }
-            throw;
-          }
-        }
+Import-Module ActiveDirectory; `$ErrorActionPreference='Stop';
+if (-not (Get-ADGroup -Filter "Name -eq 'nexus-sql-cluster-members'" -EA 0)) { New-ADGroup -Name 'nexus-sql-cluster-members' -GroupScope DomainLocal -GroupCategory Security -Path 'OU=Groups,DC=nexus,DC=lab' -Description 'Phase 0.G.7 SQL cluster members'; Write-Output 'GROUP_CREATED' } else { Write-Output 'GROUP_PRESENT' }
+`$g = Get-ADServiceAccount -Filter "Name -eq 'gmsa-sql-engine'" -EA 0
+if (`$g) { Set-ADServiceAccount -Identity 'gmsa-sql-engine' -PrincipalsAllowedToRetrieveManagedPassword 'nexus-sql-cluster-members'; Write-Output 'GMSA_RECONFIGURED' } else { New-ADServiceAccount -Name 'gmsa-sql-engine' -DNSHostName 'sql-fci-cluster.nexus.lab' -PrincipalsAllowedToRetrieveManagedPassword 'nexus-sql-cluster-members' -Path 'OU=ServiceAccounts,DC=nexus,DC=lab' -ManagedPasswordIntervalInDays 30; Write-Output 'GMSA_CREATED' }
 "@
       $bytes  = [System.Text.Encoding]::Unicode.GetBytes($remote)
       $b64    = [Convert]::ToBase64String($bytes)
@@ -137,12 +87,11 @@ resource "null_resource" "dc_gmsa_sqlserver" {
       if ($rc -ne 0) {
         throw "[dc-gmsa-sqlserver] script failed (rc=$rc)"
       }
-      if ($output -match 'GMSA_CREATE_FAILED_REASON: KDS root key missing') {
-        throw "[dc-gmsa-sqlserver] GMSA creation blocked by missing KDS root key. Manual ops required (see operator output above + memory/feedback_kds_rootkey_server2025_ssh.md)."
-      }
-      if ($output -match 'KDS_ROOT_MISSING') {
-        Write-Host "[dc-gmsa-sqlserver] WARN: KDS root key is absent on dc-nexus. GMSA gmsa-sql-engine may exist as an AD object but Test-ADServiceAccount will FAIL on the 4 SQL nodes until manual add. RDP dc-nexus as Administrator + run: Add-KdsRootKey -EffectiveTime ((Get-Date).AddHours(-10))"
-      }
+      # KDS root key probe is in §0 pre-flight (handbook s3.5); the
+      # standalone probe at top-of-handbook is the canonical place to
+      # check, not inline in this overlay. If the key is missing,
+      # New-ADServiceAccount throws + rc!=0; the script_failed check
+      # above surfaces that.
     PWSH
   }
 }

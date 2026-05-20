@@ -83,7 +83,7 @@ resource "null_resource" "vault_sqlserver_cluster_creds_seed" {
   triggers = {
     post_init_id           = null_resource.vault_post_init[0].id
     kv_paths               = "nexus/oltp/sqlserver/{sa,ag-endpoint-cert,wsfc-cluster-admin,iscsi-chap-secret,listener-cert}-password + gmsa-info"
-    sqlserver_creds_seed_v = "1" # v1 (0.G.7) = initial 5 sticky-seeded 32-char hex creds + 1 JSON pointer (gmsa-info).
+    sqlserver_creds_seed_v = "2" # v2 (0.G.7 ratify 2026-05-20) = relax CHAP marker regex `\s*$` to tolerate CRLF from SSH-piped vault-1 output (feedback_pwsh_ssh_stdin_cr_injection.md + feedback_smoke_gate_probe_robustness.md). v1 = initial seeds.
   }
 
   depends_on = [null_resource.vault_post_init]
@@ -168,8 +168,15 @@ echo "[sqlserver-creds-seed] all 5 cluster creds + 1 gmsa pointer present in nex
       # sidecar at $HOME\.nexus\iscsi-sqlfci-chap.json. The foundation env's
       # iSCSI target overlay reads this. Filter marker line out of operator-
       # visible output (keep secret out of operator's scrollback).
-      $chapMatch = $output -match '(?m)^ISCSI_CHAP_SECRET_FOR_SIDECAR=([0-9a-f]{32})$'
+      # Per memory/feedback_smoke_gate_probe_robustness.md + feedback_pwsh_
+      # ssh_stdin_cr_injection.md: SSH-piped output ends each line with CRLF
+      # on Windows; PS regex `(?m)^...$` matches before `\n` but `[0-9a-f]
+      # {32}$` doesn't allow trailing `\r`. Use `\s*$` to tolerate CR/spaces.
+      # First transient surfaced at 0.G.7 ratification 2026-05-20.
+      $chapMatch = $output -match '(?m)^ISCSI_CHAP_SECRET_FOR_SIDECAR=([0-9a-f]{32})\s*$'
       if (-not $chapMatch) {
+        Write-Host "[sqlserver-creds-seed] script output for diag:"
+        Write-Host $output
         throw "[sqlserver-creds-seed] failed to parse CHAP secret marker from script output"
       }
       $chapSecret = $matches[1]
