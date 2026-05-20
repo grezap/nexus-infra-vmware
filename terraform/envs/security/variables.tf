@@ -1018,3 +1018,31 @@ variable "iscsi_sqlfci_initiator_ips" {
   type        = list(string)
   default     = ["192.168.70.11", "192.168.70.12"]
 }
+
+# ─── Phase 0.G.7 close-out: nexusadmin creds sidecar ─────────────────────
+#
+# Transient #22 at 0.G.7 ratify 2026-05-21: the oltp env's role-overlay-
+# sqlserver-domain-join.tf needs the nexusadmin AD-user password but
+# vault-ad-bind.json holds the LDAP bind creds (bindpass for svc-vault-ldap),
+# NOT the nexusadmin password. The fix is a second sidecar
+# ($HOME/.nexus/nexusadmin-credentials.json) populated by this env reading
+# from Vault KV at nexus/foundation/identity/nexusadmin. See
+# role-overlay-vault-nexusadmin-creds-seed.tf for the writer.
+
+variable "enable_nexusadmin_creds_sidecar" {
+  description = "Phase 0.G.7 toggle: write the nexusadmin domain-user credentials to a host-side sidecar at $HOME/.nexus/nexusadmin-credentials.json (consumed by nexus-infra-oltp's oltp-sqlserver env's role-overlay-sqlserver-domain-join.tf for Add-Computer -Credential). Reads from Vault KV at nexus/foundation/identity/nexusadmin (seeded by role-overlay-vault-foundation-seed.tf). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "nexusadmin_creds_sidecar_path" {
+  description = "Absolute path on the build host where the nexusadmin domain-user credentials JSON gets written. mode 0600 via icacls. Same $HOME/.nexus/ home as the other 3 sidecars (vault-init.json + vault-ad-bind.json + iscsi-sqlfci-chap.json)."
+  type        = string
+  default     = "$HOME/.nexus/nexusadmin-credentials.json"
+}
+
+variable "ad_domain_name" {
+  description = "AD forest DNS domain. Default `nexus.lab` matches foundation env's var.ad_domain. Used by role-overlay-vault-nexusadmin-creds-seed.tf to populate the `domain` + `domain_user_upn` fields in the sidecar."
+  type        = string
+  default     = "nexus.lab"
+}
