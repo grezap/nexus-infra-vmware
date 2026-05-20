@@ -68,7 +68,7 @@ resource "null_resource" "gateway_iscsi_sqlfci" {
     chap_username      = var.iscsi_sqlfci_chap_username
     initiator_ip_fci_1 = "192.168.70.11"
     initiator_ip_fci_2 = "192.168.70.12"
-    iscsi_target_v     = "1" # v1 (0.G.7) = initial target export with 1 LUN + CHAP + per-IP ACL for FCI pair.
+    iscsi_target_v     = "4" # v4 (0.G.7 ratify 2026-05-20) = simplify tgt verify probe to grep backing-store path (transient #6: PS+bash double-escape mangled awk's $0 reference). v3 = fix nftables anchor (transient #5) + tgt-admin->systemctl restart (transient #4). v2 = remove backticks (transient #3). v1 = initial.
   }
 
   provisioner "local-exec" {
@@ -118,7 +118,7 @@ resource "null_resource" "gateway_iscsi_sqlfci" {
         fi
         # Disable the default systemd unit's auto-config from /etc/tgt/conf.d
         # since we manage that file ourselves. tgt service still starts; the
-        # explicit `tgt-admin --update ALL` after our config-write is what
+        # explicit 'tgt-admin --update ALL' after our config-write is what
         # actually loads our target into the running daemon.
         sudo systemctl enable tgt.service
         sudo systemctl is-active --quiet tgt.service || sudo systemctl start tgt.service
@@ -133,20 +133,24 @@ resource "null_resource" "gateway_iscsi_sqlfci" {
         fi
 
         # nftables: allow tcp/3260 from FCI initiators only. Patch the
-        # gateway's /etc/nftables.conf in-place via sed; nftables_runtime_add
-        # _after_drop (feedback_nftables_runtime_add_after_drop.md) tells us
-        # `nft add rule` lands AFTER the canonical drop -- so we must edit
-        # the conf-file + reload via `nft -f`, not runtime-add.
-        if ! sudo grep -q 'tcp dport 3260 # sql-fci' /etc/nftables.conf; then
+        # gateway's /etc/nftables.conf in-place; runtime 'nft add rule'
+        # lands AFTER the canonical 'counter drop' (per
+        # feedback_nftables_runtime_add_after_drop.md), so we edit the
+        # conf-file + reload via 'nft -f'. Pattern mirrors the NFSv4
+        # Portainer rules from 0.E.4a (iifname "nic1" ip saddr X tcp dport
+        # Y accept comment Z) -- insert just before the 'counter drop' line
+        # in the input chain. Transient #5 at 0.G.7 ratify: anchor pattern
+        # 'ct state established,related accept' did NOT match the actual
+        # gateway grammar 'ct state { established, related } accept'; using
+        # 'counter drop' instead (single-occurrence + last-line-in-chain).
+        if ! sudo grep -q 'sql-fci-1' /etc/nftables.conf; then
           sudo sed -i '/# === iSCSI for SQL FCI ===/,/# === end iSCSI ===/d' /etc/nftables.conf
-          # Insert the rule block immediately before the established/related
-          # accept line (which all our rule blocks sit above).
           sudo awk '
             BEGIN { inserted=0 }
-            /ct state established,related accept/ && inserted==0 {
+            /^        counter drop$/ && inserted==0 {
               print "        # === iSCSI for SQL FCI ==="
-              print "        ip saddr 192.168.70.11 tcp dport 3260 accept comment \"tcp dport 3260 # sql-fci-1\""
-              print "        ip saddr 192.168.70.12 tcp dport 3260 accept comment \"tcp dport 3260 # sql-fci-2\""
+              print "        iifname \"nic1\" ip saddr 192.168.70.11 tcp dport 3260 accept comment \"iSCSI from sql-fci-1\""
+              print "        iifname \"nic1\" ip saddr 192.168.70.12 tcp dport 3260 accept comment \"iSCSI from sql-fci-2\""
               print "        # === end iSCSI ==="
               inserted=1
             }
@@ -189,15 +193,22 @@ resource "null_resource" "gateway_iscsi_sqlfci" {
       $writeCmd = @"
         echo '$confLines' | sudo tee /etc/tgt/conf.d/sql-fci.conf > /dev/null
         sudo chmod 0640 /etc/tgt/conf.d/sql-fci.conf
-        # tgt-admin --update reloads in-place; --force handles conflicts with
-        # already-running targets. If reload fails (rare; only if a session
-        # is already mounted), fall back to a full systemctl restart.
-        if ! sudo tgt-admin --update ALL --force 2>/dev/null; then
-          echo "[gateway iscsi-sqlfci] tgt-admin --update failed, falling back to restart..."
-          sudo systemctl restart tgt.service
-        fi
-        # Verify the target is exported.
-        sudo tgtadm --mode target --op show | grep -q '$targetIqn' && echo OK
+        # Transient #4 at 0.G.7 ratify: tgt-admin --update on an existing
+        # target does NOT attach the backing-store from a freshly-written
+        # conf -- the target is loaded by tgt-init at service start. The
+        # only reliable way to pick up new <target>/backing-store/CHAP/ACL
+        # entries is systemctl restart tgt.service. Restart is fast (~1s);
+        # any active iSCSI sessions reconnect transparently on the next
+        # initiator probe.
+        sudo systemctl restart tgt.service
+        sleep 2
+        # Verify the backing-store LUN is actually attached to the target.
+        # Mere IQN presence isn't enough (tgt creates a controller LUN 0
+        # without backing on bare service start; the real disk LUN 1 with
+        # /srv/iscsi/sql-fci-shared.img backing only attaches after the
+        # conf file is loaded by service restart). The backing-file path
+        # is unique enough to be the canonical verify probe.
+        sudo tgtadm --mode target --op show | grep -q '/srv/iscsi/sql-fci-shared.img' && echo OK
 "@
       Write-Host "[gateway iscsi-sqlfci] writing tgt config + reloading target..."
       ssh nexusadmin@$gw $writeCmd
