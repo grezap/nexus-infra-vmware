@@ -61,7 +61,18 @@ locals {
 }
 
 resource "null_resource" "dc_nexus_vault_agent" {
-  count = var.enable_dc_promotion && local.vault_agent_render_targets["dc-nexus"].enabled ? 1 : 0
+  # fileexists gate (cold-rebuild fleet audit 2026-05-22): the creds sidecar is
+  # written by the SECURITY env (applies after foundation on from-zero). Gating
+  # count on the sidecar's existence means: first foundation pass skips cleanly
+  # (count=0); after security seeds it, the second foundation pass installs the
+  # agent. Without this gate the overlay's in-script `exit 0` skip would mark
+  # the resource CREATED on pass 1 + never re-run on pass 2 (the agent would
+  # never install). Re-evaluated every plan.
+  count = (
+    var.enable_dc_promotion
+    && local.vault_agent_render_targets["dc-nexus"].enabled
+    && fileexists(local.vault_agent_render_targets["dc-nexus"].creds_file)
+  ) ? 1 : 0
 
   triggers = {
     dc_verify_id    = null_resource.dc_nexus_verify[0].id
@@ -81,7 +92,13 @@ resource "null_resource" "dc_nexus_vault_agent" {
 }
 
 resource "null_resource" "jumpbox_vault_agent" {
-  count = var.enable_dc_promotion && var.enable_jumpbox_domain_join && local.vault_agent_render_targets["nexus-jumpbox"].enabled ? 1 : 0
+  # fileexists gate -- see dc_nexus_vault_agent (cold-rebuild fleet audit).
+  count = (
+    var.enable_dc_promotion
+    && var.enable_jumpbox_domain_join
+    && local.vault_agent_render_targets["nexus-jumpbox"].enabled
+    && fileexists(local.vault_agent_render_targets["nexus-jumpbox"].creds_file)
+  ) ? 1 : 0
 
   triggers = {
     jumpbox_verify_id = null_resource.jumpbox_verify[0].id

@@ -52,7 +52,17 @@
  */
 
 resource "null_resource" "gateway_iscsi_sqlfci" {
-  count = var.enable_iscsi_target_sqlfci ? 1 : 0
+  # Gate on the CHAP sidecar's EXISTENCE (cold-rebuild fleet audit 2026-05-22):
+  # the sidecar is written by the SECURITY env, which applies AFTER this
+  # foundation env on a from-zero rebuild. fileexists() is re-evaluated each
+  # plan, so: first foundation pass (no sidecar) -> count=0 (skip cleanly);
+  # security seeds the sidecar; second foundation pass -> count=1 (provision
+  # the iSCSI target). This is the canonical foundation->security->foundation
+  # bootstrapping order (handbook §D), made hands-off + crash-free.
+  count = (
+    var.enable_iscsi_target_sqlfci
+    && fileexists(pathexpand("~/.nexus/iscsi-sqlfci-chap.json"))
+  ) ? 1 : 0
 
   # depends_on the dhcp reservations because the iSCSI ACL references the FCI
   # nodes' canonical IPs (.70.11/.12) which only become permanent once the
@@ -87,8 +97,19 @@ resource "null_resource" "gateway_iscsi_sqlfci" {
       # security env's role-overlay-vault-sqlserver-cluster-creds-seed.tf
       # after it pulls the value from Vault KV. This indirection is the
       # canonical pre-Phase-0.E pattern (same as vault-ad-bind.json shape).
+      # BEST-EFFORT (cold-rebuild fleet audit 2026-05-22): the CHAP sidecar is
+      # written by the SECURITY env (role-overlay-vault-sqlserver-cluster-creds-
+      # seed.tf), which applies AFTER this foundation env on a from-zero
+      # rebuild. So on the FIRST foundation apply the sidecar legitimately
+      # doesn't exist yet -- THROWING here would crash the whole foundation
+      # apply over a resource the SQL tier won't need until much later. Instead
+      # skip gracefully (like role-overlay-windows-vault-agent.tf does for its
+      # security-written sidecar); the iSCSI target gets provisioned on the
+      # next foundation apply after security has seeded the sidecar. Documented
+      # foundation->security->foundation order in handbook §D.
       if (-not (Test-Path $chapSecretFile)) {
-        throw "[gateway iscsi-sqlfci] CHAP secret sidecar not found at $chapSecretFile -- run security.ps1 apply first (writes via role-overlay-vault-sqlserver-cluster-creds-seed.tf)."
+        Write-Host "[gateway iscsi-sqlfci] CHAP secret sidecar not found at $chapSecretFile -- skipping (security env writes it; re-run foundation apply after security). Not an error on the first from-zero pass."
+        exit 0
       }
       $chapSecret = (Get-Content $chapSecretFile -Raw | ConvertFrom-Json).chap_secret
       if (-not $chapSecret -or $chapSecret.Length -lt 12) {

@@ -64,7 +64,15 @@ resource "null_resource" "jumpbox_domain_join" {
   # The DC must be alive before we can join. dc_nexus_verify is the last
   # resource in the dc-nexus chain and only exists when enable_dc_promotion
   # is true -- so this overlay implicitly requires both flags.
-  depends_on = [null_resource.dc_nexus_verify]
+  #
+  # ALSO depend on gateway_dns_forward (cold-rebuild fleet audit 2026-05-22):
+  # the jumpbox uses the gateway (.1) as its DHCP-issued DNS, which forwards
+  # nexus.lab AD queries to dc-nexus only AFTER role-overlay-gateway-dns.tf
+  # drops /etc/dnsmasq.d/foundation-nexus-lab.conf. Without this edge,
+  # Add-Computer -DomainName nexus.lab can run before the forward exists +
+  # fail to resolve the DC's _ldap._tcp SRV records (the v7 failure class
+  # recorded in role-overlay-gateway-dns.tf). Ordering it here closes the race.
+  depends_on = [null_resource.dc_nexus_verify, null_resource.gateway_dns_forward]
 
   provisioner "local-exec" {
     when        = create
