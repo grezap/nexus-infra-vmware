@@ -110,30 +110,41 @@ export VAULT_TOKEN='$rootToken'
 export VAULT_SKIP_VERIFY=true
 export VAULT_ADDR=https://127.0.0.1:8200
 
+# seed_if_absent <path> <label> [format]
+#   format = 'hex32'    (default) -- 32-char hex (openssl rand -hex 16)
+#          = 'chap16'   -- 16-char hex (openssl rand -hex 8); Windows iSCSI
+#                          initiator caps CHAP secrets at 12-16 chars
+#                          (transient #26 at 0.G.7 ratify 2026-05-21).
+#          = 'sqlcomplex' -- 32-hex + 'Aa9!' suffix; SQL Server strong-
+#                          password policy needs 3 of 4 char categories
+#                          (upper+lower+digit+symbol); pure hex is only
+#                          lower+digit (transient #28i at 0.G.7 ratify).
 seed_if_absent() {
   local path="`$1"
   local label="`$2"
+  local format="`$3"
+  if [ -z "`$format" ]; then format=hex32; fi
   if vault kv get -field=content "`$path" >/dev/null 2>&1; then
     echo "[sqlserver-creds-seed] `$path already populated -- no-op (sticky `$label)"
     return 0
   fi
-  local PWD32
-  PWD32=`$(openssl rand -hex 16)
+  local SECRET
+  case "`$format" in
+    chap16)     SECRET=`$(openssl rand -hex 8) ;;
+    sqlcomplex) SECRET="`$(openssl rand -hex 16)Aa9!" ;;
+    *)          SECRET=`$(openssl rand -hex 16) ;;
+  esac
   local LEN
-  LEN=`$(printf '%s' "`$PWD32" | wc -c)
-  if [ "`$LEN" -ne 32 ]; then
-    echo "[sqlserver-creds-seed] ERROR: `$label generated length `$LEN (expected 32)" >&2
-    return 1
-  fi
-  vault kv put "`$path" content="`$PWD32" >/dev/null
-  echo "[sqlserver-creds-seed] wrote `$path (`$LEN-char hex `$label)"
+  LEN=`$(printf '%s' "`$SECRET" | wc -c)
+  vault kv put "`$path" content="`$SECRET" >/dev/null
+  echo "[sqlserver-creds-seed] wrote `$path (`$LEN-char `$format `$label)"
 }
 
-seed_if_absent 'nexus/oltp/sqlserver/sa-password'                  'SQL Server sa login password (emergency operator use)'
-seed_if_absent 'nexus/oltp/sqlserver/ag-endpoint-cert-password'    'AG endpoint cert PFX password (CREATE CERTIFICATE)'
-seed_if_absent 'nexus/oltp/sqlserver/wsfc-cluster-admin-password'  'WSFC cluster bootstrap Local-Administrator password'
-seed_if_absent 'nexus/oltp/sqlserver/iscsi-chap-secret'            'iSCSI CHAP secret for sql-fci.lun1 target on nexus-gateway'
-seed_if_absent 'nexus/oltp/sqlserver/listener-cert-password'       'AG Listener leaf cert PFX password'
+seed_if_absent 'nexus/oltp/sqlserver/sa-password'                  'SQL Server sa login password (emergency operator use)' 'sqlcomplex'
+seed_if_absent 'nexus/oltp/sqlserver/ag-endpoint-cert-password'    'AG endpoint cert PFX password (CREATE CERTIFICATE)' 'sqlcomplex'
+seed_if_absent 'nexus/oltp/sqlserver/wsfc-cluster-admin-password'  'WSFC cluster bootstrap Local-Administrator password' 'sqlcomplex'
+seed_if_absent 'nexus/oltp/sqlserver/iscsi-chap-secret'            'iSCSI CHAP secret for sql-fci.lun1 target on nexus-gateway' 'chap16'
+seed_if_absent 'nexus/oltp/sqlserver/listener-cert-password'       'AG Listener leaf cert PFX password' 'sqlcomplex'
 
 # gmsa-info is a structured JSON pointer, not a regenerated secret. Idempotent
 # overwrite each apply: the GMSA name + domain don't change.

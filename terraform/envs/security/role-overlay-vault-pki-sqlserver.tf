@@ -61,7 +61,7 @@ resource "null_resource" "vault_pki_sqlserver_role" {
     int_id                   = length(null_resource.vault_pki_intermediate_ca) > 0 ? null_resource.vault_pki_intermediate_ca[0].id : "disabled"
     role_name                = var.vault_pki_sqlserver_role_name
     leaf_ttl                 = var.vault_pki_leaf_ttl
-    sqlserver_role_overlay_v = "1" # v1 (0.G.7) = initial 4 SQL nodes + FCI virtual server + AG Listener = 6 identities (4 nodes + 2 VIP-anchored).
+    sqlserver_role_overlay_v = "2" # v2 (0.G.7 ratify 2026-05-21) = add `sqlfci`(+.nexus.lab/.sqlserver.nexus.lab) -- the FCI virtual server name was renamed from `sql-fci-cluster` (which collided with the WSFC cluster CNO, transient #28d) to `sqlfci`; both names kept in allowed_domains. v1 = initial 6 identities.
   }
 
   depends_on = [null_resource.vault_pki_intermediate_ca]
@@ -88,7 +88,7 @@ export VAULT_ADDR=https://127.0.0.1:8200
 
 echo "[pki-sqlserver] writing pki_int/roles/$roleName (idempotent overwrite)"
 vault write pki_int/roles/$roleName \
-  allowed_domains='nexus.lab,sqlserver.nexus.lab,sql-fci-1,sql-fci-2,sql-ag-rep-1,sql-ag-rep-2,sql-fci-cluster,sql-ag-listener,sql-fci-1.nexus.lab,sql-fci-2.nexus.lab,sql-ag-rep-1.nexus.lab,sql-ag-rep-2.nexus.lab,sql-fci-cluster.nexus.lab,sql-ag-listener.nexus.lab,sql-fci-1.sqlserver.nexus.lab,sql-fci-2.sqlserver.nexus.lab,sql-ag-rep-1.sqlserver.nexus.lab,sql-ag-rep-2.sqlserver.nexus.lab,sql-fci-cluster.sqlserver.nexus.lab,sql-ag-listener.sqlserver.nexus.lab,localhost' \
+  allowed_domains='nexus.lab,sqlserver.nexus.lab,sql-fci-1,sql-fci-2,sql-ag-rep-1,sql-ag-rep-2,sql-fci-cluster,sqlfci,sql-ag-listener,sql-fci-1.nexus.lab,sql-fci-2.nexus.lab,sql-ag-rep-1.nexus.lab,sql-ag-rep-2.nexus.lab,sql-fci-cluster.nexus.lab,sqlfci.nexus.lab,sql-ag-listener.nexus.lab,sql-fci-1.sqlserver.nexus.lab,sql-fci-2.sqlserver.nexus.lab,sql-ag-rep-1.sqlserver.nexus.lab,sql-ag-rep-2.sqlserver.nexus.lab,sql-fci-cluster.sqlserver.nexus.lab,sqlfci.sqlserver.nexus.lab,sql-ag-listener.sqlserver.nexus.lab,localhost' \
   allow_subdomains=false \
   allow_bare_domains=true \
   allow_glob_domains=false \
