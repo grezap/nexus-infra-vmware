@@ -54,11 +54,11 @@ resource "null_resource" "vault_nexusadmin_creds_sidecar" {
   count = var.enable_vault_cluster && var.enable_vault_init && var.enable_nexusadmin_creds_sidecar ? 1 : 0
 
   triggers = {
-    post_init_id              = null_resource.vault_post_init[0].id
-    foundation_seed_id        = length(null_resource.vault_foundation_seed) > 0 ? null_resource.vault_foundation_seed[0].id : "disabled"
-    sidecar_path              = var.nexusadmin_creds_sidecar_path
-    kv_path                   = "nexus/foundation/identity/nexusadmin"
-    nexusadmin_sidecar_v      = "1" # v1 (0.G.7 ratify 2026-05-21) = transient #22 fix.
+    post_init_id         = null_resource.vault_post_init[0].id
+    foundation_seed_id   = length(null_resource.vault_foundation_seed) > 0 ? null_resource.vault_foundation_seed[0].id : "disabled"
+    sidecar_path         = var.nexusadmin_creds_sidecar_path
+    kv_path              = "nexus/foundation/identity/nexusadmin"
+    nexusadmin_sidecar_v = "1" # v1 (0.G.7 ratify 2026-05-21) = transient #22 fix.
   }
 
   depends_on = [
