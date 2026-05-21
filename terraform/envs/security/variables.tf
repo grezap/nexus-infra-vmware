@@ -1046,3 +1046,9 @@ variable "ad_domain_name" {
   type        = string
   default     = "nexus.lab"
 }
+
+variable "ad_netbios_name" {
+  description = "AD forest NETBIOS name (legacy short form). Default `NEXUS` matches foundation env's var.ad_netbios. Used by role-overlay-vault-nexusadmin-creds-seed.tf to populate the `netbios` field in the sidecar -- consumed by Add-Computer in nexus-infra-oltp's role-overlay-sqlserver-domain-join.tf because `NEXUS\\nexusadmin` works (the canonical NETBIOS form) but `nexus.lab\\nexusadmin` fails with Win32 error 2202 (transient #24 at 0.G.7 ratify 2026-05-21)."
+  type        = string
+  default     = "NEXUS"
+}

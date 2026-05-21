@@ -147,6 +147,7 @@ echo "[nexusadmin-creds-sidecar] fetched username + password (lengths: u=`$(prin
         username        = $nexusUser
         password        = $nexusPwd
         domain          = '${var.ad_domain_name}'
+        netbios         = '${var.ad_netbios_name}'
         domain_user_upn = "$nexusUser@${var.ad_domain_name}"
         generated_at    = (Get-Date -Format 'o')
         source          = 'nexus/foundation/identity/nexusadmin'
