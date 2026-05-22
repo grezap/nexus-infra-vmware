@@ -962,3 +962,123 @@ variable "portainer_dns_manager_ips" {
   type        = list(string)
   default     = ["192.168.70.111", "192.168.70.112", "192.168.70.113"]
 }
+
+# ─── Phase 0.G.5/0.G.6 — Analytics tier (ClickHouse + StarRocks) ──────────
+# dhcp-host reservations (MAC block :8A-:98 after the OLTP tier's :89) +
+# round-robin DNS front doors + the NFS backup repository (ADR-0032).
+
+variable "enable_analytics_dhcp_reservations" {
+  description = "Toggle: write the analytics-tier dhcp-host reservations on nexus-gateway dnsmasq (ClickHouse :8A-:92 -> .41-.49 at 0.G.5; StarRocks :93-:98 -> .31-.36 at 0.G.6). Default true."
+  type        = bool
+  default     = true
+}
+
+# ClickHouse node primary MACs (VMnet11). MUST match nexus-infra-analytics
+# envs/analytics-clickhouse mac_ch_*_primary defaults. Block :8A-:92.
+variable "mac_analytics_ch_keeper_1_primary" {
+  type    = string
+  default = "00:50:56:3F:00:8A"
+}
+variable "mac_analytics_ch_keeper_2_primary" {
+  type    = string
+  default = "00:50:56:3F:00:8B"
+}
+variable "mac_analytics_ch_keeper_3_primary" {
+  type    = string
+  default = "00:50:56:3F:00:8C"
+}
+variable "mac_analytics_ch_shard1_rep1_primary" {
+  type    = string
+  default = "00:50:56:3F:00:8D"
+}
+variable "mac_analytics_ch_shard1_rep2_primary" {
+  type    = string
+  default = "00:50:56:3F:00:8E"
+}
+variable "mac_analytics_ch_shard2_rep1_primary" {
+  type    = string
+  default = "00:50:56:3F:00:8F"
+}
+variable "mac_analytics_ch_shard2_rep2_primary" {
+  type    = string
+  default = "00:50:56:3F:00:90"
+}
+variable "mac_analytics_ch_shard3_rep1_primary" {
+  type    = string
+  default = "00:50:56:3F:00:91"
+}
+variable "mac_analytics_ch_shard3_rep2_primary" {
+  type    = string
+  default = "00:50:56:3F:00:92"
+}
+
+# Round-robin DNS front doors (ADR-0031 -- no VIP).
+variable "enable_gateway_analytics_dns" {
+  description = "Toggle: write the analytics round-robin host-records on nexus-gateway dnsmasq (clickhouse.nexus.lab -> 6 data nodes; starrocks-fe.nexus.lab -> 3 FE when those IPs are provided). Default true."
+  type        = bool
+  default     = true
+}
+variable "analytics_clickhouse_dns_name" {
+  description = "Round-robin DNS name for the ClickHouse cluster front door. The clickhouse-server PKI leaf certs carry this in their SANs so verify-full validates whichever data node answers (ADR-0031)."
+  type        = string
+  default     = "clickhouse.nexus.lab"
+}
+variable "analytics_clickhouse_data_ips" {
+  description = "ClickHouse data-node VMnet11 IPs registered as A-records for the round-robin name (the 6 shard-replica nodes)."
+  type        = list(string)
+  default     = ["192.168.70.44", "192.168.70.45", "192.168.70.46", "192.168.70.47", "192.168.70.48", "192.168.70.49"]
+}
+variable "analytics_starrocks_dns_name" {
+  description = "Round-robin DNS name for the StarRocks FE front door (MySQL :9030 / HTTP :8030)."
+  type        = string
+  default     = "starrocks-fe.nexus.lab"
+}
+variable "analytics_starrocks_fe_ips" {
+  description = "StarRocks FE VMnet11 IPs for the round-robin name (the 3 FE). Set at 0.G.6 so the starrocks-fe.nexus.lab record is written; leave empty before 0.G.6 to write only the ClickHouse record."
+  type        = list(string)
+  default     = ["192.168.70.31", "192.168.70.32", "192.168.70.33"]
+}
+
+# NFS backup repository (ADR-0032). MinIO/S3 migration deferred to 0.L.
+variable "enable_gateway_nfs_analytics" {
+  description = "Toggle: stand up the /srv/nfs/analytics-backups NFS export on nexus-gateway for ClickHouse/StarRocks BACKUP/RESTORE (ADR-0032). Default true."
+  type        = bool
+  default     = true
+}
+variable "analytics_nfs_export_path" {
+  description = "NFS export directory on nexus-gateway for the analytics backup repository. fsid=1 (portainer holds fsid=0). Default /srv/nfs/analytics-backups."
+  type        = string
+  default     = "/srv/nfs/analytics-backups"
+}
+variable "analytics_nfs_allowed_clients" {
+  description = "CSV of VMnet11 IPs allowed to mount the analytics backup export. The 6 ClickHouse data nodes (.44-.49) + the StarRocks FE/BE that drive BACKUP SNAPSHOT (.31-.36)."
+  type        = string
+  default     = "192.168.70.44,192.168.70.45,192.168.70.46,192.168.70.47,192.168.70.48,192.168.70.49,192.168.70.31,192.168.70.32,192.168.70.33,192.168.70.34,192.168.70.35,192.168.70.36"
+}
+
+# StarRocks node primary MACs (VMnet11). MUST match nexus-infra-analytics
+# envs/analytics-starrocks mac_sr_*_primary defaults. Block :93-:98.
+variable "mac_analytics_sr_fe_leader_primary" {
+  type    = string
+  default = "00:50:56:3F:00:93"
+}
+variable "mac_analytics_sr_fe_follower_1_primary" {
+  type    = string
+  default = "00:50:56:3F:00:94"
+}
+variable "mac_analytics_sr_fe_follower_2_primary" {
+  type    = string
+  default = "00:50:56:3F:00:95"
+}
+variable "mac_analytics_sr_be_1_primary" {
+  type    = string
+  default = "00:50:56:3F:00:96"
+}
+variable "mac_analytics_sr_be_2_primary" {
+  type    = string
+  default = "00:50:56:3F:00:97"
+}
+variable "mac_analytics_sr_be_3_primary" {
+  type    = string
+  default = "00:50:56:3F:00:98"
+}

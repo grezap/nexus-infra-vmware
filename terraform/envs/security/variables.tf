@@ -769,6 +769,101 @@ variable "vault_agent_redis_creds_dir" {
   default     = "$HOME/.nexus"
 }
 
+# ─── Phase 0.G.5 — ClickHouse mTLS (PKI role + 9 ClickHouse-node AppRoles ─
+#                  + sticky-seed admin/app RBAC passwords)
+#
+# Wires the PKI role + Vault Agent infrastructure that nexus-infra-analytics's
+# Phase 0.G.5 (ClickHouse mTLS + SQL RBAC) consumes. Rendering happens
+# analytics-side; this env provisions the Vault-side state (PKI role, 9
+# policies + AppRoles + sidecars, KV creds seed).
+
+variable "enable_clickhouse_pki" {
+  description = "Phase 0.G.5 toggle: create the pki_int/roles/clickhouse-server PKI role used by the 9 ClickHouse-node Vault Agents to issue TLS leaf certs (server+client EKU, 90-day TTL). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_pki_clickhouse_role_name" {
+  description = "Name of the PKI role under pki_int/ for ClickHouse leaf certs. Used by nexus-infra-analytics's 0.G.5 mTLS overlay. Default 'clickhouse-server'. allowed_domains covers all 9 hostnames (keeper + data) in bare + .nexus.lab + .clickhouse.nexus.lab forms + the round-robin endpoint clickhouse.nexus.lab + localhost. server+client EKU (every node both listens AND dials peers: inter-server replication + Distributed fan-out + server->Keeper)."
+  type        = string
+  default     = "clickhouse-server"
+}
+
+variable "enable_clickhouse_agent_setup" {
+  description = "Master toggle for the 9 ClickHouse-node Vault Agent setup primitives (policies + AppRoles). Default true. Set false on a deploy that doesn't bring up the ClickHouse cluster."
+  type        = bool
+  default     = true
+}
+
+variable "enable_clickhouse_agent_policies" {
+  description = "Toggle: write the 9 narrow Vault policies (nexus-agent-clickhouse-*) -- each grants pki_int/issue/<clickhouse_role> + KV read on nexus/data/analytics/clickhouse/* + token self. Default true (gated under enable_clickhouse_agent_setup). Idempotent overwrite."
+  type        = bool
+  default     = true
+}
+
+variable "enable_clickhouse_agent_approles" {
+  description = "Toggle: provision the 9 AppRoles + per-host JSON sidecars on the build host. Default true (gated under enable_clickhouse_agent_setup). role-id stable; secret-id regenerated per security apply."
+  type        = bool
+  default     = true
+}
+
+variable "vault_agent_clickhouse_creds_dir" {
+  description = "Directory on the build host where the 9 vault-agent-analytics-clickhouse-<host>.json sidecars are written. The `analytics-clickhouse-` filename prefix namespaces sidecars per tier+cluster (so the sibling StarRocks cluster shares $HOME/.nexus without collisions). nexus-infra-analytics's role-overlay-clickhouse-vault-agents.tf reads these."
+  type        = string
+  default     = "$HOME/.nexus"
+}
+
+variable "enable_clickhouse_cluster_creds_seed" {
+  description = "Phase 0.G.5 toggle: sticky-seed the 2 ClickHouse SQL-RBAC passwords (admin, app) at nexus/analytics/clickhouse/{admin,app}-password (field `password`, 32-char hex). The schema-bootstrap overlay reads them on-node via the agent token to CREATE USER ... IDENTIFIED WITH sha256_password. Sticky: never overwrites a populated value. Default true."
+  type        = bool
+  default     = true
+}
+
+# ─── Phase 0.G.6 — StarRocks mTLS (PKI role + 6 StarRocks-node AppRoles ──
+#                  + sticky-seed root/app RBAC passwords)
+
+variable "enable_starrocks_pki" {
+  description = "Phase 0.G.6 toggle: create the pki_int/roles/starrocks-server PKI role for the 6 StarRocks-node Vault Agents (server+client EKU, 90-day TTL). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_pki_starrocks_role_name" {
+  description = "PKI role under pki_int/ for StarRocks leaf certs. Default 'starrocks-server'. allowed_domains covers all 6 hostnames (FE + BE) in bare + .nexus.lab + .starrocks.nexus.lab forms + the round-robin endpoint starrocks-fe.nexus.lab + localhost."
+  type        = string
+  default     = "starrocks-server"
+}
+
+variable "enable_starrocks_agent_setup" {
+  description = "Master toggle for the 6 StarRocks-node Vault Agent setup primitives (policies + AppRoles). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_starrocks_agent_policies" {
+  description = "Toggle: write the 6 narrow Vault policies (nexus-agent-starrocks-*) -- PKI issue + KV read on nexus/data/analytics/starrocks/* + token self. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_starrocks_agent_approles" {
+  description = "Toggle: provision the 6 AppRoles + per-host JSON sidecars on the build host. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_agent_starrocks_creds_dir" {
+  description = "Directory on the build host where the 6 vault-agent-analytics-starrocks-<host>.json sidecars are written. nexus-infra-analytics's role-overlay-starrocks-vault-agents.tf reads these."
+  type        = string
+  default     = "$HOME/.nexus"
+}
+
+variable "enable_starrocks_cluster_creds_seed" {
+  description = "Phase 0.G.6 toggle: sticky-seed the 2 StarRocks SQL-RBAC passwords (root, app) at nexus/analytics/starrocks/{root,app}-password (field `password`, 32-char hex). Sticky: never overwrites. Default true."
+  type        = bool
+  default     = true
+}
+
 # ─── Phase 0.G.2 — MongoDB Replica Set mTLS (PKI role + 3 mongo-node ─────
 #                  AppRoles + sticky-seed keyFile)
 #
