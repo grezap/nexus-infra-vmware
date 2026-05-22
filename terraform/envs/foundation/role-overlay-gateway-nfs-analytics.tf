@@ -9,14 +9,16 @@
  * Export: /srv/nfs/analytics-backups, rw, the 6 ClickHouse data-node IPs (the
  * StarRocks BE IPs are added at 0.G.6 via var.analytics_nfs_allowed_clients).
  *
- * fsid COEXISTENCE NOTE: the Portainer export already holds fsid=0 (the NFSv4
- * pseudo-root) on /srv/nfs/portainer-data. This analytics export uses fsid=1
- * and is mounted client-side via its real path (192.168.70.1:/srv/nfs/
- * analytics-backups, vers=4.2). On modern nfsd an export with an explicit
- * non-zero fsid is individually mountable; if the single-pseudo-root semantics
- * block this sibling at live ratification, the documented fix is to migrate the
- * gateway pseudo-root to /srv/nfs (export /srv/nfs fsid=0 crossmnt with both
- * portainer-data + analytics-backups as subdirs). Chronicled in handbook §3.x.
+ * fsid COEXISTENCE NOTE (settled at live ratification -- handbook §3.x transient):
+ * the Portainer export holds fsid=0 (NFSv4 pseudo-root) on /srv/nfs/portainer-
+ * data for clients .111-.113. An explicit fsid=0 anywhere DISABLES knfsd's
+ * automatic v4 pseudo-fs server-wide, so a sibling fsid=1 export is unreachable
+ * (mount -> "No such file or directory"). The fix that does NOT touch the live
+ * portainer pseudo-root: give THIS export its own fsid=0 for the analytics
+ * client set (.31-.36/.44-.49), which is disjoint from portainer's -- each
+ * client matches exactly one export, so each set gets its own pseudo-root with
+ * no fsid conflict. Analytics clients therefore mount via 192.168.70.1:/ (no
+ * path), exactly as the portainer clients do (feedback_nfsv4_fsid0_pseudo_root).
  *
  * The export forces NFSv4-only (parity with the portainer export's
  * RPCNFSDOPTS="-N 2 -N 3"); the in-place /etc/nftables.conf patch adds tcp/2049
@@ -32,7 +34,7 @@ resource "null_resource" "gateway_nfs_analytics" {
     gateway_ip      = "192.168.70.1"
     export_path     = var.analytics_nfs_export_path
     allowed_clients = var.analytics_nfs_allowed_clients
-    overlay_v       = "1"
+    overlay_v       = "2" # v2: export uses fsid=0 (own pseudo-root for the disjoint analytics client set); clients mount via :/ -- the fsid=1 sibling was unreachable because portainer's fsid=0 disables knfsd auto pseudo-fs server-wide.
   }
 
   provisioner "local-exec" {
@@ -64,12 +66,18 @@ sudo mkdir -p "$EXPORT_PATH"
 sudo chown root:root "$EXPORT_PATH"
 sudo chmod 0777 "$EXPORT_PATH"   # backup writers run as the clickhouse/starrocks uid on the clients; world-writable keeps the lab simple (no uid mapping). Tighten with idmap in production.
 
-# Stage 3: per-client export lines (fsid=1 -- portainer holds fsid=0).
+# Stage 3: per-client export lines. fsid=0 makes THIS export the NFSv4 pseudo-
+# root for the analytics client set. The portainer export also uses fsid=0 but
+# for a DISJOINT client set (.111-.113); since a client only ever matches one
+# export, each client set gets its own pseudo-root and they never conflict. An
+# explicit fsid=0 anywhere on the server disables knfsd's auto pseudo-fs, so a
+# sibling fsid=1 export is NOT reachable (mount -> ENOENT) -- the analytics
+# clients therefore need their own fsid=0 and mount via ':/' (no path).
 EXPORTS=''
 IFS=',' read -ra CLIENT_LIST <<< "$ALLOWED_CLIENTS"
 for client in "$${CLIENT_LIST[@]}"; do
   client=$(echo "$client" | tr -d ' ')
-  EXPORTS="$${EXPORTS}$${EXPORT_PATH}  $${client}(rw,sync,no_root_squash,no_subtree_check,fsid=1)
+  EXPORTS="$${EXPORTS}$${EXPORT_PATH}  $${client}(rw,sync,no_root_squash,no_subtree_check,fsid=0)
 "
 done
 sudo mkdir -p /etc/exports.d
@@ -77,7 +85,7 @@ sudo chmod 0755 /etc/exports.d
 {
   echo '# /etc/exports.d/analytics.exports -- managed by terraform/envs/foundation/role-overlay-gateway-nfs-analytics.tf'
   echo "# NFSv4 export of $EXPORT_PATH for the analytics data nodes (backup repository, ADR-0032)."
-  echo '# fsid=1 (portainer holds fsid=0 / the pseudo-root).'
+  echo '# fsid=0 = per-client-set NFSv4 pseudo-root (disjoint from portainer fsid=0); clients mount via :/'
   printf '%s' "$EXPORTS"
 } | sudo tee /etc/exports.d/analytics.exports > /dev/null
 sudo chown root:root /etc/exports.d/analytics.exports

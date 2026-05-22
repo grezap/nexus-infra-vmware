@@ -7,17 +7,28 @@
  *   - clickhouse.nexus.lab   -> the 6 ClickHouse data nodes (.44-.49)   [0.G.5]
  *   - starrocks-fe.nexus.lab -> the 3 StarRocks FE (.31-.33)            [0.G.6]
  *
- * dnsmasq `host-record=name,IP[,IP]...` registers all IPs under one name;
- * resolvers round-robin/rotate, and both engines' native multi-host clients
- * retry the next address on failure. No VIP, no LB pair -- there is no single
- * mandatory endpoint that would be a SPOF (ADR-0031). The per-host TLS leaf
- * certs carry the round-robin name in their SANs so verify-full validates
- * whichever node answers.
+ * Multi-A round-robin via an addn-hosts file (NOT `host-record`): dnsmasq's
+ * `host-record=name,IP[,IP]...` keeps only ONE IPv4 (later IPs overwrite the
+ * earlier), so it returns a single address -- it does NOT round-robin a name
+ * across N nodes (proven at live ratification -- handbook §3.x). The hosts-file
+ * form returns ALL A records for a name and rotates them (the same mechanism
+ * the gateway already uses for hosts.nexus). We write the hosts file at
+ * /etc/dnsmasq-analytics.hosts (one `IP  name` line per node) and pull it in
+ * with `addn-hosts=`. CRITICAL: the gateway's conf-dir parses EVERY file in
+ * /etc/dnsmasq.d/ as config (not just *.conf -- hosts.nexus survives only
+ * because it is comment-only), so a hosts file placed there errors out at
+ * startup ("bad option at line N"). The addn-hosts file therefore lives
+ * OUTSIDE /etc/dnsmasq.d/; only the .conf (valid config) stays in the conf-dir.
  *
- * Mirrors role-overlay-gateway-portainer-dns.tf shape (idempotent marker;
- * skip-if-present). The StarRocks record is written too when its IPs are
- * provided (var.analytics_starrocks_fe_ips non-empty); at 0.G.5 it can be
- * left empty and only the ClickHouse record is written.
+ * Resolvers round-robin/rotate the N addresses, and both engines' native multi-
+ * host clients retry the next address on failure. No VIP, no LB pair -- there
+ * is no single mandatory endpoint that would be a SPOF (ADR-0031). The per-host
+ * TLS leaf certs carry the round-robin name in their SANs so verify-full
+ * validates whichever node answers.
+ *
+ * The StarRocks lines are written too when its IPs are provided
+ * (var.analytics_starrocks_fe_ips non-empty); at 0.G.5 it can be left empty and
+ * only the ClickHouse lines are written.
  *
  * Selective ops: var.enable_gateway_analytics_dns (default true).
  */
@@ -31,7 +42,7 @@ resource "null_resource" "gateway_analytics_dns" {
     clickhouse_ips          = join(",", var.analytics_clickhouse_data_ips)
     starrocks_name          = var.analytics_starrocks_dns_name
     starrocks_ips           = join(",", var.analytics_starrocks_fe_ips)
-    analytics_dns_overlay_v = "1"
+    analytics_dns_overlay_v = "2" # v2: multi-A round-robin via addn-hosts (one IP/line); host-record kept only the last IP so the name resolved to a single node, defeating ADR-0031's no-VIP round-robin.
   }
 
   provisioner "local-exec" {
@@ -45,32 +56,44 @@ resource "null_resource" "gateway_analytics_dns" {
       $chIps   = '${join(",", var.analytics_clickhouse_data_ips)}'
       $srName  = '${var.analytics_starrocks_dns_name}'
       $srIps   = '${join(",", var.analytics_starrocks_fe_ips)}'
-      $marker  = '# analytics round-robin host-records managed by terraform/envs/foundation/role-overlay-gateway-analytics-dns.tf'
+      $marker  = '# analytics round-robin records managed by terraform/envs/foundation/role-overlay-gateway-analytics-dns.tf'
 
-      $existing = ssh @sshOpts "$sshUser@$gw" "test -f /etc/dnsmasq.d/foundation-analytics-dns.conf && cat /etc/dnsmasq.d/foundation-analytics-dns.conf || true" 2>&1 | Out-String
-      # Re-render when the record set changes; marker alone isn't enough since
-      # StarRocks IPs may be added later. Compare the desired body.
-      $lines = @($marker)
-      if ($chIps) { $lines += "host-record=$chName,$chIps" }
-      if ($srIps) { $lines += "host-record=$srName,$srIps" }
-      $desired = ($lines + "") -join "`n"
+      # Multi-A round-robin needs hosts-file form (one "IP name" line per node);
+      # host-record keeps only the last IP. The .conf just pulls in the hosts
+      # file via addn-hosts.
+      $hostsLines = @()
+      foreach ($ip in ($chIps -split ',')) { if ($ip.Trim()) { $hostsLines += "$($ip.Trim()) $chName" } }
+      if ($srIps) { foreach ($ip in ($srIps -split ',')) { if ($ip.Trim()) { $hostsLines += "$($ip.Trim()) $srName" } } }
+      $hostsBody = ($marker, ($hostsLines -join "`n"), "") -join "`n"
+      # The addn-hosts file MUST live outside /etc/dnsmasq.d/ -- conf-dir parses
+      # every file there as config and a hosts file errors ("bad option").
+      $confBody  = ($marker, "addn-hosts=/etc/dnsmasq-analytics.hosts", "") -join "`n"
 
-      if ($existing.Trim() -eq $desired.Trim()) {
-        Write-Host "[gateway analytics-dns] records already current, no-op."
+      $existing = ssh @sshOpts "$sshUser@$gw" "test -f /etc/dnsmasq-analytics.hosts && cat /etc/dnsmasq-analytics.hosts || true" 2>&1 | Out-String
+      if ($existing.Trim() -eq $hostsBody.Trim()) {
+        Write-Host "[gateway analytics-dns] round-robin records already current, no-op."
         exit 0
       }
 
-      $b64 = [Convert]::ToBase64String([System.Text.UTF8Encoding]::new($false).GetBytes($desired))
+      $hostsB64 = [Convert]::ToBase64String([System.Text.UTF8Encoding]::new($false).GetBytes($hostsBody))
+      $confB64  = [Convert]::ToBase64String([System.Text.UTF8Encoding]::new($false).GetBytes($confBody))
       $remote = @"
 set -euo pipefail
-echo '$b64' | base64 -d | sudo tee /etc/dnsmasq.d/foundation-analytics-dns.conf > /dev/null
+# Remove any stale copy from a prior (broken) layout inside the conf-dir.
+sudo rm -f /etc/dnsmasq.d/hosts.analytics
+echo '$hostsB64' | base64 -d | sudo tee /etc/dnsmasq-analytics.hosts > /dev/null
+sudo chown root:root /etc/dnsmasq-analytics.hosts
+sudo chmod 0644 /etc/dnsmasq-analytics.hosts
+echo '$confB64' | base64 -d | sudo tee /etc/dnsmasq.d/foundation-analytics-dns.conf > /dev/null
 sudo chown root:root /etc/dnsmasq.d/foundation-analytics-dns.conf
 sudo chmod 0644 /etc/dnsmasq.d/foundation-analytics-dns.conf
 sudo systemctl restart dnsmasq
 sleep 1
 sudo systemctl is-active dnsmasq
-echo "--- foundation-analytics-dns.conf ---"
-sudo cat /etc/dnsmasq.d/foundation-analytics-dns.conf
+echo "--- /etc/dnsmasq-analytics.hosts ---"
+sudo cat /etc/dnsmasq-analytics.hosts
+echo "--- resolving $chName (expect all data-node IPs) ---"
+dig +short $chName @127.0.0.1
 "@
       $remoteB64 = [Convert]::ToBase64String([System.Text.UTF8Encoding]::new($false).GetBytes(($remote -replace "`r`n","`n")))
       $output = ssh @sshOpts "$sshUser@$gw" "echo '$remoteB64' | base64 -d | bash" 2>&1 | Out-String
@@ -86,7 +109,7 @@ sudo cat /etc/dnsmasq.d/foundation-analytics-dns.conf
     command     = <<-PWSH
       $sshUser = 'nexusadmin'
       $sshOpts = @('-o','ConnectTimeout=5','-o','BatchMode=yes','-o','StrictHostKeyChecking=no')
-      ssh @sshOpts "$sshUser@192.168.70.1" "sudo rm -f /etc/dnsmasq.d/foundation-analytics-dns.conf && sudo systemctl restart dnsmasq" 2>$null
+      ssh @sshOpts "$sshUser@192.168.70.1" "sudo rm -f /etc/dnsmasq.d/foundation-analytics-dns.conf /etc/dnsmasq.d/hosts.analytics /etc/dnsmasq-analytics.hosts && sudo systemctl restart dnsmasq" 2>$null
       exit 0
     PWSH
   }
