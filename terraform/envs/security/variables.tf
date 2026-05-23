@@ -915,6 +915,54 @@ variable "enable_minio_cluster_creds_seed" {
   default     = true
 }
 
+# ─── Phase 0.L.2 — Iceberg catalog mTLS (PKI role + 4 iceberg-node AppRoles + ─
+#                  sticky-seed PG/Nessie DB creds)
+#
+# Vault-side state for nexus-infra-lakehouse's Phase 0.L.2 (Iceberg REST catalog
+# + dedicated PG HA). Rendering happens lakehouse-side.
+
+variable "enable_iceberg_pki" {
+  description = "Phase 0.L.2 toggle: create the pki_int/roles/iceberg-server PKI role for the 4 iceberg-node Vault Agents (server+client EKU, 90-day TTL). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_pki_iceberg_role_name" {
+  description = "PKI role under pki_int/ for iceberg leaf certs. Default 'iceberg-server'. allowed_domains covers all 4 hostnames + iceberg.nexus.lab + iceberg-db.nexus.lab + localhost."
+  type        = string
+  default     = "iceberg-server"
+}
+
+variable "enable_iceberg_agent_setup" {
+  description = "Master toggle for the 4 iceberg-node Vault Agent setup primitives (policies + AppRoles). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_iceberg_agent_policies" {
+  description = "Toggle: write the 4 narrow Vault policies (nexus-agent-iceberg-*) -- PKI issue + KV read on nexus/data/lakehouse/{iceberg,minio}/* + token self. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_iceberg_agent_approles" {
+  description = "Toggle: provision the 4 AppRoles + per-host JSON sidecars on the build host. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_agent_iceberg_creds_dir" {
+  description = "Directory on the build host where the 4 vault-agent-lakehouse-iceberg-<host>.json sidecars are written. nexus-infra-lakehouse's role-overlay-iceberg-vault-agents.tf reads these."
+  type        = string
+  default     = "$HOME/.nexus"
+}
+
+variable "enable_iceberg_cluster_creds_seed" {
+  description = "Phase 0.L.2 toggle: sticky-seed the 3 iceberg catalog DB creds (pg-superuser, pg-replication, nessie-db passwords) at nexus/lakehouse/iceberg/* (field `value`, 40-char hex). Sticky: never overwrites. Default true."
+  type        = bool
+  default     = true
+}
+
 # ─── Phase 0.G.2 — MongoDB Replica Set mTLS (PKI role + 3 mongo-node ─────
 #                  AppRoles + sticky-seed keyFile)
 #

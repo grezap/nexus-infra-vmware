@@ -1160,9 +1160,19 @@ variable "lakehouse_iceberg_dns_name" {
   default     = "iceberg.nexus.lab"
 }
 variable "lakehouse_iceberg_ips" {
-  description = "Iceberg REST VMnet11 IPs for the round-robin name (the 2 instances). Set at 0.L.2; empty before then so only minio.nexus.lab is written."
+  description = "Iceberg REST VMnet11 IPs for the round-robin name (the 2 Nessie instances). Set at 0.L.2."
   type        = list(string)
-  default     = []
+  default     = ["192.168.70.147", "192.168.70.148"]
+}
+variable "lakehouse_iceberg_db_dns_name" {
+  description = "DNS name for the Iceberg catalog PG front door (the keepalived VRRP VIP). Single A-record -> the VIP."
+  type        = string
+  default     = "iceberg-db.nexus.lab"
+}
+variable "lakehouse_iceberg_db_vip" {
+  description = "Iceberg catalog PG keepalived VRRP VIP (.151). Set at 0.L.2; empty before then."
+  type        = list(string)
+  default     = ["192.168.70.151"]
 }
 variable "lakehouse_spark_master_dns_name" {
   description = "DNS name for the Spark master (single node; A-record)."

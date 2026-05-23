@@ -29,7 +29,9 @@ resource "null_resource" "gateway_lakehouse_dns" {
     iceberg_ips             = join(",", var.lakehouse_iceberg_ips)
     spark_master_name       = var.lakehouse_spark_master_dns_name
     spark_master_ips        = join(",", var.lakehouse_spark_master_ips)
-    lakehouse_dns_overlay_v = "1"
+    iceberg_db_name         = var.lakehouse_iceberg_db_dns_name
+    iceberg_db_vip          = join(",", var.lakehouse_iceberg_db_vip)
+    lakehouse_dns_overlay_v = "2" # v2 (0.L.2) adds iceberg.nexus.lab .147/.148 + iceberg-db.nexus.lab VIP .151
   }
 
   provisioner "local-exec" {
@@ -42,9 +44,10 @@ resource "null_resource" "gateway_lakehouse_dns" {
       $marker  = '# lakehouse round-robin records managed by terraform/envs/foundation/role-overlay-gateway-lakehouse-dns.tf'
 
       $pairs = @(
-        @{ name = '${var.lakehouse_minio_dns_name}';        ips = '${join(",", var.lakehouse_minio_ips)}' }
-        @{ name = '${var.lakehouse_iceberg_dns_name}';       ips = '${join(",", var.lakehouse_iceberg_ips)}' }
-        @{ name = '${var.lakehouse_spark_master_dns_name}';  ips = '${join(",", var.lakehouse_spark_master_ips)}' }
+        @{ name = '${var.lakehouse_minio_dns_name}';         ips = '${join(",", var.lakehouse_minio_ips)}' }
+        @{ name = '${var.lakehouse_iceberg_dns_name}';        ips = '${join(",", var.lakehouse_iceberg_ips)}' }
+        @{ name = '${var.lakehouse_iceberg_db_dns_name}';     ips = '${join(",", var.lakehouse_iceberg_db_vip)}' }
+        @{ name = '${var.lakehouse_spark_master_dns_name}';   ips = '${join(",", var.lakehouse_spark_master_ips)}' }
       )
       $hostsLines = @()
       foreach ($p in $pairs) {
