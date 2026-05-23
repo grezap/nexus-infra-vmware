@@ -1082,3 +1082,95 @@ variable "mac_analytics_sr_be_3_primary" {
   type    = string
   default = "00:50:56:3F:00:98"
 }
+
+# ─── Phase 0.L -- Lakehouse tier (08-spark): MinIO + Spark + Iceberg ───────
+# dhcp-host reservations + round-robin DNS for the 11 lakehouse nodes. MAC block
+# :99-:A3 (contiguous after the analytics tier, which ends at :98). MUST match
+# nexus-infra-lakehouse envs/lakehouse-*/ mac_*_primary defaults.
+variable "enable_lakehouse_dhcp_reservations" {
+  description = "Toggle: write the 11 lakehouse dhcp-host reservations on nexus-gateway dnsmasq (MinIO .141-.144 + Spark .140/.145/.146 + Iceberg REST .147/.148 + Iceberg PG .149/.150). Default true."
+  type        = bool
+  default     = true
+}
+variable "mac_lakehouse_spark_master_primary" {
+  type    = string
+  default = "00:50:56:3F:00:99"
+}
+variable "mac_lakehouse_minio_1_primary" {
+  type    = string
+  default = "00:50:56:3F:00:9A"
+}
+variable "mac_lakehouse_minio_2_primary" {
+  type    = string
+  default = "00:50:56:3F:00:9B"
+}
+variable "mac_lakehouse_minio_3_primary" {
+  type    = string
+  default = "00:50:56:3F:00:9C"
+}
+variable "mac_lakehouse_minio_4_primary" {
+  type    = string
+  default = "00:50:56:3F:00:9D"
+}
+variable "mac_lakehouse_spark_worker_1_primary" {
+  type    = string
+  default = "00:50:56:3F:00:9E"
+}
+variable "mac_lakehouse_spark_worker_2_primary" {
+  type    = string
+  default = "00:50:56:3F:00:9F"
+}
+variable "mac_lakehouse_iceberg_rest_1_primary" {
+  type    = string
+  default = "00:50:56:3F:00:A0"
+}
+variable "mac_lakehouse_iceberg_rest_2_primary" {
+  type    = string
+  default = "00:50:56:3F:00:A1"
+}
+variable "mac_lakehouse_iceberg_pg_1_primary" {
+  type    = string
+  default = "00:50:56:3F:00:A2"
+}
+variable "mac_lakehouse_iceberg_pg_2_primary" {
+  type    = string
+  default = "00:50:56:3F:00:A3"
+}
+
+# Round-robin DNS front doors (ADR-0031/0033 -- no VIP). Only names with a
+# non-empty IP list are written; iceberg/spark IPs populate at 0.L.2/0.L.3.
+variable "enable_gateway_lakehouse_dns" {
+  description = "Toggle: write the lakehouse round-robin records on nexus-gateway dnsmasq (minio.nexus.lab -> 4 MinIO; iceberg.nexus.lab -> 2 REST; spark-master.nexus.lab). Default true."
+  type        = bool
+  default     = true
+}
+variable "lakehouse_minio_dns_name" {
+  description = "Round-robin DNS name for the MinIO S3 endpoint. The minio-server PKI leaf certs carry this in their SANs so verify-full validates whichever node answers (ADR-0033)."
+  type        = string
+  default     = "minio.nexus.lab"
+}
+variable "lakehouse_minio_ips" {
+  description = "MinIO node VMnet11 IPs registered as A-records for the round-robin name (the 4 nodes)."
+  type        = list(string)
+  default     = ["192.168.70.141", "192.168.70.142", "192.168.70.143", "192.168.70.144"]
+}
+variable "lakehouse_iceberg_dns_name" {
+  description = "Round-robin DNS name for the Iceberg REST catalog front door (2 HA instances)."
+  type        = string
+  default     = "iceberg.nexus.lab"
+}
+variable "lakehouse_iceberg_ips" {
+  description = "Iceberg REST VMnet11 IPs for the round-robin name (the 2 instances). Set at 0.L.2; empty before then so only minio.nexus.lab is written."
+  type        = list(string)
+  default     = []
+}
+variable "lakehouse_spark_master_dns_name" {
+  description = "DNS name for the Spark master (single node; A-record)."
+  type        = string
+  default     = "spark-master.nexus.lab"
+}
+variable "lakehouse_spark_master_ips" {
+  description = "Spark master VMnet11 IP (.140). Set at 0.L.3; empty before then."
+  type        = list(string)
+  default     = []
+}

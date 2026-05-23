@@ -864,6 +864,57 @@ variable "enable_starrocks_cluster_creds_seed" {
   default     = true
 }
 
+# ─── Phase 0.L.1 — MinIO mTLS (PKI role + 4 minio-node AppRoles + ─────────
+#                  sticky-seed root/app S3 creds)
+#
+# Wires in the PKI role + Vault Agent infrastructure + KV creds that
+# nexus-infra-lakehouse's Phase 0.L.1 (MinIO distributed EC) consumes. The
+# rendering happens lakehouse-side (role-overlay-minio-vault-agents.tf +
+# role-overlay-minio-tls.tf + role-overlay-minio-config.tf); this env owns the
+# Vault-side state.
+
+variable "enable_minio_pki" {
+  description = "Phase 0.L.1 toggle: create the pki_int/roles/minio-server PKI role for the 4 MinIO-node Vault Agents (server+client EKU, 90-day TTL). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_pki_minio_role_name" {
+  description = "PKI role under pki_int/ for MinIO leaf certs. Default 'minio-server'. allowed_domains covers all 4 hostnames in bare + .nexus.lab forms + the round-robin endpoint minio.nexus.lab + localhost."
+  type        = string
+  default     = "minio-server"
+}
+
+variable "enable_minio_agent_setup" {
+  description = "Master toggle for the 4 MinIO-node Vault Agent setup primitives (policies + AppRoles). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_minio_agent_policies" {
+  description = "Toggle: write the 4 narrow Vault policies (nexus-agent-minio-*) -- PKI issue + KV read on nexus/data/lakehouse/minio/* + token self. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_minio_agent_approles" {
+  description = "Toggle: provision the 4 AppRoles + per-host JSON sidecars on the build host. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_agent_minio_creds_dir" {
+  description = "Directory on the build host where the 4 vault-agent-lakehouse-minio-<host>.json sidecars are written. nexus-infra-lakehouse's role-overlay-minio-vault-agents.tf reads these."
+  type        = string
+  default     = "$HOME/.nexus"
+}
+
+variable "enable_minio_cluster_creds_seed" {
+  description = "Phase 0.L.1 toggle: sticky-seed the 4 MinIO creds (root-user, root-password, app-access-key, app-secret-key) at nexus/lakehouse/minio/* (field `value`). Sticky: never overwrites. Default true."
+  type        = bool
+  default     = true
+}
+
 # ─── Phase 0.G.2 — MongoDB Replica Set mTLS (PKI role + 3 mongo-node ─────
 #                  AppRoles + sticky-seed keyFile)
 #
