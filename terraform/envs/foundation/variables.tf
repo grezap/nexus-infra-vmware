@@ -1208,3 +1208,58 @@ variable "lakehouse_spark_master_ips" {
   type        = list(string)
   default     = ["192.168.70.140", "192.168.70.153"]
 }
+
+# ─── Phase 0.L.4 -- registry tier (09-platform; Harbor HA, ADR-0036) ──────
+# 4 dhcp-host reservations (registry-1/2 + registry-pg-1/2) + round-robin DNS
+# registry.nexus.lab (app HA) + the registry-db.nexus.lab VIP A-record. MACs:
+# registry-1 reuses :A4; registry-2/pg-1/pg-2 use :AF/:B0/:B1.
+variable "enable_registry_dhcp_reservations" {
+  description = "Toggle: write the 4 registry-tier dhcp-host reservations on nexus-gateway dnsmasq. Default true."
+  type        = bool
+  default     = true
+}
+variable "mac_registry_1_primary" {
+  description = "registry-1 (Harbor app) primary NIC MAC -> 192.168.70.115. Reuses the canon :A4 reservation."
+  type        = string
+  default     = "00:50:56:3F:00:A4"
+}
+variable "mac_registry_2_primary" {
+  description = "registry-2 (Harbor app) primary NIC MAC -> 192.168.70.116."
+  type        = string
+  default     = "00:50:56:3F:00:AF"
+}
+variable "mac_registry_pg_1_primary" {
+  description = "registry-pg-1 (PG/Redis primary) primary NIC MAC -> 192.168.70.117."
+  type        = string
+  default     = "00:50:56:3F:00:B0"
+}
+variable "mac_registry_pg_2_primary" {
+  description = "registry-pg-2 (PG/Redis replica) primary NIC MAC -> 192.168.70.118."
+  type        = string
+  default     = "00:50:56:3F:00:B1"
+}
+variable "enable_gateway_registry_dns" {
+  description = "Toggle: write the registry round-robin records on nexus-gateway dnsmasq (registry.nexus.lab -> 2 Harbor app; registry-db.nexus.lab -> the VRRP VIP). Default true."
+  type        = bool
+  default     = true
+}
+variable "registry_dns_name" {
+  description = "Round-robin DNS name for the Harbor front door (2 stateless app nodes). The registry-server PKI leaf certs carry this in their SANs (ADR-0031/0036)."
+  type        = string
+  default     = "registry.nexus.lab"
+}
+variable "registry_app_ips" {
+  description = "Harbor app node VMnet11 IPs registered as A-records for the round-robin name (.115 + .116)."
+  type        = list(string)
+  default     = ["192.168.70.115", "192.168.70.116"]
+}
+variable "registry_db_dns_name" {
+  description = "DNS name for the registry datastore front door (the keepalived VRRP VIP). Single A-record -> the VIP."
+  type        = string
+  default     = "registry-db.nexus.lab"
+}
+variable "registry_db_vip" {
+  description = "Registry datastore keepalived VRRP VIP (.119; PG primary + Redis master follow it)."
+  type        = string
+  default     = "192.168.70.119"
+}

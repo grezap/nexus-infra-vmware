@@ -1297,3 +1297,69 @@ variable "ad_netbios_name" {
   type        = string
   default     = "NEXUS"
 }
+
+# ─── Phase 0.L.4 -- Harbor registry mTLS + creds + Vault OIDC (ADR-0036) ──
+# Vault-side state for nexus-infra-registry's Phase 0.L.4 (HA Harbor: 2 app +
+# 2 PG/Redis datastore). Rendering happens registry-side. PKI role for all 4
+# nodes; 4 policies + AppRoles + sidecars; 6 KV creds; + Vault as an OIDC
+# provider for Harbor SSO (delegates to AD via auth/ldap).
+
+variable "enable_registry_pki" {
+  description = "Phase 0.L.4 toggle: create the pki_int/roles/registry-server PKI role for the 4 registry-node Vault Agents (server+client EKU, 90-day TTL; Harbor HTTPS + PG/Redis TLS). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_pki_registry_role_name" {
+  description = "PKI role under pki_int/ for registry leaf certs. Default 'registry-server'. allowed_domains covers the 4 hostnames + registry.nexus.lab (app round-robin) + registry-db.nexus.lab (datastore VIP) + localhost."
+  type        = string
+  default     = "registry-server"
+}
+
+variable "enable_registry_agent_setup" {
+  description = "Master toggle for the 4 registry-node Vault Agent setup primitives (policies + AppRoles). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_registry_agent_policies" {
+  description = "Toggle: write the 4 narrow Vault policies (nexus-agent-registry-*) -- PKI issue + KV read on nexus/data/registry/* + nexus/data/lakehouse/minio/* + token self. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_registry_agent_approles" {
+  description = "Toggle: provision the 4 AppRoles + per-host JSON sidecars on the build host. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_agent_registry_creds_dir" {
+  description = "Directory on the build host where the 4 vault-agent-registry-<host>.json sidecars are written. nexus-infra-registry's role-overlay-registry-vault-agents.tf reads these."
+  type        = string
+  default     = "$HOME/.nexus"
+}
+
+variable "enable_registry_cluster_creds_seed" {
+  description = "Phase 0.L.4 toggle: sticky-seed the 6 Harbor/datastore creds at nexus/registry/{harbor-admin,harbor-secret-key,pg-superuser-password,pg-replication-password,harbor-db-password,redis-password} (field `value`). Sticky: never overwrites. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_registry_oidc" {
+  description = "Phase 0.L.4 toggle: stand up Vault as an OIDC provider for Harbor SSO (key + scopes + external group/alias to the AD admin group + assignment + client `harbor` + provider `nexus-registry`); writes client_id/secret to nexus/registry/oidc-client-{id,secret}. Default true. Requires auth/ldap (0.D.3) for the group alias."
+  type        = bool
+  default     = true
+}
+
+variable "registry_oidc_issuer_host" {
+  description = "host:port Vault publishes as the OIDC issuer base for Harbor (the externally reachable Vault endpoint). Harbor's oidc_endpoint = https://<this>/v1/identity/oidc/provider/nexus-registry. Pinned to vault-1 (no Vault VIP in the lab); break-glass admin login is unaffected if vault-1 is down."
+  type        = string
+  default     = "vault-1.nexus.lab:8200"
+}
+
+variable "registry_oidc_redirect_uri" {
+  description = "The Harbor OIDC callback URL registered on the Vault OIDC client. Harbor serves it at https://<hostname>/c/oidc/callback (hostname = the round-robin front door)."
+  type        = string
+  default     = "https://registry.nexus.lab/c/oidc/callback"
+}
