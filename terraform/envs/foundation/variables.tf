@@ -1084,11 +1084,12 @@ variable "mac_analytics_sr_be_3_primary" {
 }
 
 # ─── Phase 0.L -- Lakehouse tier (08-spark): MinIO + Spark + Iceberg ───────
-# dhcp-host reservations + round-robin DNS for the 11 lakehouse nodes. MAC block
-# :99-:A3 (contiguous after the analytics tier, which ends at :98). MUST match
-# nexus-infra-lakehouse envs/lakehouse-*/ mac_*_primary defaults.
+# dhcp-host reservations + round-robin DNS for the 16 lakehouse nodes. MAC block
+# :99-:A3 (contiguous after the analytics tier, :98) for 0.L.1/0.L.2; the 0.L.3
+# Spark HA expansion uses :AA-:AE (the :A4-:A9 gap is reserved for 0.L.4 registry
+# + 0.L.5 StarRocks shared-data). MUST match nexus-infra-lakehouse envs/lakehouse-*/.
 variable "enable_lakehouse_dhcp_reservations" {
-  description = "Toggle: write the 11 lakehouse dhcp-host reservations on nexus-gateway dnsmasq (MinIO .141-.144 + Spark .140/.145/.146 + Iceberg REST .147/.148 + Iceberg PG .149/.150). Default true."
+  description = "Toggle: write the 16 lakehouse dhcp-host reservations on nexus-gateway dnsmasq (MinIO .141-.144 + Spark masters .140/.153 + Spark workers .145/.146/.154 + ZooKeeper .155-.157 + Iceberg REST .147/.148 + Iceberg PG .149/.150). Default true."
   type        = bool
   default     = true
 }
@@ -1136,6 +1137,29 @@ variable "mac_lakehouse_iceberg_pg_2_primary" {
   type    = string
   default = "00:50:56:3F:00:A3"
 }
+# 0.L.3 Spark HA expansion. NOTE the MAC gap: :A4 is reserved for 0.L.4 registry
+# (registry-1) and :A5-:A9 for 0.L.5 StarRocks shared-data (sr-sd-fe-1..3 +
+# sr-sd-cn-1/2), so the 0.L.3 Spark/ZooKeeper nodes start at :AA.
+variable "mac_lakehouse_spark_master_2_primary" {
+  type    = string
+  default = "00:50:56:3F:00:AA"
+}
+variable "mac_lakehouse_spark_worker_3_primary" {
+  type    = string
+  default = "00:50:56:3F:00:AB"
+}
+variable "mac_lakehouse_zookeeper_1_primary" {
+  type    = string
+  default = "00:50:56:3F:00:AC"
+}
+variable "mac_lakehouse_zookeeper_2_primary" {
+  type    = string
+  default = "00:50:56:3F:00:AD"
+}
+variable "mac_lakehouse_zookeeper_3_primary" {
+  type    = string
+  default = "00:50:56:3F:00:AE"
+}
 
 # Round-robin DNS front doors (ADR-0031/0033 -- no VIP). Only names with a
 # non-empty IP list are written; iceberg/spark IPs populate at 0.L.2/0.L.3.
@@ -1175,12 +1199,12 @@ variable "lakehouse_iceberg_db_vip" {
   default     = ["192.168.70.151"]
 }
 variable "lakehouse_spark_master_dns_name" {
-  description = "DNS name for the Spark master (single node; A-record)."
+  description = "Round-robin DNS name for the Spark master Web UI front door (the 2 HA masters). The multi-master cluster URL itself uses node IPs, not this name."
   type        = string
   default     = "spark-master.nexus.lab"
 }
 variable "lakehouse_spark_master_ips" {
-  description = "Spark master VMnet11 IP (.140). Set at 0.L.3; empty before then."
+  description = "Spark master VMnet11 IPs for the round-robin name (.140 + .153, HA pair). Set at 0.L.3."
   type        = list(string)
-  default     = []
+  default     = ["192.168.70.140", "192.168.70.153"]
 }

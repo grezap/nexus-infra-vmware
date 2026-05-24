@@ -6,7 +6,9 @@
  * -- ADR-0031/0033):
  *   - minio.nexus.lab         -> the 4 MinIO nodes (.141-.144)   [0.L.1]
  *   - iceberg.nexus.lab       -> the 2 Iceberg REST nodes (.147-.148) [0.L.2]
- *   - spark-master.nexus.lab  -> the Spark master (.140)         [0.L.3]
+ *   - spark-master.nexus.lab  -> the 2 Spark HA masters (.140/.153) [0.L.3]
+ *     (Web UI front door; the Spark cluster's multi-master URL uses node IPs.
+ *      ZooKeeper has no VMnet11 DNS -- it is backplane-IP-only by design.)
  *
  * Multi-A round-robin via an addn-hosts file (NOT `host-record`, which keeps
  * only ONE IPv4) -- the same mechanism + the same conf-dir caveat documented in
@@ -31,7 +33,7 @@ resource "null_resource" "gateway_lakehouse_dns" {
     spark_master_ips        = join(",", var.lakehouse_spark_master_ips)
     iceberg_db_name         = var.lakehouse_iceberg_db_dns_name
     iceberg_db_vip          = join(",", var.lakehouse_iceberg_db_vip)
-    lakehouse_dns_overlay_v = "2" # v2 (0.L.2) adds iceberg.nexus.lab .147/.148 + iceberg-db.nexus.lab VIP .151
+    lakehouse_dns_overlay_v = "3" # v3 (0.L.3) populates spark-master.nexus.lab -> the 2 HA masters .140/.153
   }
 
   provisioner "local-exec" {

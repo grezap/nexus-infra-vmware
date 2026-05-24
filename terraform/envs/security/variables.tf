@@ -963,6 +963,57 @@ variable "enable_iceberg_cluster_creds_seed" {
   default     = true
 }
 
+# ─── Phase 0.L.3 — Spark HA mTLS (PKI role + 5 spark-node AppRoles + ──────
+#                  sticky-seed the spark.authenticate shared secret)
+#
+# Vault-side state for nexus-infra-lakehouse's Phase 0.L.3 (Spark standalone HA:
+# 2 masters + 3 workers). Rendering happens lakehouse-side. The 3-node ZooKeeper
+# ensemble has NO Vault footprint -- it runs plaintext on the isolated VMnet10
+# backplane (network segmentation is its security boundary, ADR-0035), so only
+# the 5 Spark nodes get a Vault Agent + PKI cert.
+
+variable "enable_spark_pki" {
+  description = "Phase 0.L.3 toggle: create the pki_int/roles/spark-server PKI role for the 5 spark-node Vault Agents (server+client EKU, 90-day TTL; Spark UI TLS). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_pki_spark_role_name" {
+  description = "PKI role under pki_int/ for spark leaf certs. Default 'spark-server'. allowed_domains covers the 5 spark hostnames + spark-master.nexus.lab + localhost."
+  type        = string
+  default     = "spark-server"
+}
+
+variable "enable_spark_agent_setup" {
+  description = "Master toggle for the 5 spark-node Vault Agent setup primitives (policies + AppRoles). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_spark_agent_policies" {
+  description = "Toggle: write the 5 narrow Vault policies (nexus-agent-spark-*) -- PKI issue + KV read on nexus/data/lakehouse/{spark,minio}/* + token self. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_spark_agent_approles" {
+  description = "Toggle: provision the 5 AppRoles + per-host JSON sidecars on the build host. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_agent_spark_creds_dir" {
+  description = "Directory on the build host where the 5 vault-agent-lakehouse-spark-<host>.json sidecars are written. nexus-infra-lakehouse's role-overlay-spark-vault-agents.tf reads these."
+  type        = string
+  default     = "$HOME/.nexus"
+}
+
+variable "enable_spark_cluster_creds_seed" {
+  description = "Phase 0.L.3 toggle: sticky-seed the Spark RPC shared secret (spark.authenticate) at nexus/lakehouse/spark/auth-secret (field `value`, 40-char hex). Sticky: never overwrites. Default true."
+  type        = bool
+  default     = true
+}
+
 # ─── Phase 0.G.2 — MongoDB Replica Set mTLS (PKI role + 3 mongo-node ─────
 #                  AppRoles + sticky-seed keyFile)
 #
