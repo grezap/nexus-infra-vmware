@@ -2,7 +2,7 @@
 
 **Status:** ✅ shipped. Built + smoke-verified end-to-end (template → `modules/vm/` clone → DHCP lease → SSH + node_exporter reachable on VMnet11).
 
-The parent image for ~60 of the 65 lab VMs. Each role-specific VM (Vault, Postgres, Kafka, Mongo, Redis, ClickHouse, StarRocks, MinIO, Swarm nodes, Spark workers, …) clones this template via `terraform/modules/vm/` and overlays its own Ansible.
+The parent image for most of the lab (~83 of the 88 VMs built through 0.L.4). Each role-specific VM (Vault, Postgres, Kafka, Mongo, Redis, ClickHouse, StarRocks, MinIO, Iceberg, Spark, ZooKeeper, Harbor, Swarm nodes, …) clones this template via `terraform/modules/vm/` and overlays its own Ansible.
 
 Full design, build + smoke runbook, verification checklist, and design-decision rationale: [`../../docs/deb13.md`](../../docs/deb13.md).
 

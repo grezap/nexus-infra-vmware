@@ -1,6 +1,6 @@
 # nexus-gateway — design + runbook
 
-**VM #0 of the NexusPlatform 66-VM fleet.** The lab edge router: provides internet egress for VMnet11, DHCP+DNS for the lab, and NTP for the whole fleet. Must be built and running before any other Linux VM (because every other VM pulls apt packages through it).
+**VM #0 of the NexusPlatform fleet** (88 VMs built through Phase 0.L.4). The lab edge router: provides internet egress for VMnet11, DHCP+DNS for the lab, and NTP for the whole fleet. Must be built and running before any other Linux VM (because every other VM pulls apt packages through it).
 
 ## Why this VM exists
 

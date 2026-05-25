@@ -1,6 +1,6 @@
 # deb13 — design + runbook
 
-**Generic Debian 13 base template.** The parent image for roughly 60 of the 65 lab VMs (Vault, Postgres, Kafka, Mongo, Redis, ClickHouse, StarRocks, MinIO, Spark workers, Swarm nodes, …). Each child VM clones this template via `terraform/modules/vm/` and overlays its role-specific Ansible on top.
+**Generic Debian 13 base template.** The parent image for most of the lab (~83 of the 88 VMs built through 0.L.4 — Vault, Postgres, Kafka, Mongo, Redis, ClickHouse, StarRocks, MinIO, Iceberg, Spark, ZooKeeper, Harbor, Swarm nodes, …; only dc-nexus + the 4 SQL Server nodes run Windows). Each child VM clones this template via `terraform/modules/vm/` and overlays its role-specific Ansible on top.
 
 ## Why a base template
 

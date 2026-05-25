@@ -6,6 +6,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Phase 0.L.4 (2026-05-25) — `foundation` + `security` envs: Vault-side state for the Harbor registry tier
+
+Cross-env scaffolding consumed by `grezap/nexus-infra-registry` (Phase 0.L.4 — HA Harbor, `09-platform`, **SEALED 2026-05-25**; ADR-0036).
+
+- **`role-overlay-gateway-registry-reservations.tf`** + **`role-overlay-gateway-registry-dns.tf`** (foundation) — 4 dhcp-host reservations (`:A4`/`:AF`/`:B0`/`:B1` → `.115`–`.118`) + round-robin DNS `registry.nexus.lab` → `.115`/`.116` + the `registry-db.nexus.lab` VRRP-VIP A-record → `.119`.
+- **`role-overlay-vault-pki-registry.tf`** — the `registry-server` PKI role (server+client EKU, 90-day leaf; SANs cover the 4 hostnames + `registry.nexus.lab` + `registry-db.nexus.lab`).
+- **`role-overlay-vault-agent-registry-{policies,approles}.tf`** — 4 per-host narrow policies + AppRoles + JSON sidecars.
+- **`role-overlay-vault-registry-creds-seed.tf`** — 6 sticky-seeded KV creds at `nexus/registry/*` (harbor-admin, harbor-secret-key, pg-superuser, pg-replication, harbor-db, redis).
+- **`role-overlay-vault-oidc-registry.tf`** — stands up **Vault as an OIDC provider** (`identity/oidc/provider/nexus-registry`) for Harbor SSO → AD via `auth/ldap`; writes the client id/secret to `nexus/registry/oidc-client-*`.
+
+### Added — Phases 0.G / 0.G.5–0.G.6 / 0.L.1–0.L.3 (2026-05-16 → 2026-05-24) — cross-tier `foundation`/`security` overlays (catch-up log)
+
+Vault-side + gateway state for the OLTP, analytics, and lakehouse tiers (the overlays shipped with each tier's close-out; consolidated here for the changelog record).
+
+- **OLTP (0.G.1–0.G.4, 0.G.7)** — gateway reservations + the iSCSI tgt target for the SQL FCI (ADR-0026); PKI roles + per-host AppRoles + KV creds for `redis-server` / `mongo-server` (+ keyFile/smoke-user) / `percona-server` / `patroni-server` / `sqlserver-server` (+ the `gmsa-sql-engine$` GMSA + iSCSI CHAP + nexusadmin sidecar). Consumed by `nexus-infra-oltp` (tier SEALED 5/5).
+- **Analytics (0.G.5–0.G.6)** — gateway round-robin DNS (`clickhouse.nexus.lab` / `starrocks-fe.nexus.lab`) + NFS analytics-backups export; `clickhouse-server` / `starrocks-server` PKI roles + AppRoles + KV RBAC creds. Consumed by `nexus-infra-analytics` (`v0.1.0`).
+- **Lakehouse (0.L.1–0.L.3)** — gateway reservations + round-robin DNS (`minio.nexus.lab` / `iceberg.nexus.lab` / `spark-master.nexus.lab`) + the `iceberg-db.nexus.lab` VRRP VIP; `minio-server` / `iceberg-server` / `spark-server` PKI roles + AppRoles + KV creds. Consumed by `nexus-infra-lakehouse` (0.L.1–0.L.3 SEALED).
+
 ### Added — Phase 0.H (2026-05-14 → 2026-05-15) — `security` env Vault-side state for the Kafka tier
 
 Cross-env scaffolding consumed by `grezap/nexus-infra-kafka` (Phase 0.H —

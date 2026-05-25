@@ -4,9 +4,9 @@
 [![Terraform](https://img.shields.io/badge/Terraform-1.9+-purple)](https://www.terraform.io/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 [![Blueprint](https://img.shields.io/badge/blueprint-nexus--platform--plan%20v0.1.3-orange)](https://github.com/grezap/nexus-platform-plan)
-[![Phase](https://img.shields.io/badge/phase-0.D%20%E2%9C%85%20%E2%80%A2%200.E%20%E2%9C%85%20Vault%20scaffold%20%E2%80%A2%200.H%20%E2%9C%85%20Vault%20scaffold-brightgreen)](./CHANGELOG.md)
+[![Phase](https://img.shields.io/badge/phase-0.D%20closed%20%E2%80%A2%20cross--tier%20IaC%20through%200.L.4-brightgreen)](./CHANGELOG.md)
 
-Infrastructure-as-code for the **NexusPlatform 66-VM lab** running on **VMware Workstation Pro** (host `10.0.70.101`). Produces golden VM templates with Packer, provisions the fleet with Terraform, configures guest OS with Ansible.
+Infrastructure-as-code for the **NexusPlatform lab** (88 VMs built/cold-rebuild-proven through Phase 0.L.4, on host `10.0.70.101`) running on **VMware Workstation Pro**. Produces golden VM templates with Packer, provisions the fleet with Terraform, configures guest OS with Ansible. Beyond the Tier-1 foundation it owns, this repo hosts the **cross-tier overlays** (gateway DHCP/DNS/VIP records + Vault PKI roles, AppRoles, KV creds, and the Harbor OIDC provider) that every later tier — orchestration, Kafka, OLTP, analytics, lakehouse, registry — consumes.
 
 > **Canon:** This repo implements [Phase 0.B–0.D](https://github.com/grezap/nexus-platform-plan/blob/main/MASTER-PLAN.md) of the NexusPlatform blueprint. Read [`nexus-platform-plan`](https://github.com/grezap/nexus-platform-plan) first.
 >

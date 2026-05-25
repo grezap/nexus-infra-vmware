@@ -2,7 +2,7 @@
 
 ## Goals
 
-1. **Reproducibility** — every VM in the 66-VM fleet is built from a Packer HCL template committed to git. A `terraform apply` on a fresh Windows host re-creates the entire lab end-to-end.
+1. **Reproducibility** — every VM in the fleet (88 built/cold-rebuild-proven through Phase 0.L.4) is built from a Packer HCL template committed to git. A `terraform apply` on a fresh Windows host re-creates the entire lab end-to-end.
 2. **Deterministic provisioning** — same inputs → byte-identical output. Pinned ISO URLs + checksums, pinned Packer/Terraform/Ansible versions, pinned MACs.
 3. **Separation of concerns** — Packer builds images, Terraform places VMs, Ansible configures guest OS. No overlap.
 4. **Testable in CI** — `packer validate`, `terraform validate`, `ansible-lint` run on every push (no VMware host needed for static validation).

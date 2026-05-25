@@ -309,7 +309,7 @@ terraform apply -auto-approve
 
 ## 1a. Phase 0.B.2 — deb13 generic base template
 
-Full deep-dive: [`docs/deb13.md`](deb13.md). Parent image for ~60 of the 65 lab VMs.
+Full deep-dive: [`docs/deb13.md`](deb13.md). Parent image for most of the lab (~83 of the 88 VMs built through 0.L.4).
 
 ```powershell
 cd "F:\_CODING_\Repos\Local Development And Test\Portfolio_Project_Ideas\workspace\nexus-infra-vmware"
