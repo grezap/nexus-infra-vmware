@@ -13,10 +13,15 @@
  *   StarRocks (0.G.6 -- added when that sub-phase lands):
  *     sr-fe-leader/follower-1/2 -> .31 / .32 / .33
  *     sr-be-1/2/3               -> .34 / .35 / .36
+ *   StarRocks shared-data (0.L.5 -- ADR-0037, added when that sub-phase lands):
+ *     sr-sd-fe-1/2/3 -> .37 / .38 / .39
+ *     sr-sd-cn-1     -> .30
+ *     sr-sd-cn-2     -> .40  (decade-spill from .3x to first free .4x slot)
  *
  * MAC block :8A-:98 (the contiguous range after the OLTP tier, which ends at
  * :89). This overlay seeds the 9 ClickHouse reservations (:8A-:92); the 6
- * StarRocks reservations (:93-:98) are added when 0.G.6 lands. Mirrors
+ * StarRocks shared-nothing reservations (:93-:98) are added at 0.G.6; the 5
+ * StarRocks shared-data reservations (:A5-:A9) are added at 0.L.5. Mirrors
  * role-overlay-gateway-kafka-reservations.tf shape exactly.
  *
  * Default enable_analytics_dhcp_reservations = true per memory/
@@ -43,7 +48,12 @@ resource "null_resource" "gateway_analytics_reservations" {
     mac_be1                  = var.mac_analytics_sr_be_1_primary
     mac_be2                  = var.mac_analytics_sr_be_2_primary
     mac_be3                  = var.mac_analytics_sr_be_3_primary
-    analytics_reservations_v = "2" # v2 (0.G.6) = 9 ClickHouse (:8A-:92 -> .41-.49) + 6 StarRocks (:93-:98 -> .31-.36). v1 = ClickHouse only.
+    mac_sdfe1                = var.mac_analytics_sr_sd_fe_1_primary
+    mac_sdfe2                = var.mac_analytics_sr_sd_fe_2_primary
+    mac_sdfe3                = var.mac_analytics_sr_sd_fe_3_primary
+    mac_sdcn1                = var.mac_analytics_sr_sd_cn_1_primary
+    mac_sdcn2                = var.mac_analytics_sr_sd_cn_2_primary
+    analytics_reservations_v = "3" # v3 (0.L.5) = v2 + 5 StarRocks shared-data (:A5-:A9 -> .37/.38/.39/.30/.40). v2 = 9 ClickHouse + 6 SR sn (.31-.36). v1 = ClickHouse only.
   }
 
   provisioner "local-exec" {
@@ -66,7 +76,12 @@ resource "null_resource" "gateway_analytics_reservations" {
       $mac_be1  = '${var.mac_analytics_sr_be_1_primary}'
       $mac_be2  = '${var.mac_analytics_sr_be_2_primary}'
       $mac_be3  = '${var.mac_analytics_sr_be_3_primary}'
-      $marker = '# Analytics tier (ClickHouse + StarRocks) dhcp-host reservations managed by terraform/envs/foundation/role-overlay-gateway-analytics-reservations.tf v2'
+      $mac_sdfe1 = '${var.mac_analytics_sr_sd_fe_1_primary}'
+      $mac_sdfe2 = '${var.mac_analytics_sr_sd_fe_2_primary}'
+      $mac_sdfe3 = '${var.mac_analytics_sr_sd_fe_3_primary}'
+      $mac_sdcn1 = '${var.mac_analytics_sr_sd_cn_1_primary}'
+      $mac_sdcn2 = '${var.mac_analytics_sr_sd_cn_2_primary}'
+      $marker = '# Analytics tier (ClickHouse + StarRocks shared-nothing + StarRocks shared-data) dhcp-host reservations managed by terraform/envs/foundation/role-overlay-gateway-analytics-reservations.tf v3'
 
       $existing = ssh nexusadmin@$gw "test -f /etc/dnsmasq.d/foundation-analytics-reservations.conf && cat /etc/dnsmasq.d/foundation-analytics-reservations.conf || true"
       if ($existing -match [regex]::Escape($marker)) {
@@ -91,6 +106,11 @@ resource "null_resource" "gateway_analytics_reservations" {
         "dhcp-host=$mac_be1,192.168.70.34,sr-be-1"
         "dhcp-host=$mac_be2,192.168.70.35,sr-be-2"
         "dhcp-host=$mac_be3,192.168.70.36,sr-be-3"
+        "dhcp-host=$mac_sdfe1,192.168.70.37,sr-sd-fe-1"
+        "dhcp-host=$mac_sdfe2,192.168.70.38,sr-sd-fe-2"
+        "dhcp-host=$mac_sdfe3,192.168.70.39,sr-sd-fe-3"
+        "dhcp-host=$mac_sdcn1,192.168.70.30,sr-sd-cn-1"
+        "dhcp-host=$mac_sdcn2,192.168.70.40,sr-sd-cn-2"
         ""
       ) -join "`n"
 
@@ -98,10 +118,10 @@ resource "null_resource" "gateway_analytics_reservations" {
         echo '$confLines' | sudo tee /etc/dnsmasq.d/foundation-analytics-reservations.conf > /dev/null
         sudo systemctl restart dnsmasq && echo OK
 "@
-      Write-Host "[gateway analytics-reservations] writing 15 analytics dhcp-host reservations (9 ClickHouse + 6 StarRocks) + restarting dnsmasq..."
+      Write-Host "[gateway analytics-reservations] writing 20 analytics dhcp-host reservations (9 ClickHouse + 6 StarRocks shared-nothing + 5 StarRocks shared-data) + restarting dnsmasq..."
       ssh nexusadmin@$gw $script
       if ($LASTEXITCODE -ne 0) { throw "[gateway analytics-reservations] ssh tee/restart failed (rc=$LASTEXITCODE)" }
-      Write-Host "[gateway analytics-reservations] reservations live: ch .41-.49, sr-fe .31-.33, sr-be .34-.36"
+      Write-Host "[gateway analytics-reservations] reservations live: ch .41-.49, sr-fe .31-.33, sr-be .34-.36, sr-sd-fe .37-.39, sr-sd-cn .30/.40"
     PWSH
   }
 

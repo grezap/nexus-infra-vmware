@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Phase 0.L.5 (2026-05-26) — `foundation` + `security` envs: cross-tier state for the StarRocks shared-data cluster
+
+Cross-tier state for `nexus-infra-analytics`'s new SR-shared-data cluster (Phase 0.L.5, ADR-0037).
+
+**`foundation` env** — `role-overlay-gateway-analytics-reservations.tf` bumped **v2 → v3**: adds 5 dhcp-host reservations for the SR-SD nodes (MACs `:A5`-`:A9` → `.37`/`.38`/`.39`/`.30`/`.40`). `role-overlay-gateway-analytics-dns.tf` bumped **v2 → v3**: adds the round-robin `starrocks-sd-fe.nexus.lab` → `.37`/`.38`/`.39` (`addn-hosts` form, multi-A round-robin, no VIP — ADR-0031). `variables.tf` adds the 5 new MAC vars + the sd DNS name + sd FE IPs list.
+
+**`security` env** — 4 new overlays + 1 policy bump:
+- `role-overlay-vault-pki-starrocks-sd.tf` — new `starrocks-sd-server` PKI role on `pki_int/` covering all 5 hostnames + `starrocks-sd.nexus.lab` + the round-robin endpoint `starrocks-sd-fe.nexus.lab` (server+client EKU, 90-day TTL). **Separate** from the sealed `starrocks-server` (0.G.6) — full isolation per ADR-0037.
+- `role-overlay-vault-agent-starrocks-sd-policies.tf` — 5 narrow Vault policies (`nexus-agent-starrocks-sd-<host>`) granting PKI issue + KV read on `nexus/data/analytics/starrocks-sd/*` + token self.
+- `role-overlay-vault-agent-starrocks-sd-approles.tf` — 5 AppRoles + per-host JSON sidecars (`vault-agent-analytics-starrocks-sd-<host>.json`) on the build host.
+- `role-overlay-vault-starrocks-sd-creds-seed.tf` — sticky-seeds 4 KV creds: `nexus/analytics/starrocks-sd/{root-password,app-password}` (32-char hex, field `password`) + `nexus/analytics/starrocks-sd/s3-access-key` (fixed `nexus-starrocks-app`) + `nexus/analytics/starrocks-sd/s3-secret-key` (40-char hex; field `value`).
+- `role-overlay-vault-agent-minio-policies.tf` bumped **v1 → v2** — extends the MinIO agent policies with `path "nexus/data/analytics/starrocks-sd/s3-*" { capabilities = ["read"] }` so `minio-1`'s agent token can read the SR-SD S3 creds during the lakehouse-minio tenant bootstrap (the tenant overlay runs on minio-1 and provisions the dedicated MinIO service account from these KV-seeded values).
+
+Applied 2026-05-26 — foundation + security `terraform apply` clean; downstream `nexus-infra-analytics` SR-shared-data cluster SEALED same day (smoke 69/69 with chaos default-on; cold-rebuild proven).
+
 ### Added — Phase 0.L.4 (2026-05-25) — `foundation` + `security` envs: Vault-side state for the Harbor registry tier
 
 Cross-env scaffolding consumed by `grezap/nexus-infra-registry` (Phase 0.L.4 — HA Harbor, `09-platform`, **SEALED 2026-05-25**; ADR-0036).

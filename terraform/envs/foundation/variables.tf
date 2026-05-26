@@ -1083,6 +1083,47 @@ variable "mac_analytics_sr_be_3_primary" {
   default = "00:50:56:3F:00:98"
 }
 
+# ─── Phase 0.L.5 -- StarRocks shared-data tier (ADR-0037) ─────────────────
+# Second StarRocks cluster (3 FE + 2 CN, run_mode=shared_data) running parallel
+# to the sealed shared-nothing one. Internal tables in a MinIO storage volume.
+# MAC block :A5-:A9 (the reserved gap between 0.L.3 Spark/ZK :AA-:AE and the
+# 0.L.4 registry :AF-:B1). MUST match nexus-infra-analytics envs/analytics-
+# starrocks-sd mac_sr_sd_*_primary defaults. CN-2 at .40 is a documented
+# decade-spill: SR decade .3x only had 4 free slots (.30/.37/.38/.39); the
+# full-HA 3FE+2CN topology needs 5, so CN-2 spills to .40 (first free
+# ClickHouse-decade slot) per ADR-0037.
+variable "mac_analytics_sr_sd_fe_1_primary" {
+  type    = string
+  default = "00:50:56:3F:00:A5"
+}
+variable "mac_analytics_sr_sd_fe_2_primary" {
+  type    = string
+  default = "00:50:56:3F:00:A6"
+}
+variable "mac_analytics_sr_sd_fe_3_primary" {
+  type    = string
+  default = "00:50:56:3F:00:A7"
+}
+variable "mac_analytics_sr_sd_cn_1_primary" {
+  type    = string
+  default = "00:50:56:3F:00:A8"
+}
+variable "mac_analytics_sr_sd_cn_2_primary" {
+  type    = string
+  default = "00:50:56:3F:00:A9"
+}
+
+variable "analytics_starrocks_sd_dns_name" {
+  description = "Round-robin DNS name for the StarRocks shared-data FE front door (MySQL :9030 / HTTP :8030). Separate from the sealed starrocks-fe.nexus.lab (shared-nothing) -- both clusters run in parallel."
+  type        = string
+  default     = "starrocks-sd-fe.nexus.lab"
+}
+variable "analytics_starrocks_sd_fe_ips" {
+  description = "StarRocks shared-data FE VMnet11 IPs for the round-robin name (the 3 sd FE at .37/.38/.39). Leave empty before 0.L.5 to skip writing this record."
+  type        = list(string)
+  default     = ["192.168.70.37", "192.168.70.38", "192.168.70.39"]
+}
+
 # ─── Phase 0.L -- Lakehouse tier (08-spark): MinIO + Spark + Iceberg ───────
 # dhcp-host reservations + round-robin DNS for the 16 lakehouse nodes. MAC block
 # :99-:A3 (contiguous after the analytics tier, :98) for 0.L.1/0.L.2; the 0.L.3

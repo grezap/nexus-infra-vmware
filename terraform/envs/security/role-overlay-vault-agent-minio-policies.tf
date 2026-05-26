@@ -6,6 +6,8 @@
  *
  * Permissions: PKI issue on pki_int/issue/<minio_role> + KV read on
  * nexus/data/lakehouse/minio/* (root + app creds for config + bucket-bootstrap)
+ * + KV read on nexus/data/analytics/starrocks-sd/s3-* (SR-SD tenant S3 keys,
+ * for the 0.L.5 starrocks-tenant bootstrap that runs on minio-1; ADR-0037)
  * + token self. Idempotent upsert.
  *
  * Selective ops: var.enable_minio_agent_setup AND var.enable_minio_agent_policies.
@@ -27,7 +29,7 @@ resource "null_resource" "vault_agent_minio_policies" {
     post_init_id             = null_resource.vault_post_init[0].id
     minio_role_id            = length(null_resource.vault_pki_minio_role) > 0 ? null_resource.vault_pki_minio_role[0].id : "disabled"
     minio_role_name          = var.vault_pki_minio_role_name
-    minio_policies_overlay_v = "1"
+    minio_policies_overlay_v = "2" # v2 (0.L.5): adds KV read on nexus/data/analytics/starrocks-sd/s3-* so minio-1's agent can read the SR-SD tenant S3 keys during the starrocks-tenant bootstrap. v1: lakehouse/minio/* only.
   }
 
   depends_on = [null_resource.vault_post_init, null_resource.vault_pki_minio_role]
@@ -50,6 +52,12 @@ path "pki_int/issue/${var.vault_pki_minio_role_name}" {
   capabilities = ["create", "update"]
 }
 path "nexus/data/lakehouse/minio/*" {
+  capabilities = ["read"]
+}
+# Phase 0.L.5 (ADR-0037): the SR-shared-data tenant bootstrap runs on minio-1
+# and provisions a dedicated MinIO service account (nexus-starrocks-app) with
+# access/secret keys sticky-seeded by the security env at this KV namespace.
+path "nexus/data/analytics/starrocks-sd/s3-*" {
   capabilities = ["read"]
 }
 path "auth/token/lookup-self" {

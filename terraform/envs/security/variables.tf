@@ -864,6 +864,54 @@ variable "enable_starrocks_cluster_creds_seed" {
   default     = true
 }
 
+# ─── Phase 0.L.5 — StarRocks shared-data tier (ADR-0037) ─────────────────
+# Second StarRocks cluster (3 FE + 2 CN, run_mode=shared_data) running parallel
+# to the sealed shared-nothing one. Internal cloud-native tables live in a
+# MinIO storage volume; the FE/CN both terminate TLS at the per-host leaf
+# cert and authenticate to MinIO via KV-seeded S3 access/secret keys.
+
+variable "enable_starrocks_sd_pki" {
+  description = "Phase 0.L.5 toggle: create the pki_int/roles/starrocks-sd-server PKI role for the 5 SR-shared-data Vault Agents (3 FE + 2 CN, server+client EKU, 90-day TTL). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_pki_starrocks_sd_role_name" {
+  description = "PKI role under pki_int/ for StarRocks shared-data leaf certs. Default 'starrocks-sd-server'. allowed_domains covers all 5 hostnames (FE + CN) in bare + .nexus.lab forms + the round-robin endpoint starrocks-sd-fe.nexus.lab + localhost."
+  type        = string
+  default     = "starrocks-sd-server"
+}
+
+variable "enable_starrocks_sd_agent_setup" {
+  description = "Master toggle for the 5 SR-shared-data Vault Agent setup primitives (policies + AppRoles). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_starrocks_sd_agent_policies" {
+  description = "Toggle: write the 5 narrow Vault policies (nexus-agent-starrocks-sd-*) -- PKI issue + KV read on nexus/data/analytics/starrocks-sd/* + token self. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_starrocks_sd_agent_approles" {
+  description = "Toggle: provision the 5 AppRoles + per-host JSON sidecars on the build host. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_agent_starrocks_sd_creds_dir" {
+  description = "Directory on the build host where the 5 vault-agent-analytics-starrocks-sd-<host>.json sidecars are written. nexus-infra-analytics's role-overlay-starrocks-sd-vault-agents.tf reads these."
+  type        = string
+  default     = "$HOME/.nexus"
+}
+
+variable "enable_starrocks_sd_cluster_creds_seed" {
+  description = "Phase 0.L.5 toggle: sticky-seed 4 creds at nexus/analytics/starrocks-sd/* -- root-password + app-password (SQL RBAC, field `password`, 32-char hex) + s3-access-key (fixed 'nexus-starrocks-app', field `value`) + s3-secret-key (40-char hex, field `value`, for the MinIO storage-volume credential). Sticky: never overwrites. Default true."
+  type        = bool
+  default     = true
+}
+
 # ─── Phase 0.L.1 — MinIO mTLS (PKI role + 4 minio-node AppRoles + ─────────
 #                  sticky-seed root/app S3 creds)
 #

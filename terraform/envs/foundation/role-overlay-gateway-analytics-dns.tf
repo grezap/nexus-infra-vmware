@@ -4,8 +4,9 @@
  * Adds multi-A round-robin DNS host-records on nexus-gateway's dnsmasq for the
  * analytics cluster front doors (the documented no-VIP, client-side-multi-
  * endpoint pattern -- ADR-0031):
- *   - clickhouse.nexus.lab   -> the 6 ClickHouse data nodes (.44-.49)   [0.G.5]
- *   - starrocks-fe.nexus.lab -> the 3 StarRocks FE (.31-.33)            [0.G.6]
+ *   - clickhouse.nexus.lab      -> the 6 ClickHouse data nodes (.44-.49)   [0.G.5]
+ *   - starrocks-fe.nexus.lab    -> the 3 SR shared-nothing FE (.31-.33)    [0.G.6]
+ *   - starrocks-sd-fe.nexus.lab -> the 3 SR shared-data    FE (.37-.39)    [0.L.5 / ADR-0037]
  *
  * Multi-A round-robin via an addn-hosts file (NOT `host-record`): dnsmasq's
  * `host-record=name,IP[,IP]...` keeps only ONE IPv4 (later IPs overwrite the
@@ -42,7 +43,9 @@ resource "null_resource" "gateway_analytics_dns" {
     clickhouse_ips          = join(",", var.analytics_clickhouse_data_ips)
     starrocks_name          = var.analytics_starrocks_dns_name
     starrocks_ips           = join(",", var.analytics_starrocks_fe_ips)
-    analytics_dns_overlay_v = "2" # v2: multi-A round-robin via addn-hosts (one IP/line); host-record kept only the last IP so the name resolved to a single node, defeating ADR-0031's no-VIP round-robin.
+    starrocks_sd_name       = var.analytics_starrocks_sd_dns_name
+    starrocks_sd_ips        = join(",", var.analytics_starrocks_sd_fe_ips)
+    analytics_dns_overlay_v = "3" # v3 (0.L.5): adds starrocks-sd-fe.nexus.lab. v2: multi-A round-robin via addn-hosts (host-record kept only the last IP).
   }
 
   provisioner "local-exec" {
@@ -56,6 +59,8 @@ resource "null_resource" "gateway_analytics_dns" {
       $chIps   = '${join(",", var.analytics_clickhouse_data_ips)}'
       $srName  = '${var.analytics_starrocks_dns_name}'
       $srIps   = '${join(",", var.analytics_starrocks_fe_ips)}'
+      $sdName  = '${var.analytics_starrocks_sd_dns_name}'
+      $sdIps   = '${join(",", var.analytics_starrocks_sd_fe_ips)}'
       $marker  = '# analytics round-robin records managed by terraform/envs/foundation/role-overlay-gateway-analytics-dns.tf'
 
       # Multi-A round-robin needs hosts-file form (one "IP name" line per node);
@@ -64,6 +69,7 @@ resource "null_resource" "gateway_analytics_dns" {
       $hostsLines = @()
       foreach ($ip in ($chIps -split ',')) { if ($ip.Trim()) { $hostsLines += "$($ip.Trim()) $chName" } }
       if ($srIps) { foreach ($ip in ($srIps -split ',')) { if ($ip.Trim()) { $hostsLines += "$($ip.Trim()) $srName" } } }
+      if ($sdIps) { foreach ($ip in ($sdIps -split ',')) { if ($ip.Trim()) { $hostsLines += "$($ip.Trim()) $sdName" } } }
       $hostsBody = ($marker, ($hostsLines -join "`n"), "") -join "`n"
       # The addn-hosts file MUST live outside /etc/dnsmasq.d/ -- conf-dir parses
       # every file there as config and a hosts file errors ("bad option").
