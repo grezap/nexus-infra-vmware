@@ -1304,3 +1304,137 @@ variable "registry_db_vip" {
   type        = string
   default     = "192.168.70.119"
 }
+
+# ─── Phase 0.I observability tier (ADR-0038) ─────────────────────────────────
+# 14 obs MAC dhcp-host reservations (block :B2-:BF, just past registry :B1) +
+# round-robin DNS for the machine endpoints (prometheus/loki/tempo/otel) + the
+# 2 VRRP VIP A-records (grafana .184 + grafana-db .185).
+variable "enable_observability_dhcp_reservations" {
+  description = "Toggle: write the 14 obs MAC dhcp-host reservations on nexus-gateway dnsmasq (.170-.183). Default true."
+  type        = bool
+  default     = true
+}
+variable "mac_obs_prom_1_primary" {
+  type    = string
+  default = "00:50:56:3F:00:B2"
+}
+variable "mac_obs_prom_2_primary" {
+  type    = string
+  default = "00:50:56:3F:00:B3"
+}
+variable "mac_obs_loki_1_primary" {
+  type    = string
+  default = "00:50:56:3F:00:B4"
+}
+variable "mac_obs_loki_2_primary" {
+  type    = string
+  default = "00:50:56:3F:00:B5"
+}
+variable "mac_obs_loki_3_primary" {
+  type    = string
+  default = "00:50:56:3F:00:B6"
+}
+variable "mac_obs_tempo_1_primary" {
+  type    = string
+  default = "00:50:56:3F:00:B7"
+}
+variable "mac_obs_tempo_2_primary" {
+  type    = string
+  default = "00:50:56:3F:00:B8"
+}
+variable "mac_obs_tempo_3_primary" {
+  type    = string
+  default = "00:50:56:3F:00:B9"
+}
+variable "mac_obs_grafana_1_primary" {
+  type    = string
+  default = "00:50:56:3F:00:BA"
+}
+variable "mac_obs_grafana_2_primary" {
+  type    = string
+  default = "00:50:56:3F:00:BB"
+}
+variable "mac_obs_grafana_pg_1_primary" {
+  type    = string
+  default = "00:50:56:3F:00:BC"
+}
+variable "mac_obs_grafana_pg_2_primary" {
+  type    = string
+  default = "00:50:56:3F:00:BD"
+}
+variable "mac_obs_otel_1_primary" {
+  type    = string
+  default = "00:50:56:3F:00:BE"
+}
+variable "mac_obs_otel_2_primary" {
+  type    = string
+  default = "00:50:56:3F:00:BF"
+}
+
+variable "enable_gateway_observability_dns" {
+  description = "Toggle: write the obs RR DNS records + VIP A-records on nexus-gateway dnsmasq. Default true."
+  type        = bool
+  default     = true
+}
+variable "obs_prometheus_dns_name" {
+  description = "Round-robin DNS name for the Prom HA pair (clients retry; no VIP per ADR-0031 for the scrape-target sender protocol)."
+  type        = string
+  default     = "prometheus.nexus.lab"
+}
+variable "obs_prometheus_ips" {
+  type    = list(string)
+  default = ["192.168.70.170", "192.168.70.171"]
+}
+variable "obs_alertmanager_dns_name" {
+  description = "Round-robin DNS name for the Alertmanager mesh pair. Mesh dedupes cluster-wide; clients hit either node."
+  type        = string
+  default     = "alertmanager.nexus.lab"
+}
+variable "obs_alertmanager_ips" {
+  type    = list(string)
+  default = ["192.168.70.170", "192.168.70.171"]
+}
+variable "obs_loki_dns_name" {
+  type    = string
+  default = "loki.nexus.lab"
+}
+variable "obs_loki_ips" {
+  type    = list(string)
+  default = ["192.168.70.172", "192.168.70.173", "192.168.70.174"]
+}
+variable "obs_tempo_dns_name" {
+  type    = string
+  default = "tempo.nexus.lab"
+}
+variable "obs_tempo_ips" {
+  type    = list(string)
+  default = ["192.168.70.175", "192.168.70.176", "192.168.70.177"]
+}
+variable "obs_otel_dns_name" {
+  type    = string
+  default = "otel.nexus.lab"
+}
+variable "obs_otel_ips" {
+  type    = list(string)
+  default = ["192.168.70.182", "192.168.70.183"]
+}
+variable "obs_grafana_dns_name" {
+  description = "DNS name for the Grafana VRRP VIP front door (ADR-0025; single A -> VIP)."
+  type        = string
+  default     = "grafana.nexus.lab"
+}
+variable "obs_grafana_vip" {
+  description = "Grafana VRRP VIP (.184; floats between grafana-1 MASTER + grafana-2 BACKUP per ADR-0025 canonical 2-node + VRRP pattern)."
+  type        = string
+  default     = "192.168.70.184"
+}
+variable "obs_grafana_db_dns_name" {
+  description = "DNS name for the Grafana Postgres VRRP VIP front door (ADR-0025; single A -> VIP)."
+  type        = string
+  default     = "grafana-db.nexus.lab"
+}
+variable "obs_grafana_db_vip" {
+  description = "Grafana PG VRRP VIP (.185; floats between grafana-pg-1 PRIMARY + grafana-pg-2 REPLICA following PG promotion)."
+  type        = string
+  default     = "192.168.70.185"
+}

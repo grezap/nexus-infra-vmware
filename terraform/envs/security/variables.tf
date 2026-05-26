@@ -1411,3 +1411,53 @@ variable "registry_oidc_redirect_uri" {
   type        = string
   default     = "https://registry.nexus.lab/c/oidc/callback"
 }
+
+# ─── Phase 0.I — Observability tier mTLS (PKI role + 14 obs-node AppRoles + ─
+#                sticky-seed web-auth + S3 tenant credentials)
+#
+# Vault-side state for nexus-infra-observability's Phase 0.I sub-phases (Prom HA +
+# Loki SSD + Tempo + Grafana HA + Grafana PG + OTel). Cert SANs cover all 14
+# hostnames + RR DNS names + the 2 VRRP VIPs (.184 grafana, .185 grafana-db) +
+# localhost; 90-day TTL per feedback_smoke_gate_probe_robustness.
+
+variable "enable_observability_pki" {
+  description = "Phase 0.I toggle: create the pki_int/roles/observability-server PKI role for all 14 obs-node Vault Agents (server+client EKU, 90-day TTL). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_pki_obs_role_name" {
+  description = "PKI role under pki_int/ for obs leaf certs. Default 'observability-server'. allowed_domains covers 14 hostnames + 5 RR DNS names + 2 VRRP VIPs + localhost."
+  type        = string
+  default     = "observability-server"
+}
+
+variable "enable_observability_agent_setup" {
+  description = "Master toggle for the 14 obs-node Vault Agent setup primitives (policies + AppRoles). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_observability_agent_policies" {
+  description = "Toggle: write the 14 narrow Vault policies (nexus-agent-observability-*) -- PKI issue + KV read on nexus/data/observability/* + token self. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_observability_agent_approles" {
+  description = "Toggle: provision the 14 AppRoles + per-host JSON sidecars on the build host. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_agent_observability_creds_dir" {
+  description = "Directory on the build host where the 14 vault-agent-observability-<host>.json sidecars are written. nexus-infra-observability's role-overlay-<svc>-vault-agents.tf overlays read these."
+  type        = string
+  default     = "$HOME/.nexus"
+}
+
+variable "enable_observability_creds_seed" {
+  description = "Phase 0.I toggle: sticky-seed the obs web-auth + S3 tenant credentials at nexus/observability/* (field `password` for basic-auth, `password_bcrypt` for the bcrypt; field `value` for the S3 keys). Sticky: never overwrites. Default true."
+  type        = bool
+  default     = true
+}
