@@ -46,8 +46,20 @@ export VAULT_TOKEN='$rootToken'
 export VAULT_SKIP_VERIFY=true
 export VAULT_ADDR=https://127.0.0.1:8200
 
-# Ensure htpasswd available for bcrypt (apache2-utils on Debian; sometimes
-# missing on minimal Vault images -- install if so).
+# Two-transient story (handbook §3.A T2+T3):
+# T2: `apt-get install apache2-utils` (for htpasswd bcrypt) fails on vault-1
+#     because /etc/resolv.conf is empty (feedback_deb13_baseline_dns_resolver.md).
+# T3: `openssl passwd -bcrypt` does NOT work on OpenSSL 3.x (Debian 13 ships
+#     OpenSSL 3.5.5) -- bcrypt was removed from `openssl passwd` in 3.0.
+# Resolution: defensive resolv.conf write (the iceberg-vault-agents canon)
+# THEN apt-install apache2-utils THEN htpasswd. Idempotent.
+
+# Defensive resolv.conf write per feedback_deb13_baseline_dns_resolver.md
+if ! getent hosts deb.debian.org >/dev/null 2>&1; then
+  echo "nameserver 192.168.70.1" | sudo tee /etc/resolv.conf > /dev/null
+fi
+
+# Ensure htpasswd available for bcrypt (apache2-utils on Debian)
 if ! command -v htpasswd >/dev/null 2>&1; then
   sudo apt-get update -qq && sudo apt-get install -y -qq apache2-utils >/dev/null
 fi
@@ -60,7 +72,7 @@ seed_webauth() {
   else
     PW=`$(openssl rand -hex 16)
   fi
-  # bcrypt of `$PW. Prom + AM web.yml accept bcrypt hashes.
+  # bcrypt of `$PW via htpasswd. Prom + AM web.yml accept any \$2[ayb]\$ prefix.
   BCRYPT=`$(htpasswd -nbBC 10 admin "`$PW" | cut -d: -f2)
   vault kv put "`$path" password="`$PW" password_bcrypt="`$BCRYPT" >/dev/null
   echo "[obs-creds-seed] wrote `$path (32-char hex `$label + bcrypt cost=10)"
