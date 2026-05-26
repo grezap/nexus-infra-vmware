@@ -22,8 +22,8 @@ resource "null_resource" "vault_observability_creds_seed" {
 
   triggers = {
     post_init_id     = null_resource.vault_post_init[0].id
-    kv_paths         = "nexus/observability/{prometheus,alertmanager}/web-auth-password"
-    obs_creds_seed_v = "1"
+    kv_paths         = "nexus/observability/{prometheus,alertmanager}/web-auth-password + nexus/observability/{loki,tempo}/s3-{access,secret}-key"
+    obs_creds_seed_v = "2" # v2: add loki + tempo S3 tenant key seeds for 0.I.2/0.I.3
   }
 
   depends_on = [null_resource.vault_post_init]
@@ -81,7 +81,26 @@ seed_webauth() {
 seed_webauth 'nexus/observability/prometheus/web-auth-password'   'Prometheus web-auth password'
 seed_webauth 'nexus/observability/alertmanager/web-auth-password' 'Alertmanager web-auth password'
 
-echo "[obs-creds-seed] all 2 obs web-auth creds present in nexus/observability/{prometheus,alertmanager}/"
+# S3 tenant credentials for Loki + Tempo (consumed by the MinIO obs-tenants
+# overlay in nexus-infra-lakehouse + the obs-loki + obs-tempo overlays in
+# nexus-infra-observability via Vault Agent KV read).
+seed_s3() {
+  local ak_path="`$1"; local sk_path="`$2"; local label="`$3"
+  if vault kv get -field=value "`$ak_path" >/dev/null 2>&1 && vault kv get -field=value "`$sk_path" >/dev/null 2>&1; then
+    echo "[obs-creds-seed] `$ak_path + `$sk_path already populated -- no-op (sticky `$label)"
+    return 0
+  fi
+  AK=`$(openssl rand -hex 12)
+  SK=`$(openssl rand -hex 24)
+  vault kv put "`$ak_path" value="`$AK" >/dev/null
+  vault kv put "`$sk_path" value="`$SK" >/dev/null
+  echo "[obs-creds-seed] wrote `$ak_path + `$sk_path (`$label)"
+}
+
+seed_s3 'nexus/observability/loki/s3-access-key'  'nexus/observability/loki/s3-secret-key'  'Loki MinIO tenant key'
+seed_s3 'nexus/observability/tempo/s3-access-key' 'nexus/observability/tempo/s3-secret-key' 'Tempo MinIO tenant key'
+
+echo "[obs-creds-seed] all obs creds present in nexus/observability/{prometheus,alertmanager,loki,tempo}/"
 "@
 
       $b64 = [Convert]::ToBase64String([System.Text.UTF8Encoding]::new($false).GetBytes($bash))

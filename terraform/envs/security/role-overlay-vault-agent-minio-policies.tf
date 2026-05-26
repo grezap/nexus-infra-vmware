@@ -29,7 +29,7 @@ resource "null_resource" "vault_agent_minio_policies" {
     post_init_id             = null_resource.vault_post_init[0].id
     minio_role_id            = length(null_resource.vault_pki_minio_role) > 0 ? null_resource.vault_pki_minio_role[0].id : "disabled"
     minio_role_name          = var.vault_pki_minio_role_name
-    minio_policies_overlay_v = "2" # v2 (0.L.5): adds KV read on nexus/data/analytics/starrocks-sd/s3-* so minio-1's agent can read the SR-SD tenant S3 keys during the starrocks-tenant bootstrap. v1: lakehouse/minio/* only.
+    minio_policies_overlay_v = "3" # v3 (0.I.2/3): adds KV read on nexus/data/observability/{loki,tempo}/s3-* so minio-1's agent can read the obs tenant S3 keys during the obs-tenants bootstrap. v2 (0.L.5): SR-SD. v1: lakehouse/minio/* only.
   }
 
   depends_on = [null_resource.vault_post_init, null_resource.vault_pki_minio_role]
@@ -58,6 +58,15 @@ path "nexus/data/lakehouse/minio/*" {
 # and provisions a dedicated MinIO service account (nexus-starrocks-app) with
 # access/secret keys sticky-seeded by the security env at this KV namespace.
 path "nexus/data/analytics/starrocks-sd/s3-*" {
+  capabilities = ["read"]
+}
+# Phase 0.I.2/0.I.3 (ADR-0038): the obs tenants bootstrap (Loki + Tempo) runs
+# on minio-1 and provisions the nexus-{loki,tempo}-app service accounts with
+# access/secret keys sticky-seeded by the security env's obs-creds-seed.
+path "nexus/data/observability/loki/s3-*" {
+  capabilities = ["read"]
+}
+path "nexus/data/observability/tempo/s3-*" {
   capabilities = ["read"]
 }
 path "auth/token/lookup-self" {
