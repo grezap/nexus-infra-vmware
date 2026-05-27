@@ -1,18 +1,25 @@
 /*
  * role-overlay-vault-observability-creds-seed.tf -- Phase 0.I setup
  *
- * Sticky-seeds the obs-tier web-auth + future S3 tenant + future admin
- * credentials in Vault KV. For each web-auth password, seeds BOTH:
+ * Sticky-seeds the obs-tier web-auth + S3 tenant + Grafana (admin / session /
+ * state-DB) credentials in Vault KV. For each web-auth password, seeds BOTH:
  *   nexus/observability/<service>/web-auth-password         (field `password`: 32-char hex)
  *   nexus/observability/<service>/web-auth-password         (field `password_bcrypt`: bcrypt of `password`)
  *
- * Prom + AM consume password_bcrypt in their web.yml; Grafana future consumes
- * password. Sticky: never overwrites the password; the bcrypt is re-derived
- * idempotently. (Future S3 tenant keys for Loki + Tempo seeded in 0.I.2/3.)
+ * Prom + AM consume password_bcrypt in their web.yml; Grafana consumes
+ * `password` (datasource basic-auth). Sticky: never overwrites the password;
+ * the bcrypt is re-derived idempotently.
  *
- * KV paths seeded by this overlay (Phase 0.I.1 scope):
- *   nexus/observability/prometheus/web-auth-password   (basic-auth on Prom :9090)
- *   nexus/observability/alertmanager/web-auth-password (basic-auth on AM :9093)
+ * KV paths seeded by this overlay (cumulative through 0.I.4):
+ *   0.I.1: nexus/observability/prometheus/web-auth-password   (basic-auth on Prom :9090)
+ *          nexus/observability/alertmanager/web-auth-password (basic-auth on AM :9093)
+ *   0.I.2: nexus/observability/loki/s3-{access,secret}-key    (MinIO `loki` tenant)
+ *   0.I.3: nexus/observability/tempo/s3-{access,secret}-key   (MinIO `tempo` tenant)
+ *   0.I.4: nexus/observability/grafana-pg/superuser-password    (PG postgres pw)
+ *          nexus/observability/grafana-pg/replication-password  (repluser pw; streaming repl)
+ *          nexus/observability/grafana-pg/grafana-db-password   (grafana app PG user pw)
+ *          nexus/observability/grafana/admin-password           (Grafana admin login pw)
+ *          nexus/observability/grafana/session-key              (Grafana [security] secret_key)
  *
  * Selective ops: var.enable_observability_creds_seed (master).
  */
@@ -22,8 +29,8 @@ resource "null_resource" "vault_observability_creds_seed" {
 
   triggers = {
     post_init_id     = null_resource.vault_post_init[0].id
-    kv_paths         = "nexus/observability/{prometheus,alertmanager}/web-auth-password + nexus/observability/{loki,tempo}/s3-{access,secret}-key"
-    obs_creds_seed_v = "2" # v2: add loki + tempo S3 tenant key seeds for 0.I.2/0.I.3
+    kv_paths         = "nexus/observability/{prometheus,alertmanager}/web-auth-password + nexus/observability/{loki,tempo}/s3-{access,secret}-key + nexus/observability/grafana-pg/{superuser,replication,grafana-db}-password + nexus/observability/grafana/{admin-password,session-key}"
+    obs_creds_seed_v = "3" # v3: add 0.I.4 Grafana + grafana-pg sticky-hex passwords
   }
 
   depends_on = [null_resource.vault_post_init]
@@ -100,7 +107,27 @@ seed_s3() {
 seed_s3 'nexus/observability/loki/s3-access-key'  'nexus/observability/loki/s3-secret-key'  'Loki MinIO tenant key'
 seed_s3 'nexus/observability/tempo/s3-access-key' 'nexus/observability/tempo/s3-secret-key' 'Tempo MinIO tenant key'
 
-echo "[obs-creds-seed] all obs creds present in nexus/observability/{prometheus,alertmanager,loki,tempo}/"
+# 0.I.4 Grafana + grafana-pg sticky-hex passwords (field name `value`, matching
+# the iceberg-pg / registry-pg / S3-tenant idiom). Idempotent: never overwrites
+# an existing value.
+seed_pw() {
+  local path="`$1"; local label="`$2"; local len="`$${3:-32}"
+  if vault kv get -field=value "`$path" >/dev/null 2>&1; then
+    echo "[obs-creds-seed] `$path already populated -- no-op (sticky `$label)"
+    return 0
+  fi
+  PW=`$(openssl rand -hex `$len)
+  vault kv put "`$path" value="`$PW" >/dev/null
+  echo "[obs-creds-seed] wrote `$path (`$${len}-byte hex `$label)"
+}
+
+seed_pw 'nexus/observability/grafana-pg/superuser-password'   'Grafana state-DB postgres superuser password'   16
+seed_pw 'nexus/observability/grafana-pg/replication-password' 'Grafana state-DB repluser password'             16
+seed_pw 'nexus/observability/grafana-pg/grafana-db-password'  'Grafana PG user (grafana app) password'         16
+seed_pw 'nexus/observability/grafana/admin-password'          'Grafana admin user password'                    16
+seed_pw 'nexus/observability/grafana/session-key'             'Grafana [security] secret_key (cookie signing)' 32
+
+echo "[obs-creds-seed] all obs creds present in nexus/observability/{prometheus,alertmanager,loki,tempo,grafana,grafana-pg}/"
 "@
 
       $b64 = [Convert]::ToBase64String([System.Text.UTF8Encoding]::new($false).GetBytes($bash))
