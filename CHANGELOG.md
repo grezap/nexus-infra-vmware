@@ -6,6 +6,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Phase 0.M (2026-05-28) — `foundation` env: 2nd AD DC (`dc-nexus-2`) — foundation HA partner
+
+Foundation HA enhancement closing the last single-DC SPOF in the lab. Adds a replica DC to the existing `nexus.lab` forest, multi-master replication, replicated DNS, DC Locator failover. Committed 2026-05-22, ratified 2026-05-28 (ADR-0039 pending). Tier `01-foundation`.
+
+**New module** — `main.tf` gets a `module "dc_nexus_2"` (count-gated on `var.enable_dc_nexus_2`); clones the same `ws2025-desktop` template as `dc-nexus`; lands at DHCP-pool IP `192.168.70.242` (no dhcp-host pin per the 2026-05-28 IP decision; canonical `.10`/`.11` slots stay drift-from-reality, same as dc-nexus).
+
+**New overlay** — `role-overlay-dc-nexus-2-promotion.tf` (7-step apply graph; mirrors dc-nexus 5-step + jumpbox 3-step combined):
+
+| Step | Resource | What |
+|---|---|---|
+| 1 | `dc_nexus_2_rename` | `Rename-Computer dc-nexus-2` + reboot. |
+| 2 | `dc_nexus_2_wait_renamed` | Poll `hostname` until `dc-nexus-2`. |
+| 3 | `dc_nexus_2_join` | Patch `sshd_config` (remove `AllowUsers nexusadmin`) + `Add-Computer -DomainName nexus.lab -Credential NEXUS\nexusadmin -Force -Restart`. |
+| 4 | `dc_nexus_2_wait_joined` | Poll `PartOfDomain=True`. |
+| 5 | `dc_nexus_2_promote` | `Install-WindowsFeature AD-Domain-Services` + `Install-ADDSDomainController -DomainName nexus.lab -Credential NEXUS\nexusadmin -SafeModeAdministratorPassword <DSRM> -ReplicationSourceDC dc-nexus.nexus.lab -SiteName Default-First-Site-Name -InstallDns:$true -CreateDnsDelegation:$false -Force:$true -NoRebootOnCompletion:$false`. |
+| 6 | `dc_nexus_2_wait_promoted` | Poll `(Get-ADDomain).Forest == nexus.lab` (ADWS live = promotion complete). |
+| 7 | `dc_nexus_2_verify` | Emit `Get-ADDomainController -Identity dc-nexus-2` + `repadmin /showrepl` + `Get-ADReplicationPartnerMetadata`. |
+
+**New variables** — `mac_dc_nexus_2` (`:27`), `enable_dc_nexus_2` (default `false`), `enable_dc_nexus_2_promotion` (default `false`). Both gating flags default `false` so a passing-by `apply` without explicit override does NOT change foundation behaviour — opt-in only.
+
+**Vault KV reuse** — `nexus/foundation/identity/nexusadmin` (domain admin cred for the `Add-Computer` step) + `nexus/foundation/dc-nexus/dsrm` (DSRM password for `Install-ADDSDomainController`). Same KV paths the dc-nexus pre-promotion uses; no new seeds.
+
+**New smoke gate** — `scripts/smoke-0.M.ps1` (~25 checks across 7 sections: reachability · hostname · domain-join state · ADDS role + services · replication topology · DNS replica zones · test-user round-trip from dc-nexus → dc-nexus-2).
+
+**Handbook** — new §1m (from-zero replay + cold-rebuild proof + selective ops + manual demote procedure).
+
+**Cross-tier sweep** — `nexus-platform-plan/docs/infra/vms.yaml` `dc-nexus-2` row IP `.11` → `.242` (smoke-pool reality; the `.11` slot is owned by `sql-fci-1`). `vm_count 107 → 108` (after cold-rebuild proof). DEMO-19 added (persona demo: "kill DC1, auth + DNS continue on DC2").
+
 ### Added — Phase 0.L.5 (2026-05-26) — `foundation` + `security` envs: cross-tier state for the StarRocks shared-data cluster
 
 Cross-tier state for `nexus-infra-analytics`'s new SR-shared-data cluster (Phase 0.L.5, ADR-0037).

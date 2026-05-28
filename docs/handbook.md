@@ -1662,6 +1662,182 @@ Phase 0.D.5 adds 1 VM (`vault-transit`, 2 GB RAM) when 5.5 greenfield re-cluster
 
 ---
 
+## 1m. Phase 0.M — 2nd AD DC (`dc-nexus-2`)
+
+Foundation HA partner of `dc-nexus`. Closes the lab's last AD-tier SPOF: a single-DC outage no longer takes down auth/DNS for the entire fleet. Done by adding a second `ws2025-desktop` clone to `envs/foundation/` and promoting it into a replica DC of the existing `nexus.lab` forest via `Install-ADDSDomainController`.
+
+**Canon mapping:**
+
+| Choice | Source |
+|---|---|
+| 2nd AD DC in foundation tier | [`MASTER-PLAN.md` Phase 0.M row](../../nexus-platform-plan/MASTER-PLAN.md) + [planned-sharding-ha-enhancements memory](../memory/project_planned_sharding_ha_enhancements.md) |
+| `dc-nexus-2` IP `.242` + MAC `:27` | [`vms.yaml`](../../nexus-platform-plan/docs/infra/vms.yaml) (foundation cluster row) -- DHCP smoke-pool, no dhcp-host pin (mirrors dc-nexus@.240 + jumpbox@.241 actual reality) |
+| 7-step apply graph (rename + wait + join + wait + promote + wait + verify) | [`role-overlay-dc-nexus-2-promotion.tf`](../terraform/envs/foundation/role-overlay-dc-nexus-2-promotion.tf) -- mirrors dc-nexus 5-step + jumpbox 3-step combined |
+| Vault KV creds (nexusadmin + DSRM) | [`data-vault-kv-foundation.tf`](../terraform/envs/foundation/data-vault-kv-foundation.tf) -- same paths as dc-nexus bootstrap |
+| sshd_config `AllowUsers` post-join patch | [`feedback_addsforest_post_promotion.md`](../memory/feedback_addsforest_post_promotion.md) -- post-domain-join user appears as `NEXUS\nexusadmin` |
+| Windows-over-SSH patterns (base64 transit, SSH echo probe, retry loop) | [`feedback_windows_ssh_automation.md`](../memory/feedback_windows_ssh_automation.md) -- 5 structural rules |
+
+### 1m.1 What it does
+
+Seven sequential `null_resource`s in `role-overlay-dc-nexus-2-promotion.tf`:
+
+| Step | Resource | What |
+|---|---|---|
+| 1 | `dc_nexus_2_rename` | SSH echo probe + base64-encoded `Rename-Computer` + reboot. |
+| 2 | `dc_nexus_2_wait_renamed` | Poll `hostname` over SSH until `dc-nexus-2`. |
+| 3 | `dc_nexus_2_join` | Patch `sshd_config` (remove `AllowUsers nexusadmin`) + `Add-Computer -DomainName nexus.lab -Credential NEXUS\nexusadmin -Force -Restart`. |
+| 4 | `dc_nexus_2_wait_joined` | Poll `PartOfDomain=True` + `Domain=nexus.lab`. |
+| 5 | `dc_nexus_2_promote` | `Install-WindowsFeature AD-Domain-Services` + `Install-ADDSDomainController -DomainName nexus.lab -Credential NEXUS\nexusadmin -SafeModeAdministratorPassword <DSRM> -ReplicationSourceDC dc-nexus.nexus.lab -SiteName Default-First-Site-Name -InstallDns:$true -CreateDnsDelegation:$false -Force:$true -NoRebootOnCompletion:$false`. |
+| 6 | `dc_nexus_2_wait_promoted` | Poll `(Get-ADDomain).Forest == nexus.lab` on dc-nexus-2 (ADWS up = promotion complete). |
+| 7 | `dc_nexus_2_verify` | Emit `Get-ADDomainController -Identity dc-nexus-2` (from dc-nexus) + `repadmin /showrepl` + `Get-ADReplicationPartnerMetadata`. |
+
+### 1m.2 From-zero replay
+
+```powershell
+cd "F:\_CODING_\Repos\Local Development And Test\Portfolio_Project_Ideas\workspace\nexus-infra-vmware"
+
+# Pre-req: 0.D.5 foundation tier alive (dc-nexus promoted; vault-1/2/3 + vault-transit
+# unsealed; KV has nexus/foundation/identity/nexusadmin + nexus/foundation/dc-nexus/dsrm
+# at >=14-char values). Verify:
+pwsh -File scripts\security.ps1 smoke   # chains 0.D.1-5 (~80 checks)
+# Expect: ALL SECURITY SMOKE CHECKS PASSED
+
+# Step 1 -- clone-only apply (lands dc-nexus-2 VM at .242; no promotion).
+# Takes ~4-6 min (Packer template clone + power on + DHCP).
+pwsh -File scripts\foundation.ps1 apply -Vars 'enable_dc_nexus_2=true'
+
+# Step 2 -- handshake the new clone before promoting.
+ssh nexusadmin@192.168.70.242 hostname
+# Expect: WIN-XXXXXXXXXXX (random sysprep hostname; rename happens in step 3)
+
+# Step 3 -- full chain (rename + domain-join + promote). Takes ~25-30 min.
+pwsh -File scripts\foundation.ps1 apply -Vars 'enable_dc_nexus_2=true,enable_dc_nexus_2_promotion=true'
+
+# Step 4 -- 0.M smoke gate (~25 checks across 7 sections).
+pwsh -File scripts\smoke-0.M.ps1
+# Expect: ALL 0.M SMOKE CHECKS PASSED
+```
+
+### 1m.3 Cold-rebuild proof
+
+```powershell
+# Destroy the 0.M overlay + the VM.
+pwsh -File scripts\foundation.ps1 apply -Vars 'enable_dc_nexus_2=false'
+# (Removes dc_nexus_2 module + all 7 promotion overlays from state; demotes
+# the DC from the directory tree as a side-effect of destroying the VM.)
+
+# Wait for replication metadata to clean up on dc-nexus (~5 min).
+Start-Sleep -Seconds 300
+
+# Verify dc-nexus's directory tree no longer references dc-nexus-2.
+ssh nexusadmin@192.168.70.240 'powershell -NoProfile -Command "Get-ADDomainController -Filter *"'
+
+# Now from-zero replay (steps 1-4 above) -- expect smoke GREEN on first try.
+```
+
+### 1m.4 Selective ops
+
+```powershell
+# Land only the clone (no promotion); useful for iterating on the promotion overlays.
+pwsh -File scripts\foundation.ps1 apply -Vars 'enable_dc_nexus_2=true,enable_dc_nexus_2_promotion=false'
+
+# Force re-run of just the join step (e.g. after sshd_config drift).
+terraform -chdir=terraform\envs\foundation taint  null_resource.dc_nexus_2_join
+terraform -chdir=terraform\envs\foundation apply  -target=null_resource.dc_nexus_2_join -auto-approve
+
+# Force re-promotion (rare -- usually you destroy + re-clone instead).
+terraform -chdir=terraform\envs\foundation taint  null_resource.dc_nexus_2_promote
+terraform -chdir=terraform\envs\foundation apply  -target=null_resource.dc_nexus_2_promote -auto-approve
+```
+
+### 1m.5 Manual ops (destroy + recreate)
+
+`terraform apply -Vars enable_dc_nexus_2=false` removes the VM but does NOT demote the DC from the AD topology. AD still has CN=DC-NEXUS-2 in the Servers + Computers containers, plus DNS A records — and the next `enable_dc_nexus_2=true` apply will fail at `Install-ADDSDomainController` because "a domain controller named dc-nexus-2 already exists." Two sane recovery paths:
+
+#### Path A — clean demotion BEFORE destroy (preferred when dc-nexus-2 is reachable)
+
+```powershell
+# RDP into dc-nexus-2 (or SSH if you trust SSH for ADDS-uninstall ops; some
+# Server 2025 versions have the same console-mode quirk as Add-KdsRootKey
+# per memory/feedback_kds_rootkey_server2025_ssh.md). Elevated PS:
+Uninstall-ADDSDomainController -LocalAdministratorPassword (Read-Host -AsSecureString) -DemoteOperationMasterRole -Force
+# Reboot, then:
+pwsh -File scripts\foundation.ps1 apply -Vars 'enable_dc_nexus_2=false'
+# Then redo §1m.2 from step 1 (the AD topology is already clean).
+```
+
+#### Path B — metadata cleanup AFTER destroy (when the VM is already gone)
+
+```powershell
+# Step 1: destroy the VM (already done if `enable_dc_nexus_2=false` was applied).
+pwsh -File scripts\foundation.ps1 apply -Vars 'enable_dc_nexus_2=false'
+
+# Step 2: force-clean the orphan from AD's topology. Run via SSH on dc-nexus.
+$cleanup = @'
+$serverDn = "CN=DC-NEXUS-2,CN=Servers,CN=Default-First-Site-Name,CN=Sites,CN=Configuration,DC=nexus,DC=lab"
+$ntdsDn   = "CN=NTDS Settings,$serverDn"
+$compDn   = "CN=DC-NEXUS-2,OU=Domain Controllers,DC=nexus,DC=lab"
+if (Get-ADObject -Identity $ntdsDn   -ErrorAction SilentlyContinue) { Remove-ADObject -Identity $ntdsDn   -Recursive -Confirm:$false }
+if (Get-ADObject -Identity $serverDn -ErrorAction SilentlyContinue) { Remove-ADObject -Identity $serverDn -Recursive -Confirm:$false }
+if (Get-ADObject -Identity $compDn   -ErrorAction SilentlyContinue) { Remove-ADObject -Identity $compDn   -Recursive -Confirm:$false }
+Remove-DnsServerResourceRecord -ZoneName nexus.lab -Name dc-nexus-2 -RRType A -Force -ErrorAction SilentlyContinue
+"CLEANUP_DONE"
+'@
+$b64 = [Convert]::ToBase64String([System.Text.UnicodeEncoding]::Unicode.GetBytes($cleanup))
+ssh nexusadmin@192.168.70.240 "powershell -NoProfile -EncodedCommand $b64"
+# Expect: "CLEANUP_DONE"
+
+# Step 3: redo §1m.2 from step 1.
+```
+
+(Path B is what the cold-rebuild-proof run in 2026-05-28 uses — see M2 in §1m.7.)
+
+### 1m.6 RAM budget delta
+
+Phase 0.M adds 1 VM (`dc-nexus-2`, 4 GB RAM, matches dc-nexus). Foundation tier total: was ~48 GB; becomes ~52 GB. Build host has slack.
+
+### 1m.7 What didn't work (canon — don't re-derive)
+
+#### M1 — `$source_dc` literal-string bug in promote v1 (caught 2026-05-28 first ratification cycle)
+
+**Symptom:** `Install-WindowsFeature AD-Domain-Services` ran cleanly (feature shows `InstallState=Installed`); the SSH session that should have run `Install-ADDSDomainController` returned within seconds; NTDS/ADWS/KDC services stayed `Stopped/Disabled`; `Win32_ComputerSystem.DomainRole` stayed `3` (Member Server, not 4 BackupDC / 5 PrimaryDC). The `wait_promoted` step then polled fruitlessly for `(Get-ADDomain).Forest` and timed out at 30m. `C:\Windows\debug\dcpromo.log` was not created (a sign Install-ADDSDomainController exited very early — credential or replication-source validation phase).
+
+**Root cause:** The promote heredoc's `$source_dc` declaration was:
+
+```hcl
+$source_dc      = 'dc-nexus.$${domain}'
+```
+
+Terraform renders `$${domain}` → literal `${domain}` (escape sequence). PowerShell single quotes do **not** interpolate — `${domain}` stays a literal token. Install-ADDSDomainController received `-ReplicationSourceDC 'dc-nexus.${domain}'` (literally with the dollar-brace) and silently failed to resolve that hostname; the whole cmdlet returned non-zero but the outer SSH command swallowed it (we expected `-NoRebootOnCompletion:$false` to drop the connection at the end-of-success reboot; getting an early-failure exit instead looked identical at the SSH layer).
+
+**Fix:** terraform-side interpolation:
+
+```hcl
+$source_dc      = 'dc-nexus.${var.ad_domain}'
+```
+
+After terraform renders: `$source_dc = 'dc-nexus.nexus.lab'` — a literal FQDN string in PowerShell. `promote_overlay_v` bumped `"1"` → `"2"` to force re-run.
+
+**Rule (forward):** when a PowerShell variable's value needs to be a substring composed from a Terraform var, do it at terraform-interpolation time inside single quotes (`'<prefix>${var.foo}<suffix>'`), NOT at PowerShell-interpolation time inside double quotes (which would also need careful escaping for the heredoc). See [`feedback_terraform_heredoc_powershell.md`](../memory/feedback_terraform_heredoc_powershell.md) — this is a 4th case to add to its rule set (the existing 3 rules are about `$${var}` PS literal expansion, `$${var}:` scope qualifier, and backtick-letter inner here-strings; M1 is the "PS single-quote literal vs PS double-quote expansion" trap when nested under a terraform heredoc).
+
+**Detection:** add a runtime probe at the start of the smoke gate? `Test ssh nexusadmin@$Dc2Ip 'powershell -NoProfile -Command "(Get-ADDomain).Forest"'` — if dc-nexus-2 was promoted, returns `nexus.lab`; otherwise empty. (Already covered by section 4 + 5 checks in `smoke-0.M.ps1`; no further work needed.)
+
+#### M2 — `enable_dc_nexus_2=false` destroys the VM but leaves AD topology orphan (caught 2026-05-28 cold-rebuild proof)
+
+**Symptom:** Apply with `enable_dc_nexus_2=false` removes the VM cleanly (`module.dc_nexus_2.*` resources + 7 promotion overlays destroyed). But `Get-ADDomainController -Filter *` from dc-nexus STILL shows `dc-nexus-2`. The CN=DC-NEXUS-2 objects in `CN=Servers` + `OU=Domain Controllers` + the `dc-nexus-2.nexus.lab` DNS A record all linger. Re-applying with `enable_dc_nexus_2=true,enable_dc_nexus_2_promotion=true` would fire `Install-ADDSDomainController` which then fails because "a domain controller named dc-nexus-2 already exists in the directory."
+
+**Root cause:** None of the 7 promotion overlays has a `destroy_provisioner` that calls `Uninstall-ADDSDomainController` (or equivalent metadata cleanup). Terraform's destroy of `null_resource.*` is silent — the resource just leaves state. The VM destroy via `vmrun deleteVM` (in `modules/vm/`'s destroy provisioner) takes the physical machine away but AD doesn't know that.
+
+**Replay-friendly fix (current):** Document the two clean-recovery paths in handbook §1m.5 (Path A = demote-then-destroy; Path B = destroy-then-metadata-cleanup). Cold-rebuild proof uses Path B. Operator chooses based on whether the VM is reachable at destroy time.
+
+**Forward enhancement (deferred — 0.M.1):** Add a `destroy_provisioner` on `null_resource.dc_nexus_2_verify` that SSH-calls `Uninstall-ADDSDomainController -DemoteOperationMasterRole -Force` BEFORE the VM destroy. Requires careful ordering (verify destroys before promote destroys before VM destroys) and tolerance for the case where dc-nexus-2 is already unreachable (skip + log + carry on). Not blocking the 0.M seal; documented as a known limitation + remediation script.
+
+**Rule (forward):** for any future "promoted member-of-shared-cluster" resource (Vitess vttablet, Citus worker, sharded-Mongo shard), bake the demote-on-destroy path into the overlay from day 1. Lab-scale "just kill the VM" deletes work for stateless clusters (Kafka brokers, StarRocks BEs) but NOT for clusters whose metadata is owned by another peer (AD, Mongo config servers, Citus coordinator, Vitess topology).
+
+_See [`feedback_windows_ssh_automation.md`](../memory/feedback_windows_ssh_automation.md) + [`feedback_addsforest_post_promotion.md`](../memory/feedback_addsforest_post_promotion.md) for pre-known structural patterns already baked in (5-rule SSH automation + post-promotion sshd_config remediation)._
+
+---
+
 ## 2. Working with the running gateway
 
 ### 2.1 SSH in
