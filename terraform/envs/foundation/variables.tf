@@ -28,6 +28,25 @@ variable "mac_nexus_admin_jumpbox" {
   default     = "00:50:56:3F:00:26"
 }
 
+# ─── Phase 0.M -- 2nd AD DC (foundation HA) ──────────────────────────────
+variable "mac_dc_nexus_2" {
+  description = "Static MAC for dc-nexus-2 (Phase 0.M -- 2nd AD DC). Same smoke/lab range; :27 follows :26."
+  type        = string
+  default     = "00:50:56:3F:00:27"
+}
+
+variable "enable_dc_nexus_2" {
+  description = "Toggle: clone the dc-nexus-2 VM (foundation HA partner of dc-nexus, Phase 0.M). Default false until live promotion runbook is ratified. When true the VM is cloned but the role-overlay-dc-nexus-2-promotion is gated by var.enable_dc_nexus_2_promotion."
+  type        = bool
+  default     = false
+}
+
+variable "enable_dc_nexus_2_promotion" {
+  description = "Toggle: promote dc-nexus-2 into a replica DC of the existing nexus.lab forest via Install-ADDSDomainController. Default false. Requires enable_dc_nexus_2=true + enable_dc_promotion=true (the forest must exist on dc-nexus first)."
+  type        = bool
+  default     = false
+}
+
 # ─── Phase 0.C.2 — AD DS role overlay on dc-nexus ────────────────────────
 
 variable "enable_dc_promotion" {

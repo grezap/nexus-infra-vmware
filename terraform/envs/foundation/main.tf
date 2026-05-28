@@ -51,6 +51,20 @@ module "dc_nexus" {
   mac_address       = var.mac_dc_nexus
 }
 
+# Phase 0.M -- 2nd AD DC for forest HA (replication partner of dc-nexus).
+# Promoted via Install-ADDSDomainController (joins the existing nexus.lab forest)
+# in role-overlay-dc-nexus-2-promotion.tf. Selective: var.enable_dc_nexus_2.
+module "dc_nexus_2" {
+  source = "../../modules/vm"
+  count  = var.enable_dc_nexus_2 ? 1 : 0
+
+  vm_name           = "dc-nexus-2"
+  template_vmx_path = var.template_vmx_path
+  vm_output_dir     = "${var.vm_output_dir_root}/dc-nexus-2"
+  vnet              = var.vnet
+  mac_address       = var.mac_dc_nexus_2
+}
+
 module "nexus_admin_jumpbox" {
   source = "../../modules/vm"
 
