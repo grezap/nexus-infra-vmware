@@ -7,7 +7,8 @@
  * (v3); 0.G.4 extended with 8 Patroni-tier reservations (v5; v4 was the
  * single-HAProxy variant superseded mid-scaffold by the HA pair design to
  * align with the proxysql-1/2 pattern); 0.G.7 extends with 4 SQL Server
- * FCI/AG reservations (v6 -- this version). The single-file shape avoids
+ * FCI/AG reservations (v6); 0.N extends with 11 sharded-Mongo reservations
+ * (v7 -- this version: 3 cfg + 6 shards + 2 mongos). The single-file shape avoids
  * marker-version churn across sub-phase ships -- the marker string carries
  * the version and a fresh apply replaces the file atomically when a new
  * cluster's reservations are added.
@@ -40,6 +41,17 @@
  *   sql-fci-2     -> 192.168.70.12  (WSFC FCI node 2; shares iSCSI LUN .16)
  *   sql-ag-rep-1  -> 192.168.70.13  (AG async replica 1)
  *   sql-ag-rep-2  -> 192.168.70.14  (AG async replica 2)
+ *   mongo-cfg-1       -> 192.168.70.74  (Phase 0.N config-server RS member, initial PRIMARY)
+ *   mongo-cfg-2       -> 192.168.70.75  (config-server RS member)
+ *   mongo-cfg-3       -> 192.168.70.76  (config-server RS member)
+ *   mongo-shard-1-1   -> 192.168.70.77  (shard-1 RS, initial PRIMARY)
+ *   mongo-shard-1-2   -> 192.168.70.78  (shard-1 RS)
+ *   mongo-shard-1-3   -> 192.168.70.79  (shard-1 RS)
+ *   mongo-shard-2-1   -> 192.168.70.80  (shard-2 RS, initial PRIMARY)
+ *   mongo-shard-2-2   -> 192.168.70.56  (shard-2 RS -- decade-spill from .80 to first free .56)
+ *   mongo-shard-2-3   -> 192.168.70.57  (shard-2 RS)
+ *   mongo-mongos-1    -> 192.168.70.58  (mongos query router; round-robin DNS partner)
+ *   mongo-mongos-2    -> 192.168.70.59  (mongos query router)
  *
  * The ProxySQL VIP .50, HAProxy VIP .60, and the 3 SQL VIPs .15/.16/.17 are
  * NOT dhcp reservations -- the LB tier VIPs float between their respective
@@ -125,12 +137,23 @@ resource "null_resource" "gateway_oltp_reservations" {
       $mac_sf2 = '${var.mac_oltp_sql_fci_2_primary}'
       $mac_sa1 = '${var.mac_oltp_sql_ag_rep_1_primary}'
       $mac_sa2 = '${var.mac_oltp_sql_ag_rep_2_primary}'
-      $marker  = '# OLTP tier dhcp-host reservations managed by terraform/envs/foundation/role-overlay-gateway-oltp-reservations.tf v6'
+      $mac_cfg1 = '${var.mac_oltp_mongo_cfg_1_primary}'
+      $mac_cfg2 = '${var.mac_oltp_mongo_cfg_2_primary}'
+      $mac_cfg3 = '${var.mac_oltp_mongo_cfg_3_primary}'
+      $mac_s11  = '${var.mac_oltp_mongo_shard_1_1_primary}'
+      $mac_s12  = '${var.mac_oltp_mongo_shard_1_2_primary}'
+      $mac_s13  = '${var.mac_oltp_mongo_shard_1_3_primary}'
+      $mac_s21  = '${var.mac_oltp_mongo_shard_2_1_primary}'
+      $mac_s22  = '${var.mac_oltp_mongo_shard_2_2_primary}'
+      $mac_s23  = '${var.mac_oltp_mongo_shard_2_3_primary}'
+      $mac_mr1  = '${var.mac_oltp_mongo_mongos_1_primary}'
+      $mac_mr2  = '${var.mac_oltp_mongo_mongos_2_primary}'
+      $marker  = '# OLTP tier dhcp-host reservations managed by terraform/envs/foundation/role-overlay-gateway-oltp-reservations.tf v7'
 
-      # Idempotent insert: marker matches v6 specifically. Earlier versions
+      # Idempotent insert: marker matches v7 specifically. Earlier versions
       # (v1 redis only, v2 redis+mongo, v3 +percona, v4 the abandoned single-
-      # HAProxy variant, v5 +patroni-tier) all get replaced atomically via
-      # write-through tee.
+      # HAProxy variant, v5 +patroni-tier, v6 +sqlserver) all get replaced
+      # atomically via write-through tee.
       $existing = ssh nexusadmin@$gw "test -f /etc/dnsmasq.d/foundation-oltp-reservations.conf && cat /etc/dnsmasq.d/foundation-oltp-reservations.conf || true"
       if ($existing -match [regex]::Escape($marker)) {
         Write-Host "[gateway oltp-reservations] v6 reservations already present, no-op."
@@ -166,6 +189,17 @@ resource "null_resource" "gateway_oltp_reservations" {
         "dhcp-host=$mac_sf2,192.168.70.12,sql-fci-2"
         "dhcp-host=$mac_sa1,192.168.70.13,sql-ag-rep-1"
         "dhcp-host=$mac_sa2,192.168.70.14,sql-ag-rep-2"
+        "dhcp-host=$mac_cfg1,192.168.70.74,mongo-cfg-1"
+        "dhcp-host=$mac_cfg2,192.168.70.75,mongo-cfg-2"
+        "dhcp-host=$mac_cfg3,192.168.70.76,mongo-cfg-3"
+        "dhcp-host=$mac_s11,192.168.70.77,mongo-shard-1-1"
+        "dhcp-host=$mac_s12,192.168.70.78,mongo-shard-1-2"
+        "dhcp-host=$mac_s13,192.168.70.79,mongo-shard-1-3"
+        "dhcp-host=$mac_s21,192.168.70.80,mongo-shard-2-1"
+        "dhcp-host=$mac_s22,192.168.70.56,mongo-shard-2-2"
+        "dhcp-host=$mac_s23,192.168.70.57,mongo-shard-2-3"
+        "dhcp-host=$mac_mr1,192.168.70.58,mongo-mongos-1"
+        "dhcp-host=$mac_mr2,192.168.70.59,mongo-mongos-2"
         ""
       ) -join "`n"
 
@@ -173,10 +207,10 @@ resource "null_resource" "gateway_oltp_reservations" {
         echo '$confLines' | sudo tee /etc/dnsmasq.d/foundation-oltp-reservations.conf > /dev/null
         sudo systemctl restart dnsmasq && echo OK
 "@
-      Write-Host "[gateway oltp-reservations] writing 26 dhcp-host reservations (6 Redis + 3 Mongo + 3 PXC + 2 ProxySQL + 3 Patroni + 3 etcd + 2 HAProxy + 2 SQL-FCI + 2 SQL-AG-replica) + restarting dnsmasq..."
+      Write-Host "[gateway oltp-reservations] writing 37 dhcp-host reservations (6 Redis + 3 Mongo + 3 PXC + 2 ProxySQL + 3 Patroni + 3 etcd + 2 HAProxy + 2 SQL-FCI + 2 SQL-AG-replica + 3 Mongo-cfg + 6 Mongo-shards + 2 Mongos) + restarting dnsmasq..."
       ssh nexusadmin@$gw $script
       if ($LASTEXITCODE -ne 0) { throw "[gateway oltp-reservations] ssh tee/restart failed (rc=$LASTEXITCODE)" }
-      Write-Host "[gateway oltp-reservations] reservations live: redis-1..6 (.81-.84/.87/.89), mongo-1..3 (.71/.72/.73), pxc-node-1..3 (.51/.52/.53), proxysql-1..2 (.54/.55), pg-primary/pg-replica-1/pg-replica-2 (.61-.63), etcd-1..3 (.64/.65/.66), haproxy-pg-1..2 (.67/.68), sql-fci-1..2 (.11/.12), sql-ag-rep-1..2 (.13/.14)"
+      Write-Host "[gateway oltp-reservations] reservations live: redis-1..6 (.81-.84/.87/.89), mongo-1..3 (.71/.72/.73), pxc-node-1..3 (.51/.52/.53), proxysql-1..2 (.54/.55), pg-primary/pg-replica-1/pg-replica-2 (.61-.63), etcd-1..3 (.64/.65/.66), haproxy-pg-1..2 (.67/.68), sql-fci-1..2 (.11/.12), sql-ag-rep-1..2 (.13/.14), mongo-cfg-1..3 (.74/.75/.76), mongo-shard-1-1..3 (.77/.78/.79), mongo-shard-2-1..3 (.80/.56/.57), mongo-mongos-1..2 (.58/.59)"
     PWSH
   }
 

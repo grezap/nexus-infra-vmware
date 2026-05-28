@@ -193,14 +193,16 @@ Test-Check "Get-ADDomainController -Identity dc-nexus-2 returns IPv4Address=$Dc2
     { Invoke-RemotePs -Ip $DcIp -Script "Get-ADDomainController -Identity dc-nexus-2 | Select-Object -ExpandProperty IPv4Address" } `
     { param($o) $o.Trim() -eq $Dc2Ip }
 
-Test-Check "dc-nexus repadmin /showrepl reports dc-nexus-2 as inbound partner (no failures)" `
-    { Invoke-RemotePs -Ip $DcIp -Script "repadmin /showrepl 2>&1 | Out-String" } `
+Test-Check "dc-nexus repadmin /replsummary shows dc-nexus-2 + no failures" `
+    { Invoke-RemotePs -Ip $DcIp -Script "repadmin /replsummary 2>&1 | Out-String" } `
     {
         param($o)
-        # Healthy = mentions dc-nexus-2 (or its DSA GUID) AND has no
-        # 'last attempt @ ... failed' lines for that partner.
-        ($o -match 'dc-nexus-2' -or $o -match 'DC=nexus,DC=lab') -and `
-            ($o -notmatch 'last attempt[^\r\n]*failed')
+        # /replsummary is a concise tabular view: one row per DC with
+        # largest delta + failures count. Healthy = mentions both DCs + no
+        # 'fails' lines with >0 count. Replaces the earlier /showrepl probe
+        # which got truncated before partner rows appeared (caught 2026-05-28
+        # repair smoke).
+        $o -match 'DC-NEXUS-2' -and $o -notmatch '(?m)^.*\s[1-9]\d*\s+\d+\s+/\s+\d+\s+\d+'
     }
 
 # Per memory/feedback_smoke_gate_probe_robustness.md: use the LIVE-health

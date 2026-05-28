@@ -36,15 +36,15 @@ variable "mac_dc_nexus_2" {
 }
 
 variable "enable_dc_nexus_2" {
-  description = "Toggle: clone the dc-nexus-2 VM (foundation HA partner of dc-nexus, Phase 0.M). Default false until live promotion runbook is ratified. When true the VM is cloned but the role-overlay-dc-nexus-2-promotion is gated by var.enable_dc_nexus_2_promotion."
+  description = "Toggle: clone the dc-nexus-2 VM (foundation HA partner of dc-nexus, Phase 0.M). Default TRUE per [[feedback_terraform_partial_apply_destroys_resources]] -- flipped false->true at 0.M close-out (2026-05-28 follow-up; the original 0.M seal omitted this flip, so a subsequent plain `foundation apply` for the 0.N gateway-oltp-reservations extension silently destroyed dc-nexus-2 as drift. Cost: 1 cycle of metadata-cleanup + re-promote). Opt out with -Vars enable_dc_nexus_2=false ONLY on a lab where the operator genuinely wants single-DC mode (e.g. iterating on other foundation work)."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "enable_dc_nexus_2_promotion" {
-  description = "Toggle: promote dc-nexus-2 into a replica DC of the existing nexus.lab forest via Install-ADDSDomainController. Default false. Requires enable_dc_nexus_2=true + enable_dc_promotion=true (the forest must exist on dc-nexus first)."
+  description = "Toggle: promote dc-nexus-2 into a replica DC of the existing nexus.lab forest via Install-ADDSDomainController. Default TRUE per same canon-vs-reality flip as enable_dc_nexus_2 (see that var's description). Requires enable_dc_nexus_2=true + enable_dc_promotion=true (the forest must exist on dc-nexus first)."
   type        = bool
-  default     = false
+  default     = true
 }
 
 # ─── Phase 0.C.2 — AD DS role overlay on dc-nexus ────────────────────────
@@ -573,6 +573,79 @@ variable "mac_oltp_sql_ag_rep_2_primary" {
   description = "sql-ag-rep-2 primary NIC (VMnet11). Pinned to 192.168.70.14 (AG async replica 2; WSFC member; no iSCSI -- local storage only)."
   type        = string
   default     = "00:50:56:3F:00:89"
+}
+
+# ─── Phase 0.N -- MongoDB sharded cluster (extends nexus-infra-oltp) ────
+# 11 new VMs (3 config-server RS + 2 shard RS x 3 nodes each + 2 mongos
+# query routers). MAC pool :C0-:CA -- the analytics tier already owns the
+# :8A-:9E range (ClickHouse + StarRocks + sr-shared-data) and :A0-:BF is
+# claimed by lakehouse + registry + observability; first free contiguous
+# block is :C0+. Caught at 0.N first-apply 2026-05-28 (MAC conflict surfaced
+# as nftables-wait-SSH timeout; the 11 sharded-Mongo clones DHCP-conflicted
+# with the analytics canonical IPs because the analytics dhcp-host file
+# pinned the same MACs to .31/.32/.41-.49). IP allocation in free OLTP slots:
+#   cfg-1/2/3       -> .74/.75/.76
+#   shard-1-1/2/3   -> .77/.78/.79
+#   shard-2-1/2/3   -> .80/.56/.57
+#   mongos-1/2      -> .58/.59
+# Per ADR-0040 (separate sharded cluster, decoupled from 0.G.2 RS). The
+# 0.G.2 Mongo RS stays as the canonical 'replica set' showcase; 0.N is the
+# 'sharded cluster' showcase. Both reuse the oltp-mongo-node Packer template
+# (extended in Phase 0.N to also install mongodb-org-mongos).
+variable "mac_oltp_mongo_cfg_1_primary" {
+  description = "mongo-cfg-1 primary NIC (VMnet11). Pinned to 192.168.70.74 (config-server RS member, initial PRIMARY for rs.initiate)."
+  type        = string
+  default     = "00:50:56:3F:00:C0"
+}
+variable "mac_oltp_mongo_cfg_2_primary" {
+  description = "mongo-cfg-2 primary NIC (VMnet11). Pinned to 192.168.70.75 (config-server RS member)."
+  type        = string
+  default     = "00:50:56:3F:00:C1"
+}
+variable "mac_oltp_mongo_cfg_3_primary" {
+  description = "mongo-cfg-3 primary NIC (VMnet11). Pinned to 192.168.70.76 (config-server RS member)."
+  type        = string
+  default     = "00:50:56:3F:00:C2"
+}
+variable "mac_oltp_mongo_shard_1_1_primary" {
+  description = "mongo-shard-1-1 primary NIC (VMnet11). Pinned to 192.168.70.77 (shard-1 RS member, initial PRIMARY)."
+  type        = string
+  default     = "00:50:56:3F:00:C3"
+}
+variable "mac_oltp_mongo_shard_1_2_primary" {
+  description = "mongo-shard-1-2 primary NIC (VMnet11). Pinned to 192.168.70.78 (shard-1 RS member)."
+  type        = string
+  default     = "00:50:56:3F:00:C4"
+}
+variable "mac_oltp_mongo_shard_1_3_primary" {
+  description = "mongo-shard-1-3 primary NIC (VMnet11). Pinned to 192.168.70.79 (shard-1 RS member)."
+  type        = string
+  default     = "00:50:56:3F:00:C5"
+}
+variable "mac_oltp_mongo_shard_2_1_primary" {
+  description = "mongo-shard-2-1 primary NIC (VMnet11). Pinned to 192.168.70.80 (shard-2 RS member, initial PRIMARY)."
+  type        = string
+  default     = "00:50:56:3F:00:C6"
+}
+variable "mac_oltp_mongo_shard_2_2_primary" {
+  description = "mongo-shard-2-2 primary NIC (VMnet11). Pinned to 192.168.70.56 (shard-2 RS member -- decade-spill from .80 to first free .56 slot, mirrors the 0.L.5 SR-shared-data .30/.40 split)."
+  type        = string
+  default     = "00:50:56:3F:00:C7"
+}
+variable "mac_oltp_mongo_shard_2_3_primary" {
+  description = "mongo-shard-2-3 primary NIC (VMnet11). Pinned to 192.168.70.57 (shard-2 RS member)."
+  type        = string
+  default     = "00:50:56:3F:00:C8"
+}
+variable "mac_oltp_mongo_mongos_1_primary" {
+  description = "mongo-mongos-1 primary NIC (VMnet11). Pinned to 192.168.70.58 (mongos query router; stateless; clients connect here)."
+  type        = string
+  default     = "00:50:56:3F:00:C9"
+}
+variable "mac_oltp_mongo_mongos_2_primary" {
+  description = "mongo-mongos-2 primary NIC (VMnet11). Pinned to 192.168.70.59 (mongos query router; round-robin DNS partner of mongos-1)."
+  type        = string
+  default     = "00:50:56:3F:00:CA"
 }
 
 # ─── Phase 0.G.7 -- iSCSI target on nexus-gateway for FCI shared storage ─

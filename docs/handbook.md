@@ -1834,6 +1834,25 @@ After terraform renders: `$source_dc = 'dc-nexus.nexus.lab'` — a literal FQDN 
 
 **Rule (forward):** for any future "promoted member-of-shared-cluster" resource (Vitess vttablet, Citus worker, sharded-Mongo shard), bake the demote-on-destroy path into the overlay from day 1. Lab-scale "just kill the VM" deletes work for stateless clusters (Kafka brokers, StarRocks BEs) but NOT for clusters whose metadata is owned by another peer (AD, Mongo config servers, Citus coordinator, Vitess topology).
 
+#### M3 — `enable_dc_nexus_2` default `false` causes plain `foundation apply` to silently destroy dc-nexus-2 (caught 2026-05-28 during 0.N work)
+
+**Symptom:** After the original 0.M seal + cold-rebuild proof + push, a subsequent plain `pwsh -File scripts\foundation.ps1 apply` (run during 0.N to write the new sharded-Mongo gateway-oltp-reservations) silently destroyed `module.dc_nexus_2` + all 7 promotion overlays. The VM files were removed from disk (`H:\VMS\NexusPlatform\01-foundation\dc-nexus-2\` empty); the terraform state lost the `dc_nexus_2` entries. AD topology's CN=DC-NEXUS-2 entries lingered as orphans (same as M2). User noticed because dc-nexus-2 was unexpectedly absent.
+
+**Root cause:** `enable_dc_nexus_2` and `enable_dc_nexus_2_promotion` defaults stayed `false` after 0.M sealed. This is the canonical [[feedback_terraform_partial_apply_destroys_resources]] trap — defaults should reflect the **steady state** of the lab, NOT a "scaffold-only" or "opt-in" stance. Once 0.M was sealed + cold-rebuild-proven, the steady state IS "dc-nexus-2 is a replica DC"; the opt-out is the explicit override (`-Vars enable_dc_nexus_2=false`). The 0.M close-out missed this flip.
+
+The pattern has been hit before (0.D.4 `enable_vault_kv_creds`; 0.D.3 `enable_vault_dhcp_reservations`; 0.D.3 `enable_vault_ad_integration`). The lesson is canonized: at the end of every phase whose toggles got introduced as `false` (opt-in scaffold mode), **flip the default to `true` at seal** so a future plain apply doesn't destroy the now-canonical state.
+
+**Fix:**
+1. `variables.tf`: `enable_dc_nexus_2` default `false` → `true` (verbose description noting the M3 lesson).
+2. `variables.tf`: `enable_dc_nexus_2_promotion` default `false` → `true` (same).
+3. Run the M2 Path B AD metadata cleanup (the orphan CN=DC-NEXUS-2 lingers).
+4. `pwsh -File scripts\foundation.ps1 apply` — re-clones + re-promotes dc-nexus-2 cleanly.
+5. `pwsh -File scripts\smoke-0.M.ps1` — verify GREEN.
+
+**Rule (forward) — applies to every future phase seal:** when a phase introduces a new toggle that started `default = false` for safety during ratification, **flip the default to `true` at seal** as part of the 3-layer canon sweep. Add to the per-phase close-out checklist. Audit every other `enable_*` default in the foundation env that's currently `false` and confirm whether it's "opt-in" (intentionally false) or "missed flip" (should be true).
+
+_See [`feedback_terraform_partial_apply_destroys_resources.md`](../memory/feedback_terraform_partial_apply_destroys_resources.md) — this is now the 4th instance of the pattern. The memory rule applies forever; the checklist needs to be a phase-close-out step._
+
 _See [`feedback_windows_ssh_automation.md`](../memory/feedback_windows_ssh_automation.md) + [`feedback_addsforest_post_promotion.md`](../memory/feedback_addsforest_post_promotion.md) for pre-known structural patterns already baked in (5-rule SSH automation + post-promotion sshd_config remediation)._
 
 ---
