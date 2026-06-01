@@ -1234,6 +1234,60 @@ variable "vault_agent_patroni_creds_dir" {
   default     = "$HOME/.nexus"
 }
 
+# ─── Phase 0.O -- Vitess-sharded MySQL (vitess tier, 07-vitess) ──────────
+# 12 nodes: 3 etcd topo (.190-.192) + 1 control vtctld/VTOrc (.193) + 2 vtgate
+# (.194/.195) + 2x3 tablets vttablet+Percona 8.4 (.196-.201). Full mTLS per
+# ADR-0041. KV-seeded application creds:
+#   - mysql-root-password        (Percona Server root; needed by 6 tablets)
+#   - mysql-app-password         (the `vt_app` user vttablet/vtgate use for
+#                                  query traffic; needed by 6 tablets)
+#   - mysql-repl-password        (the `vt_repl` replication user; 6 tablets)
+#   - mysql-allprivs-password    (the `vt_allprivs`/`vt_dba` admin user
+#                                  mysqlctld + reparenting use; 6 tablets)
+#   - vtorc-topo-password        (VTOrc's mysqld topology user; needed by the
+#                                  control node + 6 tablets)
+variable "enable_vitess_pki" {
+  description = "Phase 0.O toggle: create the pki_int/roles/vitess-server PKI role used by the 12 Vitess-tier Vault Agents to issue TLS leaf certs (server+client EKU, 90-day TTL) for every gRPC channel + the mysqld wire + the vtgate MySQL listener. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_pki_vitess_role_name" {
+  description = "Name of the PKI role under pki_int/ for Vitess-tier leaf certs (covers all 12 nodes: 3 etcd + 1 control + 2 vtgate + 2x3 tablets). Used by nexus-infra-vitess's 0.O mTLS overlay. Default 'vitess-server'. allowed_domains covers every hostname in bare + .nexus.lab + .vitess.nexus.lab forms + vtgate.nexus.lab (the round-robin client front door) + localhost. Server+client EKU because every Vitess component both listens AND dials peers."
+  type        = string
+  default     = "vitess-server"
+}
+
+variable "enable_vitess_cluster_creds_seed" {
+  description = "Phase 0.O toggle: sticky-seed the 5 Vitess-tier cluster creds in Vault KV (nexus/vitess/{mysql-root,mysql-app,mysql-repl,mysql-allprivs,vtorc-topo}-password). Each is a random 32-char password generated server-side via `openssl rand -hex 16` if absent. Sticky: operator rotation via `vault kv put` is preserved. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vitess_agent_setup" {
+  description = "Phase 0.O master toggle for the Vitess Vault Agent scaffolding (policies + approles). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vitess_agent_policies" {
+  description = "Toggle: write the 12 narrow Vault policies (nexus-agent-vitess-<host>). Tablet policies grant PKI issue + KV read on the mysql-*/vtorc-topo creds; etcd/control/vtgate policies grant PKI issue + the creds they need (control/vtgate read vtorc-topo + mysql-app). All 12 get token self-lookup/renew. Default true (gated under enable_vitess_agent_setup). Idempotent overwrite."
+  type        = bool
+  default     = true
+}
+
+variable "enable_vitess_agent_approles" {
+  description = "Toggle: provision the 12 AppRoles + per-host JSON sidecars on the build host. Default true (gated under enable_vitess_agent_setup). role-id is stable; secret-id is regenerated per security apply."
+  type        = bool
+  default     = true
+}
+
+variable "vault_agent_vitess_creds_dir" {
+  description = "Directory on the build host where the 12 vault-agent-vitess-<host>.json sidecars are written. The `vitess-` filename prefix namespaces per tier. nexus-infra-vitess's 0.O role-overlay-vitess-vault-agents.tf reads these."
+  type        = string
+  default     = "$HOME/.nexus"
+}
+
 # ─── Phase 0.G.7 -- SQL Server FCI + Always On AG (sqlserver tier) ───────
 # 4 nodes (sql-fci-1/2 FCI pair sharing iSCSI LUN + sql-ag-rep-1/2 AG async
 # replicas), 3 WSFC-managed VIPs (cluster .15 + FCI .16 + Listener .17), 1
