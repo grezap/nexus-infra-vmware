@@ -103,7 +103,18 @@ resource "null_resource" "gateway_oltp_reservations" {
     mac_sql_fci_2       = var.mac_oltp_sql_fci_2_primary
     mac_sql_ag_rep_1    = var.mac_oltp_sql_ag_rep_1_primary
     mac_sql_ag_rep_2    = var.mac_oltp_sql_ag_rep_2_primary
-    oltp_reservations_v = "6" # v6 (0.G.7) = +4 SQL Server FCI/AG reservations (sql-fci-1/2 .11/.12, sql-ag-rep-1/2 .13/.14). VIPs .15/.16/.17 (WSFC/FCI/Listener) are NOT dhcp reservations -- owned by WSFC. v5 (0.G.4) added Patroni-tier. v4 was the abandoned single-HAProxy variant. v3 (0.G.3) added Percona/ProxySQL. v2 (0.G.2) added mongo. v1 was redis only.
+    mac_mongo_cfg_1     = var.mac_oltp_mongo_cfg_1_primary
+    mac_mongo_cfg_2     = var.mac_oltp_mongo_cfg_2_primary
+    mac_mongo_cfg_3     = var.mac_oltp_mongo_cfg_3_primary
+    mac_mongo_shard_1_1 = var.mac_oltp_mongo_shard_1_1_primary
+    mac_mongo_shard_1_2 = var.mac_oltp_mongo_shard_1_2_primary
+    mac_mongo_shard_1_3 = var.mac_oltp_mongo_shard_1_3_primary
+    mac_mongo_shard_2_1 = var.mac_oltp_mongo_shard_2_1_primary
+    mac_mongo_shard_2_2 = var.mac_oltp_mongo_shard_2_2_primary
+    mac_mongo_shard_2_3 = var.mac_oltp_mongo_shard_2_3_primary
+    mac_mongo_mongos_1  = var.mac_oltp_mongo_mongos_1_primary
+    mac_mongo_mongos_2  = var.mac_oltp_mongo_mongos_2_primary
+    oltp_reservations_v = "7" # v7 (0.N) = +11 sharded-Mongo reservations (mongo-cfg-1/2/3 .74/.75/.76, mongo-shard-1-1/2/3 .77/.78/.79, mongo-shard-2-1/2/3 .80/.56/.57, mongo-mongos-1/2 .58/.59). The 11 new mongo MACs are now ALSO trigger keys so a body edit forces re-create (the v6->v7 stall: trigger held "6" while the body grew to 37 entries -> plain apply was a silent no-op). v6 (0.G.7) = +4 SQL Server FCI/AG reservations. v5 (0.G.4) added Patroni-tier. v4 was the abandoned single-HAProxy variant. v3 (0.G.3) added Percona/ProxySQL. v2 (0.G.2) added mongo. v1 was redis only.
   }
 
   provisioner "local-exec" {
@@ -156,7 +167,7 @@ resource "null_resource" "gateway_oltp_reservations" {
       # atomically via write-through tee.
       $existing = ssh nexusadmin@$gw "test -f /etc/dnsmasq.d/foundation-oltp-reservations.conf && cat /etc/dnsmasq.d/foundation-oltp-reservations.conf || true"
       if ($existing -match [regex]::Escape($marker)) {
-        Write-Host "[gateway oltp-reservations] v6 reservations already present, no-op."
+        Write-Host "[gateway oltp-reservations] v7 reservations already present, no-op."
         exit 0
       }
 
