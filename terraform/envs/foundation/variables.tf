@@ -648,6 +648,77 @@ variable "mac_oltp_mongo_mongos_2_primary" {
   default     = "00:50:56:3F:00:CA"
 }
 
+# ─── Phase 0.O -- Vitess tier (07-vitess) primary MACs :CB-:D6 ───────────
+# Pre-apply MAC+IP audit ALL CLEAR (feedback_mac_pool_pre_apply_audit). 12
+# nodes @ .190-.201. Only primaries here (VMnet11 dhcp pins); the VMnet10
+# secondary MACs (:01:CB-:D6) live in nexus-infra-vitess's TF env.
+variable "mac_vitess_etcd_1_primary" {
+  description = "vitess-etcd-1 primary NIC (VMnet11). Pinned to 192.168.70.190 (etcd topo)."
+  type        = string
+  default     = "00:50:56:3F:00:CB"
+}
+variable "mac_vitess_etcd_2_primary" {
+  description = "vitess-etcd-2 primary NIC (VMnet11). Pinned to 192.168.70.191 (etcd topo)."
+  type        = string
+  default     = "00:50:56:3F:00:CC"
+}
+variable "mac_vitess_etcd_3_primary" {
+  description = "vitess-etcd-3 primary NIC (VMnet11). Pinned to 192.168.70.192 (etcd topo)."
+  type        = string
+  default     = "00:50:56:3F:00:CD"
+}
+variable "mac_vitess_control_1_primary" {
+  description = "vitess-control-1 primary NIC (VMnet11). Pinned to 192.168.70.193 (vtctld + VTOrc)."
+  type        = string
+  default     = "00:50:56:3F:00:CE"
+}
+variable "mac_vitess_vtgate_1_primary" {
+  description = "vitess-vtgate-1 primary NIC (VMnet11). Pinned to 192.168.70.194 (vtgate router)."
+  type        = string
+  default     = "00:50:56:3F:00:CF"
+}
+variable "mac_vitess_vtgate_2_primary" {
+  description = "vitess-vtgate-2 primary NIC (VMnet11). Pinned to 192.168.70.195 (vtgate router)."
+  type        = string
+  default     = "00:50:56:3F:00:D0"
+}
+variable "mac_vitess_shard1_tablet_1_primary" {
+  description = "vitess-shard1-tablet-1 primary NIC (VMnet11). Pinned to 192.168.70.196 (shard -80 PRIMARY)."
+  type        = string
+  default     = "00:50:56:3F:00:D1"
+}
+variable "mac_vitess_shard1_tablet_2_primary" {
+  description = "vitess-shard1-tablet-2 primary NIC (VMnet11). Pinned to 192.168.70.197 (shard -80 replica)."
+  type        = string
+  default     = "00:50:56:3F:00:D2"
+}
+variable "mac_vitess_shard1_tablet_3_primary" {
+  description = "vitess-shard1-tablet-3 primary NIC (VMnet11). Pinned to 192.168.70.198 (shard -80 replica)."
+  type        = string
+  default     = "00:50:56:3F:00:D3"
+}
+variable "mac_vitess_shard2_tablet_1_primary" {
+  description = "vitess-shard2-tablet-1 primary NIC (VMnet11). Pinned to 192.168.70.199 (shard 80- PRIMARY)."
+  type        = string
+  default     = "00:50:56:3F:00:D4"
+}
+variable "mac_vitess_shard2_tablet_2_primary" {
+  description = "vitess-shard2-tablet-2 primary NIC (VMnet11). Pinned to 192.168.70.200 (shard 80- replica)."
+  type        = string
+  default     = "00:50:56:3F:00:D5"
+}
+variable "mac_vitess_shard2_tablet_3_primary" {
+  description = "vitess-shard2-tablet-3 primary NIC (VMnet11). Pinned to 192.168.70.201 (shard 80- replica)."
+  type        = string
+  default     = "00:50:56:3F:00:D6"
+}
+
+variable "enable_vitess_dhcp_reservations" {
+  description = "Toggle: write dnsmasq dhcp-host reservations on nexus-gateway for the Vitess tier (Phase 0.O) -- 12 pins .190-.201. Default true (steady state once 0.O starts). Same partial-apply-destruction landmine as the other tiers: a foundation apply WITHOUT this var on a lab that had it enabled would silently destroy the reservations. Opt out with -Vars enable_vitess_dhcp_reservations=false ONLY on a pre-0.O lab."
+  type        = bool
+  default     = true
+}
+
 # ─── Phase 0.G.7 -- iSCSI target on nexus-gateway for FCI shared storage ─
 # Per ADR-0026 (SQL FCI iSCSI shared storage on nexus-gateway). The FCI
 # pair (sql-fci-1/-2) requires a shared block device for the SQL Server
