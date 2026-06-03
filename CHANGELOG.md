@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Phase 0.P (2026-06-03) — Citus tier Vault-side + gateway scaffolding (`security` + `foundation` envs)
+
+- **`security` env** — `role-overlay-vault-pki-citus.tf` (`citus-server` PKI role at `pki_int/`: server+client EKU, 90-day leaves, `allow_ip_sans`, allowed_domains = 9 hosts ×3 forms + the 3 VIP DNS names `coord/worker1/worker2.citus.nexus.lab` + localhost) + `role-overlay-vault-citus-cluster-creds-seed.tf` (4 sticky-seeded KV creds `nexus/citus/{superuser,replication,patroni-restapi,citus-app}-password`) + `role-overlay-vault-agent-citus-policies.tf` (9 narrow policies — `pg` role grants PKI issue + the 4 KV creds, `etcd` role PKI-only) + `role-overlay-vault-agent-citus-approles.tf` (9 AppRoles + the per-host `vault-agent-citus-<host>.json` sidecars). 7 citus vars in `variables.tf` (all default true = steady state).
+- **`foundation` env** — `role-overlay-gateway-citus-reservations.tf` (9 dhcp-host pins `.202`-`.210`; all 9 MACs `:D7`-`:DF` are trigger keys per the N3 partial-apply lesson) + `role-overlay-gateway-citus-dns.tf` (3 single-A VIP host-records `coord/worker1/worker2.citus.nexus.lab` → `.211`/`.212`/`.213`). 9 primary-MAC vars + 3 VIP vars + 2 toggles in `variables.tf`. Pre-apply MAC+IP audit ALL CLEAR (highest prior MAC `:D6` vitess; highest prior pinned IP `.201` vitess). Consumed by `grezap/nexus-infra-citus` (Phase 0.P, ADR-0042).
+
 ### Added — Phase 0.M (2026-05-28) — `foundation` env: 2nd AD DC (`dc-nexus-2`) — foundation HA partner
 
 Foundation HA enhancement closing the last single-DC SPOF in the lab. Adds a replica DC to the existing `nexus.lab` forest, multi-master replication, replicated DNS, DC Locator failover. Committed 2026-05-22, ratified 2026-05-28 (ADR-0039 pending). Tier `01-foundation`.

@@ -1288,6 +1288,57 @@ variable "vault_agent_vitess_creds_dir" {
   default     = "$HOME/.nexus"
 }
 
+# ─── Phase 0.P -- Citus-sharded PostgreSQL (citus tier, 08-citus) ─────────
+# 9 nodes: 3 etcd DCS (.202-.204) + coordinator Patroni pair (.205/.206) +
+# worker1 Patroni pair (.207/.208) + worker2 Patroni pair (.209/.210). Full
+# Patroni HA + mTLS per ADR-0042. KV-seeded application creds:
+#   - superuser-password       (PostgreSQL superuser; all 6 PG nodes + the
+#                                coordinator's citus.node_conninfo to workers)
+#   - replication-password     (the `replicator` streaming user; all 6 PG nodes)
+#   - patroni-restapi-password (Patroni REST API basic-auth; all 6 PG nodes)
+#   - citus-app-password       (the `citus_app` distributed-table owner; coord pair)
+variable "enable_citus_pki" {
+  description = "Phase 0.P toggle: create the pki_int/roles/citus-server PKI role used by the 9 Citus-tier Vault Agents to issue TLS leaf certs (server+client EKU, 90-day TTL) for the PostgreSQL wire + etcd peer/client channels + the Patroni REST API. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_pki_citus_role_name" {
+  description = "Name of the PKI role under pki_int/ for Citus-tier leaf certs (covers all 9 nodes: 3 etcd + coord pair + 2 worker pairs). Used by nexus-infra-citus's 0.P mTLS overlay. Default 'citus-server'. allowed_domains covers every hostname in bare + .nexus.lab + .citus.nexus.lab forms + the 3 VRRP VIP DNS names (coord/worker1/worker2.citus.nexus.lab) + localhost. Server+client EKU because every Citus PG node both listens AND dials peers. allow_ip_sans=true so per-node certs carry the group VIP IP-SAN (.211/.212/.213)."
+  type        = string
+  default     = "citus-server"
+}
+
+variable "enable_citus_cluster_creds_seed" {
+  description = "Phase 0.P toggle: sticky-seed the 4 Citus-tier cluster creds in Vault KV (nexus/citus/{superuser,replication,patroni-restapi,citus-app}-password). Each is a random 32-char password generated server-side via `openssl rand -hex 16` if absent. Sticky: operator rotation via `vault kv put` is preserved. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_citus_agent_setup" {
+  description = "Phase 0.P master toggle for the Citus Vault Agent scaffolding (policies + approles). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_citus_agent_policies" {
+  description = "Toggle: write the 9 narrow Vault policies (nexus-agent-citus-<host>). PG policies (coord + worker) grant PKI issue + KV read on all 4 PG creds; etcd policies grant PKI issue only. All 9 get token self-lookup/renew. Default true (gated under enable_citus_agent_setup). Idempotent overwrite."
+  type        = bool
+  default     = true
+}
+
+variable "enable_citus_agent_approles" {
+  description = "Toggle: provision the 9 AppRoles + per-host JSON sidecars on the build host. Default true (gated under enable_citus_agent_setup). role-id is stable; secret-id is regenerated per security apply."
+  type        = bool
+  default     = true
+}
+
+variable "vault_agent_citus_creds_dir" {
+  description = "Directory on the build host where the 9 vault-agent-citus-<host>.json sidecars are written. The `citus-` filename prefix namespaces per tier. nexus-infra-citus's 0.P role-overlay-citus-vault-agents.tf reads these."
+  type        = string
+  default     = "$HOME/.nexus"
+}
+
 # ─── Phase 0.G.7 -- SQL Server FCI + Always On AG (sqlserver tier) ───────
 # 4 nodes (sql-fci-1/2 FCI pair sharing iSCSI LUN + sql-ag-rep-1/2 AG async
 # replicas), 3 WSFC-managed VIPs (cluster .15 + FCI .16 + Listener .17), 1

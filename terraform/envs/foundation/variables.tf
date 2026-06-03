@@ -719,6 +719,87 @@ variable "enable_vitess_dhcp_reservations" {
   default     = true
 }
 
+# ─── Phase 0.P -- Citus tier (08-citus) primary MACs :D7-:DF ──────────────
+# 9 nodes: 3 etcd DCS (.202-.204) + coordinator Patroni pair (.205/.206) +
+# worker1 Patroni pair (.207/.208) + worker2 Patroni pair (.209/.210). The 3
+# VRRP VIPs (.211/.212/.213) are virtual -- no DHCP pin / MAC; they get DNS
+# A-records (role-overlay-gateway-citus-dns.tf). Pre-apply MAC+IP audit ALL
+# CLEAR (highest prior MAC :D6 vitess, highest prior pinned IP .201 vitess).
+# secondary MACs (:01:D7-:DF) live in nexus-infra-citus's TF env.
+variable "mac_citus_etcd_1_primary" {
+  description = "citus-etcd-1 primary NIC (VMnet11). Pinned to 192.168.70.202 (etcd DCS)."
+  type        = string
+  default     = "00:50:56:3F:00:D7"
+}
+variable "mac_citus_etcd_2_primary" {
+  description = "citus-etcd-2 primary NIC (VMnet11). Pinned to 192.168.70.203 (etcd DCS)."
+  type        = string
+  default     = "00:50:56:3F:00:D8"
+}
+variable "mac_citus_etcd_3_primary" {
+  description = "citus-etcd-3 primary NIC (VMnet11). Pinned to 192.168.70.204 (etcd DCS)."
+  type        = string
+  default     = "00:50:56:3F:00:D9"
+}
+variable "mac_citus_coord_1_primary" {
+  description = "citus-coord-1 primary NIC (VMnet11). Pinned to 192.168.70.205 (coordinator Patroni, initial leader)."
+  type        = string
+  default     = "00:50:56:3F:00:DA"
+}
+variable "mac_citus_coord_2_primary" {
+  description = "citus-coord-2 primary NIC (VMnet11). Pinned to 192.168.70.206 (coordinator Patroni replica)."
+  type        = string
+  default     = "00:50:56:3F:00:DB"
+}
+variable "mac_citus_worker1_1_primary" {
+  description = "citus-worker1-1 primary NIC (VMnet11). Pinned to 192.168.70.207 (worker-group-1 Patroni, initial leader)."
+  type        = string
+  default     = "00:50:56:3F:00:DC"
+}
+variable "mac_citus_worker1_2_primary" {
+  description = "citus-worker1-2 primary NIC (VMnet11). Pinned to 192.168.70.208 (worker-group-1 Patroni replica)."
+  type        = string
+  default     = "00:50:56:3F:00:DD"
+}
+variable "mac_citus_worker2_1_primary" {
+  description = "citus-worker2-1 primary NIC (VMnet11). Pinned to 192.168.70.209 (worker-group-2 Patroni, initial leader)."
+  type        = string
+  default     = "00:50:56:3F:00:DE"
+}
+variable "mac_citus_worker2_2_primary" {
+  description = "citus-worker2-2 primary NIC (VMnet11). Pinned to 192.168.70.210 (worker-group-2 Patroni replica)."
+  type        = string
+  default     = "00:50:56:3F:00:DF"
+}
+
+variable "enable_citus_dhcp_reservations" {
+  description = "Toggle: write dnsmasq dhcp-host reservations on nexus-gateway for the Citus tier (Phase 0.P) -- 9 pins .202-.210. Default true (steady state once 0.P starts). Same partial-apply-destruction landmine as the other tiers: a foundation apply WITHOUT this var on a lab that had it enabled would silently destroy the reservations. Opt out with -Vars enable_citus_dhcp_reservations=false ONLY on a pre-0.P lab."
+  type        = bool
+  default     = true
+}
+
+variable "enable_gateway_citus_dns" {
+  description = "Toggle: write dnsmasq host-records on nexus-gateway for the 3 Citus VRRP VIP names (coord/worker1/worker2.citus.nexus.lab -> .211/.212/.213). Single-A records (one VIP each), used so PG cert verify-full + the coordinator's pg_dist_node entries can address workers by a stable name. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "citus_coordinator_vip" {
+  description = "Citus coordinator VRRP VIP (the client-facing endpoint; floats to the coord Patroni leader). DNS coord.citus.nexus.lab."
+  type        = string
+  default     = "192.168.70.211"
+}
+variable "citus_worker1_vip" {
+  description = "Citus worker-group-1 VRRP VIP (floats to the worker1 Patroni leader; registered in pg_dist_node). DNS worker1.citus.nexus.lab."
+  type        = string
+  default     = "192.168.70.212"
+}
+variable "citus_worker2_vip" {
+  description = "Citus worker-group-2 VRRP VIP (floats to the worker2 Patroni leader; registered in pg_dist_node). DNS worker2.citus.nexus.lab."
+  type        = string
+  default     = "192.168.70.213"
+}
+
 # ─── Phase 0.G.7 -- iSCSI target on nexus-gateway for FCI shared storage ─
 # Per ADR-0026 (SQL FCI iSCSI shared storage on nexus-gateway). The FCI
 # pair (sql-fci-1/-2) requires a shared block device for the SQL Server
