@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — nexus-cli v0.6.1 MongoAdapter — operator-password seed + agent-policy read grant (`security` env, 2026-06-05)
+
+- **`security` env** — `role-overlay-vault-mongo-operator-user-seed.tf` (sticky-seeds a 32-char
+  base64 password at `nexus/oltp/mongo/operator-password` for the dedicated `nexus-cluster-admin`
+  operator user; mirrors the smoke-user seed but is **never rendered to a node file** — it lives only
+  in Vault KV, the credential model for all password-auth adapters). New toggle
+  `enable_mongo_operator_user_seed` (default true). `role-overlay-vault-agent-mongo-policies.tf`
+  bumped **v2 → v3**: each `nexus-agent-mongo-*` policy now also grants KV read on
+  `nexus/data/oltp/mongo/operator-password`, so the mongo node can fetch the password via its own
+  agent token during the one-time `nexus-cluster-admin` createUser bootstrap (the password is never
+  written to disk). Consumed by `grezap/nexus-cli` v0.6.1 (ADR-0011) +
+  `nexus-infra-oltp/.../role-overlay-mongo-operator-user.tf`.
+
 ### Added — Phase 0.P (2026-06-03) — Citus tier Vault-side + gateway scaffolding (`security` + `foundation` envs)
 
 - **`security` env** — `role-overlay-vault-pki-citus.tf` (`citus-server` PKI role at `pki_int/`: server+client EKU, 90-day leaves, `allow_ip_sans`, allowed_domains = 9 hosts ×3 forms + the 3 VIP DNS names `coord/worker1/worker2.citus.nexus.lab` + localhost) + `role-overlay-vault-citus-cluster-creds-seed.tf` (4 sticky-seeded KV creds `nexus/citus/{superuser,replication,patroni-restapi,citus-app}-password`) + `role-overlay-vault-agent-citus-policies.tf` (9 narrow policies — `pg` role grants PKI issue + the 4 KV creds, `etcd` role PKI-only) + `role-overlay-vault-agent-citus-approles.tf` (9 AppRoles + the per-host `vault-agent-citus-<host>.json` sidecars). 7 citus vars in `variables.tf` (all default true = steady state).

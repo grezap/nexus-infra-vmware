@@ -41,10 +41,10 @@ resource "null_resource" "vault_agent_mongo_policies" {
     post_init_id             = null_resource.vault_post_init[0].id
     mongo_role_id            = length(null_resource.vault_pki_mongo_role) > 0 ? null_resource.vault_pki_mongo_role[0].id : "disabled"
     mongo_role_name          = var.vault_pki_mongo_role_name
-    mongo_policies_overlay_v = "2" # v2 (0.G.2 ratification fix 2026-05-17) = +KV read on nexus/data/oltp/mongo/smoke-user-password (sticky-seeded by role-overlay-vault-mongo-smoke-user-seed.tf; mongo-tls overlay renders it to /etc/nexus-mongo/smoke-user-password for the rs-initiate createUser flow + smoke gate auth). v1 = initial 3-node MongoDB RS; added KV read on nexus/data/oltp/mongo/keyfile for RS internal auth.
+    mongo_policies_overlay_v = "3" # v3 (nexus-cli v0.6.1 MongoAdapter, 2026-06-05) = +KV read on nexus/data/oltp/mongo/operator-password (sticky-seeded by role-overlay-vault-mongo-operator-user-seed.tf). The mongo node uses its OWN agent token to `vault kv get` this value during the one-time nexus-cluster-admin createUser bootstrap (role-overlay-mongo-operator-user.tf, oltp-mongo env) -- the password is never written to a node file. v2 (0.G.2 ratification fix 2026-05-17) = +KV read on nexus/data/oltp/mongo/smoke-user-password (sticky-seeded by role-overlay-vault-mongo-smoke-user-seed.tf; mongo-tls overlay renders it to /etc/nexus-mongo/smoke-user-password for the rs-initiate createUser flow + smoke gate auth). v1 = initial 3-node MongoDB RS; added KV read on nexus/data/oltp/mongo/keyfile for RS internal auth.
   }
 
-  depends_on = [null_resource.vault_post_init, null_resource.vault_pki_mongo_role, null_resource.vault_mongo_keyfile_seed]
+  depends_on = [null_resource.vault_post_init, null_resource.vault_pki_mongo_role, null_resource.vault_mongo_keyfile_seed, null_resource.vault_mongo_operator_user_seed]
 
   provisioner "local-exec" {
     when        = create
@@ -73,6 +73,9 @@ path "nexus/data/oltp/mongo/keyfile" {
   capabilities = ["read"]
 }
 path "nexus/data/oltp/mongo/smoke-user-password" {
+  capabilities = ["read"]
+}
+path "nexus/data/oltp/mongo/operator-password" {
   capabilities = ["read"]
 }
 path "auth/token/lookup-self" {

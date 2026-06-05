@@ -1101,6 +1101,12 @@ variable "enable_mongo_smoke_user_seed" {
   default     = true
 }
 
+variable "enable_mongo_operator_user_seed" {
+  description = "nexus-cli v0.6.1 MongoAdapter toggle: sticky-seed a 32-char base64 random password at nexus/oltp/mongo/operator-password. This is the password for the dedicated `nexus-cluster-admin` operator user (roles clusterMonitor + clusterManager on `admin`) that the MongoAdapter authenticates as for all read/admin verbs. Unlike smoke-user-password, this value is NEVER rendered to a node file -- it lives ONLY in Vault KV; the adapter fetches it at runtime via VaultClient + VAULT_TOKEN, and the one-time createUser bootstrap reads it via the mongo node's own Vault Agent token. Sticky-seed: never overwrites a populated value (operator rotation requires a manual `db.updateUser` step too -- see handbook). Default true."
+  type        = bool
+  default     = true
+}
+
 variable "enable_mongo_agent_setup" {
   description = "Master toggle for the 3 mongo-node Vault Agent setup primitives (policies + AppRoles). Default true. Set false on a deploy that doesn't bring up the MongoDB replica set (e.g. iterating on a different 0.G.* tier alone)."
   type        = bool
