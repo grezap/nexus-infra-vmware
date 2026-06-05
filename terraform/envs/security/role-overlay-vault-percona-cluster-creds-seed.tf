@@ -52,8 +52,8 @@ resource "null_resource" "vault_percona_cluster_creds_seed" {
 
   triggers = {
     post_init_id         = null_resource.vault_post_init[0].id
-    kv_paths             = "nexus/oltp/percona/{cluster,monitor,root,proxysql-admin}-password"
-    percona_creds_seed_v = "1" # v1 (0.G.3) = initial 4 sticky-seeded 32-char hex creds (cluster, monitor, root, proxysql-admin).
+    kv_paths             = "nexus/oltp/percona/{cluster,monitor,root,proxysql-admin,operator}-password"
+    percona_creds_seed_v = "2" # v2 (nexus-cli v0.6.2 PerconaAdapter, 2026-06-05) = +operator-password (the dedicated nexus-cluster-admin SQL operator user; lives ONLY in Vault KV, fetched by the adapter at runtime via INexusVaultClient, like mongo's operator-password). v1 (0.G.3) = initial 4 sticky-seeded 32-char hex creds (cluster, monitor, root, proxysql-admin).
   }
 
   depends_on = [null_resource.vault_post_init]
@@ -103,8 +103,9 @@ seed_if_absent 'nexus/oltp/percona/cluster-password'        'wsrep_sst password'
 seed_if_absent 'nexus/oltp/percona/monitor-password'        'clustercheck monitor password'
 seed_if_absent 'nexus/oltp/percona/root-password'           'mysql root password'
 seed_if_absent 'nexus/oltp/percona/proxysql-admin-password' 'ProxySQL admin :6032 password'
+seed_if_absent 'nexus/oltp/percona/operator-password'       'nexus-cluster-admin SQL operator password (nexus-cli MongoAdapter-style; Vault-KV-only)'
 
-echo "[percona-creds-seed] all 4 cluster creds present in nexus/oltp/percona/"
+echo "[percona-creds-seed] all 5 cluster creds present in nexus/oltp/percona/"
 "@
 
       $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($bash)

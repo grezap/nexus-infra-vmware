@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — nexus-cli v0.6.2 PerconaAdapter — operator-password seed + PXC agent-policy read grant (`security` env, 2026-06-05)
+
+- **`security` env** — `role-overlay-vault-percona-cluster-creds-seed.tf` bumped **v1 → v2**: adds a
+  5th sticky-seeded cred `nexus/oltp/percona/operator-password` (the dedicated `nexus-cluster-admin`
+  MySQL operator user; lives only in Vault KV, never on a node).
+  `role-overlay-vault-agent-percona-policies.tf` bumped **v1 → v2**: each `nexus-agent-pxc-*` policy
+  now also grants KV read on `nexus/data/oltp/percona/operator-password`, so a PXC node can fetch the
+  password via its own agent token during the one-time `nexus-cluster-admin` createUser bootstrap (the
+  password is never written to disk). Consumed by `grezap/nexus-cli` v0.6.2 (ADR-0012) +
+  `nexus-infra-oltp/.../role-overlay-percona-operator-user.tf`.
+
 ### Added — nexus-cli v0.6.1 MongoAdapter — operator-password seed + agent-policy read grant (`security` env, 2026-06-05)
 
 - **`security` env** — `role-overlay-vault-mongo-operator-user-seed.tf` (sticky-seeds a 32-char

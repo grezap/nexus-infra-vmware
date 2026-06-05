@@ -56,7 +56,7 @@ resource "null_resource" "vault_agent_percona_policies" {
     percona_role_id            = length(null_resource.vault_pki_percona_role) > 0 ? null_resource.vault_pki_percona_role[0].id : "disabled"
     percona_role_name          = var.vault_pki_percona_role_name
     creds_seed_id              = length(null_resource.vault_percona_cluster_creds_seed) > 0 ? null_resource.vault_percona_cluster_creds_seed[0].id : "disabled"
-    percona_policies_overlay_v = "1" # v1 (0.G.3) = initial 5 narrow policies (3 PXC + 2 ProxySQL) with role-differentiated KV grants.
+    percona_policies_overlay_v = "2" # v2 (nexus-cli v0.6.2 PerconaAdapter, 2026-06-05) = +KV read on nexus/data/oltp/percona/operator-password on the 3 PXC policies (the node fetches it via its own agent token during the one-time nexus-cluster-admin createUser bootstrap — never written to disk). v1 (0.G.3) = initial 5 narrow policies (3 PXC + 2 ProxySQL) with role-differentiated KV grants.
   }
 
   depends_on = [
@@ -95,6 +95,9 @@ path "nexus/data/oltp/percona/monitor-password" {
   capabilities = ["read"]
 }
 path "nexus/data/oltp/percona/root-password" {
+  capabilities = ["read"]
+}
+path "nexus/data/oltp/percona/operator-password" {
   capabilities = ["read"]
 }
 path "auth/token/lookup-self" {
