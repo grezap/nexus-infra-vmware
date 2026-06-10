@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — nexus-cli v0.6.3 PatroniAdapter — operator-password seed + Patroni agent-policy read grant (`security` env, 2026-06-11)
+
+- **`security` env** — `role-overlay-vault-patroni-cluster-creds-seed.tf` bumped **v1 → v2**: adds a
+  6th sticky-seeded cred `nexus/oltp/patroni/operator-password` (the dedicated `nexus-cluster-admin`
+  PostgreSQL operator role; lives only in Vault KV, fetched by the adapter at runtime via
+  `INexusVaultClient`, never on a node).
+  `role-overlay-vault-agent-patroni-policies.tf` bumped **v2 → v3**: each of the 3 Patroni-node
+  policies (`nexus-agent-pg-{primary,replica-1,replica-2}`) gains `read` on
+  `nexus/data/oltp/patroni/operator-password` so the oltp-patroni operator-user overlay can read it
+  on whichever node is leader. Applied live via a targeted apply of the two resources (the security
+  env has no VMs — safe); verified a Patroni node's own agent token reads the 32-char secret.
+
 ### Added — nexus-cli v0.6.2 PerconaAdapter — operator-password seed + PXC agent-policy read grant (`security` env, 2026-06-05)
 
 - **`security` env** — `role-overlay-vault-percona-cluster-creds-seed.tf` bumped **v1 → v2**: adds a

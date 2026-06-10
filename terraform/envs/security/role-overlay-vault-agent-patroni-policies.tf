@@ -22,6 +22,7 @@
  *     - KV read on nexus/data/oltp/patroni/patroni-rest-password     (all 3 -- REST listener config)
  *     - KV read on nexus/data/oltp/patroni/postgres-superuser-password (all 3 -- PG initdb + cluster ops)
  *     - KV read on nexus/data/oltp/patroni/postgres-replication-password (all 3 -- streaming replication)
+ *     - KV read on nexus/data/oltp/patroni/operator-password         (all 3 -- nexus-cluster-admin operator-role bootstrap; the operator-user overlay reads it on whichever node is leader, so all 3 grant read)
  *     - token self-lookup + self-renew                               (all 3)
  *
  *   etcd nodes (nexus-agent-etcd-{1,2,3}):
@@ -69,7 +70,7 @@ resource "null_resource" "vault_agent_patroni_policies" {
     patroni_role_id            = length(null_resource.vault_pki_patroni_role) > 0 ? null_resource.vault_pki_patroni_role[0].id : "disabled"
     patroni_role_name          = var.vault_pki_patroni_role_name
     creds_seed_id              = length(null_resource.vault_patroni_cluster_creds_seed) > 0 ? null_resource.vault_patroni_cluster_creds_seed[0].id : "disabled"
-    patroni_policies_overlay_v = "2" # v2 (0.G.4) = initial 8 narrow policies (3 Patroni + 3 etcd + 2 HAProxy HA pair) with role-differentiated KV grants. v1 was the abandoned single-HAProxy variant superseded mid-scaffold.
+    patroni_policies_overlay_v = "3" # v3 (nexus-cli v0.6.3 PatroniAdapter, 2026-06-11) = +operator-password read on the 3 Patroni-node policies (nexus-cluster-admin operator-role bootstrap, mirrors percona policy v2). v2 (0.G.4) = initial 8 narrow policies (3 Patroni + 3 etcd + 2 HAProxy HA pair) with role-differentiated KV grants. v1 was the abandoned single-HAProxy variant superseded mid-scaffold.
   }
 
   depends_on = [
@@ -111,6 +112,9 @@ path "nexus/data/oltp/patroni/postgres-superuser-password" {
   capabilities = ["read"]
 }
 path "nexus/data/oltp/patroni/postgres-replication-password" {
+  capabilities = ["read"]
+}
+path "nexus/data/oltp/patroni/operator-password" {
   capabilities = ["read"]
 }
 path "auth/token/lookup-self" {

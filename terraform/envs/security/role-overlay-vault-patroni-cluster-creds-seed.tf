@@ -41,6 +41,20 @@
  *       rates.
  *     - Consumer: 1 HAProxy node only
  *
+ *   nexus/oltp/patroni/operator-password                   (32-char hex)
+ *     - PostgreSQL `nexus-cluster-admin` operator role password (nexus-cli
+ *       v0.6.3 PatroniAdapter). The dedicated least-priv operator identity the
+ *       adapter authenticates as for its read/admin verbs (status / health /
+ *       topology / failover / scale-out / backup / cert-rotate / acl / chaos).
+ *       Mirrors the mongo + percona operator-password model locked with Greg
+ *       2026-06-05: the password lives ONLY in Vault KV (never rendered to a
+ *       node file); the oltp-patroni operator-user overlay reads it on the
+ *       Patroni LEADER via the node's own Vault Agent token + CREATE ROLEs it;
+ *       at RUNTIME the PatroniAdapter fetches the same KV value via the
+ *       existing INexusVaultClient + VAULT_TOKEN and passes it to psql.
+ *     - Consumer: 3 Patroni nodes (operator-user overlay reads it on the
+ *       leader; the role replicates to the 2 streaming replicas via WAL)
+ *
  * Sticky-seed pattern (mirrors role-overlay-vault-percona-cluster-creds-seed):
  * each KV path is probed; if already populated, that secret is left alone
  * (operator rotation preserved). Each `vault kv put nexus/oltp/patroni/
@@ -64,8 +78,8 @@ resource "null_resource" "vault_patroni_cluster_creds_seed" {
 
   triggers = {
     post_init_id         = null_resource.vault_post_init[0].id
-    kv_paths             = "nexus/oltp/patroni/{etcd-root,patroni-rest,postgres-superuser,postgres-replication,haproxy-stats}-password"
-    patroni_creds_seed_v = "1" # v1 (0.G.4) = initial 5 sticky-seeded 32-char hex creds (etcd-root, patroni-rest, postgres-superuser, postgres-replication, haproxy-stats).
+    kv_paths             = "nexus/oltp/patroni/{etcd-root,patroni-rest,postgres-superuser,postgres-replication,haproxy-stats,operator}-password"
+    patroni_creds_seed_v = "2" # v2 (nexus-cli v0.6.3 PatroniAdapter, 2026-06-11) = +operator-password (the dedicated nexus-cluster-admin PostgreSQL operator role; lives ONLY in Vault KV, fetched by the adapter at runtime via INexusVaultClient, like mongo + percona operator-password). v1 (0.G.4) = initial 5 sticky-seeded 32-char hex creds (etcd-root, patroni-rest, postgres-superuser, postgres-replication, haproxy-stats).
   }
 
   depends_on = [null_resource.vault_post_init]
@@ -116,8 +130,9 @@ seed_if_absent 'nexus/oltp/patroni/patroni-rest-password'           'Patroni RES
 seed_if_absent 'nexus/oltp/patroni/postgres-superuser-password'     'PostgreSQL postgres superuser password'
 seed_if_absent 'nexus/oltp/patroni/postgres-replication-password'   'PostgreSQL replicator user password'
 seed_if_absent 'nexus/oltp/patroni/haproxy-stats-password'          'HAProxy :8404 stats UI HTTP basic password'
+seed_if_absent 'nexus/oltp/patroni/operator-password'               'nexus-cluster-admin PostgreSQL operator password (nexus-cli PatroniAdapter; Vault-KV-only)'
 
-echo "[patroni-creds-seed] all 5 cluster creds present in nexus/oltp/patroni/"
+echo "[patroni-creds-seed] all 6 cluster creds present in nexus/oltp/patroni/"
 "@
 
       $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($bash)
