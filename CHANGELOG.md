@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — nexus-cli v0.6.5 StarRocksAdapter — operator-password seed (`security` env, 2026-06-12)
+
+- **`security` env** — `role-overlay-vault-starrocks-creds-seed.tf` bumped **v1 → v2**: adds a 3rd
+  sticky-seeded cred `nexus/analytics/starrocks/operator-password` (the dedicated `nexus-cluster-admin`
+  StarRocks operator the nexus-cli StarRocksAdapter authenticates as; granted
+  cluster_admin/db_admin/user_admin; lives only in Vault KV, fetched at runtime via
+  `INexusVaultClient`). root/app left untouched (sticky). **No agent-policy change** — the existing
+  `nexus-agent-starrocks-*` policy already wildcard-reads `nexus/data/analytics/starrocks/*`. Applied
+  live via a targeted apply of the single `vault_starrocks_creds_seed` resource (security env has no
+  VMs — safe).
+
 ### Added — nexus-cli v0.6.4 ClickHouseAdapter — operator-password seed (`security` env, 2026-06-11)
 
 - **`security` env** — `role-overlay-vault-clickhouse-creds-seed.tf` bumped **v1 → v2**: adds a 3rd

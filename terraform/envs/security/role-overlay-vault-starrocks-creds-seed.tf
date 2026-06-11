@@ -1,12 +1,19 @@
 /*
  * role-overlay-vault-starrocks-creds-seed.tf -- Phase 0.G.6 setup
  *
- * Sticky-seeds the 2 StarRocks SQL-RBAC credentials in Vault KV (field
+ * Sticky-seeds the 3 StarRocks SQL-RBAC credentials in Vault KV (field
  * `password`, matching the schema-bootstrap read):
  *   nexus/analytics/starrocks/root-password   (32-char hex) -- the StarRocks
  *     root user password (SET PASSWORD FOR root after FE bootstrap)
  *   nexus/analytics/starrocks/app-password    (32-char hex) -- the least-priv
  *     app user (DEFAULT ROLE app_rw)
+ *   nexus/analytics/starrocks/operator-password (32-char hex)  [v2, 0.G.6]
+ *     -- the dedicated `nexus-cluster-admin` StarRocks user (cluster_admin +
+ *     db_admin + user_admin roles). The nexus-cli StarRocksAdapter's operator
+ *     identity (the LOCKED Vault-KV operator-credential model, ADR-0011 family;
+ *     password ONLY in Vault KV, fetched at runtime via INexusVaultClient).
+ *     Distinct from the engine's built-in `root`. Created ON the FE leader by
+ *     nexus-infra-analytics's role-overlay-starrocks-operator-user.tf.
  *
  * Read on-node by the schema-bootstrap overlay via the per-host Vault Agent
  * token. Mirrors the ClickHouse creds-seed (field `password`).
@@ -19,8 +26,8 @@ resource "null_resource" "vault_starrocks_creds_seed" {
 
   triggers = {
     post_init_id           = null_resource.vault_post_init[0].id
-    kv_paths               = "nexus/analytics/starrocks/{root,app}-password"
-    starrocks_creds_seed_v = "1"
+    kv_paths               = "nexus/analytics/starrocks/{root,app,operator}-password"
+    starrocks_creds_seed_v = "2" # v2 (0.G.6, nexus-cli v0.6.5) = +operator-password (nexus-cluster-admin, the StarRocksAdapter operator). v1 = root + app.
   }
 
   depends_on = [null_resource.vault_post_init]
@@ -59,10 +66,11 @@ seed_if_absent() {
   echo "[starrocks-creds-seed] wrote `$path (`$LEN-char hex `$label)"
 }
 
-seed_if_absent 'nexus/analytics/starrocks/root-password' 'StarRocks root user password'
-seed_if_absent 'nexus/analytics/starrocks/app-password'  'StarRocks app (least-priv) user password'
+seed_if_absent 'nexus/analytics/starrocks/root-password'     'StarRocks root user password'
+seed_if_absent 'nexus/analytics/starrocks/app-password'      'StarRocks app (least-priv) user password'
+seed_if_absent 'nexus/analytics/starrocks/operator-password' 'StarRocks nexus-cluster-admin operator password (nexus-cli StarRocksAdapter)'
 
-echo "[starrocks-creds-seed] all 2 cluster creds present in nexus/analytics/starrocks/"
+echo "[starrocks-creds-seed] all 3 cluster creds present in nexus/analytics/starrocks/"
 "@
 
       $b64 = [Convert]::ToBase64String([System.Text.UTF8Encoding]::new($false).GetBytes($bash))
