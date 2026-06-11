@@ -1,7 +1,7 @@
 /*
  * role-overlay-vault-clickhouse-creds-seed.tf -- Phase 0.G.5 setup
  *
- * Sticky-seeds the 2 ClickHouse SQL-driven-RBAC credentials in Vault KV
+ * Sticky-seeds the 3 ClickHouse SQL-driven-RBAC credentials in Vault KV
  * (field `password`, matching nexus-infra-analytics's schema-bootstrap read
  * `vault kv get -field=password ...`):
  *
@@ -13,6 +13,17 @@
  *   nexus/analytics/clickhouse/app-password     (32-char hex)
  *     - The least-priv `app` ClickHouse user (DEFAULT ROLE app_rw =
  *       SELECT,INSERT on nexus.*). The application connection identity.
+ *
+ *   nexus/analytics/clickhouse/operator-password (32-char hex)   [v2, 0.G.5]
+ *     - The dedicated `nexus-cluster-admin` ClickHouse user (sha256_password,
+ *       access_management=1, GRANT ALL ON *.* WITH GRANT OPTION). This is the
+ *       nexus-cli ClickHouseAdapter's operator identity (the LOCKED Vault-KV
+ *       operator-credential model, ADR-0011 family -- one dedicated operator
+ *       per password-auth engine, password ONLY in Vault KV, fetched at runtime
+ *       via INexusVaultClient). Distinct from the engine's built-in `admin`,
+ *       exactly as Patroni keeps postgres/nexusops alongside nexus-cluster-admin.
+ *       Created ON CLUSTER by nexus-infra-analytics's role-overlay-clickhouse-
+ *       operator-user.tf, which reads this path on-node via the agent token.
  *
  * Both read on-node by the schema-bootstrap overlay via the per-host Vault
  * Agent token (policy grants nexus/data/analytics/clickhouse/* read). Values
@@ -31,8 +42,8 @@ resource "null_resource" "vault_clickhouse_creds_seed" {
 
   triggers = {
     post_init_id            = null_resource.vault_post_init[0].id
-    kv_paths                = "nexus/analytics/clickhouse/{admin,app}-password"
-    clickhouse_creds_seed_v = "1" # v1 (0.G.5) = initial 2 sticky-seeded 32-char hex creds (admin, app), field=password.
+    kv_paths                = "nexus/analytics/clickhouse/{admin,app,operator}-password"
+    clickhouse_creds_seed_v = "2" # v2 (0.G.5, nexus-cli v0.6.4) = +operator-password (nexus-cluster-admin, the ClickHouseAdapter operator identity). v1 = initial 2 sticky-seeded 32-char hex creds (admin, app), field=password.
   }
 
   depends_on = [null_resource.vault_post_init]
@@ -74,10 +85,11 @@ seed_if_absent() {
   echo "[clickhouse-creds-seed] wrote `$path (`$LEN-char hex `$label)"
 }
 
-seed_if_absent 'nexus/analytics/clickhouse/admin-password' 'ClickHouse admin user password'
-seed_if_absent 'nexus/analytics/clickhouse/app-password'   'ClickHouse app (least-priv) user password'
+seed_if_absent 'nexus/analytics/clickhouse/admin-password'    'ClickHouse admin user password'
+seed_if_absent 'nexus/analytics/clickhouse/app-password'      'ClickHouse app (least-priv) user password'
+seed_if_absent 'nexus/analytics/clickhouse/operator-password' 'ClickHouse nexus-cluster-admin operator password (nexus-cli ClickHouseAdapter)'
 
-echo "[clickhouse-creds-seed] all 2 cluster creds present in nexus/analytics/clickhouse/"
+echo "[clickhouse-creds-seed] all 3 cluster creds present in nexus/analytics/clickhouse/"
 "@
 
       $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($bash)

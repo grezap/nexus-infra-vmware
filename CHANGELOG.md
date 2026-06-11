@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — nexus-cli v0.6.4 ClickHouseAdapter — operator-password seed (`security` env, 2026-06-11)
+
+- **`security` env** — `role-overlay-vault-clickhouse-creds-seed.tf` bumped **v1 → v2**: adds a 3rd
+  sticky-seeded cred `nexus/analytics/clickhouse/operator-password` (field `password`, 32-char hex —
+  the dedicated `nexus-cluster-admin` ClickHouse operator the nexus-cli ClickHouseAdapter
+  authenticates as; lives only in Vault KV, fetched by the adapter at runtime via `INexusVaultClient`,
+  never on a node). admin/app left untouched (sticky). **No agent-policy change needed** — the
+  existing `nexus-agent-clickhouse-*` policy already wildcard-reads `nexus/data/analytics/clickhouse/*`,
+  which covers the new path. Applied live via a targeted apply of the single
+  `vault_clickhouse_creds_seed` resource (the security env has no VMs — safe); verified a ClickHouse
+  node's own agent token reads the 32-char secret.
+
 ### Added — nexus-cli v0.6.3 PatroniAdapter — operator-password seed + Patroni agent-policy read grant (`security` env, 2026-06-11)
 
 - **`security` env** — `role-overlay-vault-patroni-cluster-creds-seed.tf` bumped **v1 → v2**: adds a
