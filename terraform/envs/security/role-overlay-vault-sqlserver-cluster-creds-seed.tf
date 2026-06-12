@@ -1,8 +1,10 @@
 /*
  * role-overlay-vault-sqlserver-cluster-creds-seed.tf -- Phase 0.G.7 setup
  *
- * Sticky-seeds the 5 SQL Server cluster credentials + 1 GMSA pointer in
- * Vault KV:
+ * Sticky-seeds the 6 SQL Server cluster credentials + 1 GMSA pointer in
+ * Vault KV (the 6th -- operator-password, field `password` -- added v3 for
+ * the nexus-cli v0.6.6 SqlFci/SqlAg adapter operator login; see its seed
+ * block + role-overlay-sqlserver-operator-login.tf in nexus-infra-oltp):
  *
  *   nexus/oltp/sqlserver/sa-password                       (32-char hex)
  *     - SQL Server `sa` login password. Disabled by default but available
@@ -82,8 +84,8 @@ resource "null_resource" "vault_sqlserver_cluster_creds_seed" {
 
   triggers = {
     post_init_id           = null_resource.vault_post_init[0].id
-    kv_paths               = "nexus/oltp/sqlserver/{sa,ag-endpoint-cert,wsfc-cluster-admin,iscsi-chap-secret,listener-cert}-password + gmsa-info"
-    sqlserver_creds_seed_v = "2" # v2 (0.G.7 ratify 2026-05-20) = relax CHAP marker regex `\s*$` to tolerate CRLF from SSH-piped vault-1 output (feedback_pwsh_ssh_stdin_cr_injection.md + feedback_smoke_gate_probe_robustness.md). v1 = initial seeds.
+    kv_paths               = "nexus/oltp/sqlserver/{sa,ag-endpoint-cert,wsfc-cluster-admin,iscsi-chap-secret,listener-cert}-password + operator-password + gmsa-info"
+    sqlserver_creds_seed_v = "3" # v3 (0.G.7 / nexus-cli v0.6.6, 2026-06-12) = +operator-password (field `password`, sqlcomplex) for the nexus-cluster-admin SQL login the SqlFciAdapter/SqlAgAdapter authenticate as (ADR-0011 family; LOCKED Vault-KV operator-credential model). Created on the FCI by nexus-infra-oltp's role-overlay-sqlserver-operator-login.tf. v2 = relax CHAP marker regex `\s*$` to tolerate CRLF from SSH-piped vault-1 output (feedback_pwsh_ssh_stdin_cr_injection.md + feedback_smoke_gate_probe_robustness.md). v1 = initial seeds.
   }
 
   depends_on = [null_resource.vault_post_init]
@@ -145,6 +147,28 @@ seed_if_absent 'nexus/oltp/sqlserver/ag-endpoint-cert-password'    'AG endpoint 
 seed_if_absent 'nexus/oltp/sqlserver/wsfc-cluster-admin-password'  'WSFC cluster bootstrap Local-Administrator password' 'sqlcomplex'
 seed_if_absent 'nexus/oltp/sqlserver/iscsi-chap-secret'            'iSCSI CHAP secret for sql-fci.lun1 target on nexus-gateway' 'chap16'
 seed_if_absent 'nexus/oltp/sqlserver/listener-cert-password'       'AG Listener leaf cert PFX password' 'sqlcomplex'
+
+# operator-password (field `password`, NOT `content`): the dedicated
+# `nexus-cluster-admin` SQL login the nexus-cli SqlFciAdapter/SqlAgAdapter
+# authenticate as (the LOCKED Vault-KV operator-credential model, ADR-0011
+# family; password ONLY in Vault KV, fetched at runtime via INexusVaultClient).
+# Created on the FCI by nexus-infra-oltp's role-overlay-sqlserver-operator-login.tf.
+# Uses field `password` to match the adapter convention across all 6 password-auth
+# adapters (mongo/percona/patroni/clickhouse/starrocks/sqlserver). `sqlcomplex`
+# (hex + Aa9!) so it satisfies SQL Server's strong-password policy.
+seed_pw_if_absent() {
+  local path="`$1"; local label="`$2"
+  if vault kv get -field=password "`$path" >/dev/null 2>&1; then
+    echo "[sqlserver-creds-seed] `$path already populated -- no-op (sticky `$label)"
+    return 0
+  fi
+  local SECRET="`$(openssl rand -hex 16)Aa9!"
+  local LEN
+  LEN=`$(printf '%s' "`$SECRET" | wc -c)
+  vault kv put "`$path" password="`$SECRET" >/dev/null
+  echo "[sqlserver-creds-seed] wrote `$path (`$LEN-char sqlcomplex `$label)"
+}
+seed_pw_if_absent 'nexus/oltp/sqlserver/operator-password' 'nexus-cluster-admin SQL login operator password (nexus-cli SqlFci/SqlAg adapters)'
 
 # gmsa-info is a structured JSON pointer, not a regenerated secret. Idempotent
 # overwrite each apply: the GMSA name + domain don't change.

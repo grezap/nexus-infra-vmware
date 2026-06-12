@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — nexus-cli v0.6.6 SqlFci/SqlAg adapters — operator-password seed (`security` env, 2026-06-12)
+
+- **`security` env** — `role-overlay-vault-sqlserver-cluster-creds-seed.tf` adds a sticky-seeded
+  `nexus/oltp/sqlserver/operator-password` (field **`password`**, matching the adapter convention) — the
+  dedicated `nexus-cluster-admin` SQL login the nexus-cli SqlFciAdapter/SqlAgAdapter authenticate as
+  (lives only in Vault KV, fetched at runtime via `INexusVaultClient`). Format `sqlcomplex` (hex + `Aa9!`)
+  to satisfy SQL Server's strong-password policy. The existing five `content`-field creds
+  (sa/ag-endpoint/wsfc/iscsi-chap/listener) are untouched (sticky). **No agent-policy change** — the
+  existing `nexus-agent-sqlserver-*` policy already wildcard-reads `nexus/data/oltp/sqlserver/*`. Applied
+  live (targeted apply; the security env has no VMs — safe).
+- **Fixed (terraform-heredoc trap):** the new `seed_pw_if_absent` helper used bash `${#SECRET}`
+  (string-length), whose `${` collided with **Terraform interpolation** (`${#SECRET}` → `#` comment →
+  "Invalid expression", breaking `terraform fmt`/apply). Switched to a pre-computed `LEN=$(… | wc -c)`,
+  matching the sibling `seed_if_absent`. See `feedback_terraform_heredoc_powershell`.
+
 ### Added — nexus-cli v0.6.5 StarRocksAdapter — operator-password seed (`security` env, 2026-06-12)
 
 - **`security` env** — `role-overlay-vault-starrocks-creds-seed.tf` bumped **v1 → v2**: adds a 3rd
