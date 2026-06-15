@@ -60,7 +60,7 @@ resource "null_resource" "vault_agent_sqlserver_policies" {
     sqlserver_role_id            = length(null_resource.vault_pki_sqlserver_role) > 0 ? null_resource.vault_pki_sqlserver_role[0].id : "disabled"
     sqlserver_role_name          = var.vault_pki_sqlserver_role_name
     creds_seed_id                = length(null_resource.vault_sqlserver_cluster_creds_seed) > 0 ? null_resource.vault_sqlserver_cluster_creds_seed[0].id : "disabled"
-    sqlserver_policies_overlay_v = "1" # v1 (0.G.7) = initial 4 narrow policies (2 FCI + 2 AG-replica) with role-differentiated KV grants. FCI gets full 7-KV bundle; AG-replicas drop iscsi + wsfc-cluster-admin.
+    sqlserver_policies_overlay_v = "2" # v2 (0.G.7 cold-rebuild 2026-06-15) = FCI policy gains read on operator-password (nexus-cluster-admin SQL login; nexus-cli v0.6.6). v1 = initial 4 narrow policies (2 FCI + 2 AG-replica) role-differentiated; FCI full 7-KV bundle, AG-replicas drop iscsi + wsfc-cluster-admin.
   }
 
   depends_on = [
@@ -105,6 +105,14 @@ path "nexus/data/oltp/sqlserver/listener-cert-password" {
   capabilities = ["read"]
 }
 path "nexus/data/oltp/sqlserver/gmsa-info" {
+  capabilities = ["read"]
+}
+# operator-password (nexus-cluster-admin SQL login; nexus-cli v0.6.6 SqlFci/SqlAg
+# adapters). The oltp-sqlserver operator-login overlay reads it via sql-fci-1's
+# AppRole token on the build host. FCI-only grant (the login lives on the FCI; the
+# standalone replicas are Windows-auth-only). Added 2026-06-15 -- the cold-rebuild
+# surfaced the missing grant (Invoke-RestMethod permission denied at operator_login).
+path "nexus/data/oltp/sqlserver/operator-password" {
   capabilities = ["read"]
 }
 path "auth/token/lookup-self" {
