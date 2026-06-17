@@ -174,11 +174,11 @@ seed_pw_if_absent 'nexus/oltp/sqlserver/operator-password' 'nexus-cluster-admin 
 # overwrite each apply: the GMSA name + domain don't change.
 vault kv put nexus/oltp/sqlserver/gmsa-info \
   gmsa_name='gmsa-sql-engine' \
-  gmsa_full='gmsa-sql-engine\`$' \
+  gmsa_full='gmsa-sql-engine`$' \
   domain='nexus.lab' \
   ou='OU=ServiceAccounts,DC=nexus,DC=lab' \
   retrieve_group='nexus-sql-cluster-members' >/dev/null
-echo "[sqlserver-creds-seed] wrote nexus/oltp/sqlserver/gmsa-info pointer (gmsa-sql-engine\`$ in OU=ServiceAccounts,DC=nexus,DC=lab)"
+echo "[sqlserver-creds-seed] wrote nexus/oltp/sqlserver/gmsa-info pointer (gmsa-sql-engine`$ in OU=ServiceAccounts,DC=nexus,DC=lab)"
 
 # Echo the CHAP secret for the host-side sidecar (only secret that LEAVES
 # the vault on every apply -- foundation's iSCSI target overlay needs it).
@@ -191,8 +191,14 @@ echo "[sqlserver-creds-seed] all 5 cluster creds + 1 gmsa pointer present in nex
       $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($bash)
       $b64   = [Convert]::ToBase64String($bytes)
 
+      # `tr -d '\r'` strips any CR the terraform-heredoc -> pwsh here-string path
+      # injects into $bash before it reaches bash on the node (a stray CR turns
+      # the first line into `set -euo pipefail\r`, which bash rejects with
+      # "set: pipefail: invalid option name"). Mirrors the sibling overlays'
+      # `tr -d '\r' | bash -s` idiom (role-overlay-mongo-keyfile.tf;
+      # memory/feedback_pwsh_ssh_stdin_cr_injection.md).
       Write-Host "[sqlserver-creds-seed] dispatching to $${ip} via base64"
-      $output = ssh -o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "echo '$b64' | base64 -d | bash" 2>&1 | Out-String
+      $output = ssh -o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=no $user@$ip "echo '$b64' | base64 -d | tr -d '\r' | bash" 2>&1 | Out-String
       $rc = $LASTEXITCODE
       if ($rc -ne 0) {
         Write-Host $output.Trim()
@@ -205,10 +211,15 @@ echo "[sqlserver-creds-seed] all 5 cluster creds + 1 gmsa pointer present in nex
       # visible output (keep secret out of operator's scrollback).
       # Per memory/feedback_smoke_gate_probe_robustness.md + feedback_pwsh_
       # ssh_stdin_cr_injection.md: SSH-piped output ends each line with CRLF
-      # on Windows; PS regex `(?m)^...$` matches before `\n` but `[0-9a-f]
-      # {32}$` doesn't allow trailing `\r`. Use `\s*$` to tolerate CR/spaces.
+      # on Windows; PS regex (?m)^...$ matches before \n but a fixed-length
+      # hex class doesn't allow a trailing \r. Use \s*$ to tolerate CR/spaces.
+      # The CHAP secret is seeded as 'chap16' = openssl rand -hex 8 = 16 hex
+      # chars (the Windows iSCSI initiator caps CHAP secrets at 12-16 chars,
+      # transient #26). Match {12,32} so it accepts the chap16 value (and any
+      # legacy 32-char hex) -- the stale {32}-only class never matched the
+      # 16-char secret and threw "failed to parse CHAP secret marker".
       # First transient surfaced at 0.G.7 ratification 2026-05-20.
-      $chapMatch = $output -match '(?m)^ISCSI_CHAP_SECRET_FOR_SIDECAR=([0-9a-f]{32})\s*$'
+      $chapMatch = $output -match '(?m)^ISCSI_CHAP_SECRET_FOR_SIDECAR=([0-9a-f]{12,32})\s*$'
       if (-not $chapMatch) {
         Write-Host "[sqlserver-creds-seed] script output for diag:"
         Write-Host $output
