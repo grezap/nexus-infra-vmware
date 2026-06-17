@@ -148,13 +148,13 @@ seed_if_absent 'nexus/oltp/sqlserver/wsfc-cluster-admin-password'  'WSFC cluster
 seed_if_absent 'nexus/oltp/sqlserver/iscsi-chap-secret'            'iSCSI CHAP secret for sql-fci.lun1 target on nexus-gateway' 'chap16'
 seed_if_absent 'nexus/oltp/sqlserver/listener-cert-password'       'AG Listener leaf cert PFX password' 'sqlcomplex'
 
-# operator-password (field `password`, NOT `content`): the dedicated
-# `nexus-cluster-admin` SQL login the nexus-cli SqlFciAdapter/SqlAgAdapter
+# operator-password (field 'password', NOT 'content'): the dedicated
+# nexus-cluster-admin SQL login the nexus-cli SqlFciAdapter/SqlAgAdapter
 # authenticate as (the LOCKED Vault-KV operator-credential model, ADR-0011
 # family; password ONLY in Vault KV, fetched at runtime via INexusVaultClient).
 # Created on the FCI by nexus-infra-oltp's role-overlay-sqlserver-operator-login.tf.
-# Uses field `password` to match the adapter convention across all 6 password-auth
-# adapters (mongo/percona/patroni/clickhouse/starrocks/sqlserver). `sqlcomplex`
+# Uses field 'password' to match the adapter convention across all 6 password-auth
+# adapters (mongo/percona/patroni/clickhouse/starrocks/sqlserver). sqlcomplex
 # (hex + Aa9!) so it satisfies SQL Server's strong-password policy.
 seed_pw_if_absent() {
   local path="`$1"; local label="`$2"
