@@ -136,6 +136,141 @@ pwsh -File scripts\security.ps1   smoke      # ALL GREEN
 
 Cold-rebuild proven across Phase 0.D close-out. Downstream tiers (`nexus-infra-swarm-nomad`, `nexus-infra-kafka`) build on top — see their own handbooks for the next layer.
 
+> **⚠ §D was proven when the foundation was the ONLY tier built.** Today 100+ VMs across 23 clusters anchor their trust to this Vault + AD. Before running §D as-is, read **§E** below — the current-state runbook that covers the downstream-fleet blast radius, the manual AD-forest step, and the gaps §D's bare commands miss (jumpbox down, the downstream Vault-side overlays). §D is the right path ONLY for **Option A** (the Vault-only greenfield re-cluster, §1k.4) where AD stays intact; the **full forest rebuild (Option B)** is §E.
+
+### E. Full foundation + AD-forest rebuild — the complete current-state runbook (Option B)
+
+> **Authored 2026-06-18.** This is the authoritative "rebuild everything including Vault AND the AD forest from absolute zero" procedure for the platform's current state (post-0.M, with the full downstream fleet rebuild-proven). It supersedes the bare §D/§1k.4 commands for the **full** rebuild. For a **Vault-only** rebuild that leaves AD intact (faster, zero-touch, the recommended default), use **Option A** in §E.5.
+
+#### E.0 What a foundation rebuild actually regenerates — the blast radius
+
+The foundation tier is the **bottom of the entire platform's trust chain**. A from-zero rebuild regenerates, irreversibly:
+
+| Regenerated | Consequence for the rest of the fleet |
+|---|---|
+| **Vault PKI root + intermediate CA** (`pki/`, `pki_int/`) | Every other cluster's node TLS leaf was issued by the OLD CA → no longer chains to the new root; the build host's new `~/.nexus/vault-ca-bundle.crt` won't validate old certs. |
+| **Vault root token + recovery keys** (`vault operator init`) | `~/.nexus/vault-init.json` + `vault-transit-init.json` are **overwritten** with the new values (the `vault_init_leader` overlay `Set-Content`s them) → the build host auto-picks-up the new token. The OLD token stops working. |
+| **All KV-v2 data** (`nexus/*`) | Every per-cluster operator password / keyFile / secret is gone. The `security` env's sticky cred-seed overlays **re-seed defaults** on the fresh Vault. |
+| **All AppRoles + policies** (`auth/approle`, `sys/policies/acl`) | The `security` env's **~25 `role-overlay-vault-agent-<cluster>-{approles,policies}.tf` overlays re-create the fleet's Vault-side AppRole + policy DEFINITIONS** on apply (they SSH to a vault node and `vault write` locally — they do NOT touch the downstream nodes). But each downstream node still holds its OLD secret-id on disk. |
+| **AD forest** (`dc-nexus` + `dc-nexus-2`, full rebuild only) | New forest SID, new Kerberos, **empty KDS root-key container**, new computer accounts. Every domain-joined VM (SQL FCI, jumpbox) must **re-join** on its own rebuild; GMSA (`gmsa-sql-engine`) breaks until the KDS key is re-added (manual, see E.3). |
+
+**Net effect:** the rebuild re-establishes the **Vault-side** trust state for the whole fleet, but the downstream **nodes** reconnect only when each cluster's **own** `apply` re-delivers its new secret-id + re-issues its certs (and, for AD, re-joins). **This is already the established model** — every downstream cluster is individually cold-rebuild-proven from its own repo. Nothing is lost; bringing any cluster back = its own cold-rebuild against the new trust root.
+
+**The safest window** to do a foundation rebuild is **base-only** (the 6-VM foundation base running, every downstream cluster destroyed/stopped + rebuild-proven) — there is then **no live downstream dependency** on Vault/AD. Confirm with `& $vmrun list` → only `nexus-gateway` + `dc-nexus` + `vault-1/2/3` + `vault-transit`.
+
+#### E.1 Pre-flight (NON-destructive — do this first, every time)
+
+```pwsh
+# 1. Back up the build-host trust sidecars so a botched rebuild is diagnosable/restorable.
+$stamp = Get-Date -Format yyyyMMdd-HHmmss
+$bak = "$HOME\.nexus\_prerebuild-$stamp"; New-Item -ItemType Directory -Force $bak | Out-Null
+Copy-Item "$HOME\.nexus\vault-init.json","$HOME\.nexus\vault-transit-init.json",`
+          "$HOME\.nexus\vault-transit-token.json","$HOME\.nexus\vault-ca-bundle.crt",`
+          "$HOME\.nexus\vault-ad-bind.json" $bak -ErrorAction SilentlyContinue
+Get-ChildItem $bak   # confirm the copies exist
+
+# 2. (Optional, recommended) take a raft snapshot of the CURRENT Vault as a record (v0.8.1 verb).
+nexus backup take vault --tag pre-rebuild-$stamp
+
+# 3. Confirm base-only + note who is up (jumpbox/dc-nexus-2 may be down).
+& "C:\Program Files\VMware\VMware Workstation\vmrun.exe" list
+```
+
+#### E.2 Machine order — what comes alive, in what order
+
+A full rebuild is **§A (foundation) then §B (security)**, but in the current state the order + the gaps matter:
+
+1. **`nexus-gateway`** — stays up (it's the edge; if you destroy+rebuild it, DHCP/DNS/NAT drop and the build host loses the lab network). For a forest rebuild you normally **keep the gateway** and only rebuild the DCs.
+2. **`dc-nexus`** (forest root) → **`nexus-jumpbox`** (domain-join) → **AD hardening** → **dc-nexus-2** (0.M 2nd-DC promotion). Forest first, then the replica.
+3. **`vault-transit`** (Shamir seal custodian, FIRST in the security tier) → **`vault-1/2/3`** (Raft HA) → **PKI** → **LDAPS + `auth/ldap`** (needs `dc-nexus` LDAPS) → **foundation cred KV seed** → **Vault Agents + GMSA + all the downstream Vault-side AppRole/policy/seed overlays**.
+
+> **Current-state gaps the bare §D/§1k.4 commands miss:**
+> - **`nexus-jumpbox` (.241) is often DOWN** (not in the 6-VM base). The **`foundation.ps1 apply`** step SSHes to it (domain-join verify + the member-server Vault-Agent install). **Power it on first**, or pass `-Vars enable_jumpbox=false, enable_jumpbox_join=false, enable_vault_agent_setup=false` to skip it (Vars-is-replacement: every other var defaults back to its steady-state `true`).
+> - **`dc-nexus-2` (.242) is often DOWN.** The full forest rebuild must re-promote it (0.M, §1m). Power it on / let the 0.M overlay clone it.
+> - The **`security.ps1 apply` is safe with the downstream cluster nodes OFF** — its overlays only SSH to the **vault nodes + dc-nexus**; the per-cluster AppRoles/policies/seeds are written **into Vault**, not onto the (powered-off) downstream nodes.
+
+#### E.3 The one MANUAL step — the KDS root key (forest rebuild only)
+
+A **fresh forest** starts with an **empty** `CN=Master Root Keys` container, so the GMSA KDS root key must be re-added — and `Add-KdsRootKey` **cannot be run over SSH on Server 2025** (`ERROR_NOT_SUPPORTED` 0x80070032 direct; `Invoke-Command` returns a fake GUID that never persists — tested four ways, [[feedback_kds_rootkey_server2025_ssh]]). It is **one-time per forest** and is a **WARN, not a hard failure** in the foundation smoke (strictly required only when the first GMSA consumer — the SQL FCI — is later rebuilt). Run it once, from an **RDP/console** session on `dc-nexus`:
+
+```powershell
+# RDP into dc-nexus (192.168.70.240) as Administrator
+#   (pwd: vault kv get nexus/foundation/dc-nexus/local-administrator AFTER the Vault rebuild,
+#    or from the pre-flight backup's vault-init context BEFORE)
+# Then, in an elevated PowerShell in the RDP session:
+Add-KdsRootKey -EffectiveTime ((Get-Date).AddHours(-10))
+Get-KdsRootKey | Format-List KeyId, EffectiveTime           # verify count >= 1
+# Test once a GMSA exists: Test-ADServiceAccount gmsa-sql-engine  -> True
+```
+
+This is the ONLY action in the entire rebuild that is not zero-touch. (Option A — the Vault-only rebuild — never touches the forest, so it needs none of E.3.)
+
+#### E.4 Full forest + Vault rebuild — the command sequence
+
+```pwsh
+# 0. Pre-flight (E.1) done. Lab at base-only. Build host kept awake (do NOT edit powercfg).
+
+# 1. Tear down security (Vault) then foundation (DCs + jumpbox). Order: security first.
+pwsh -File scripts\security.ps1   destroy        # vault-1/2/3 + vault-transit + Vault state
+pwsh -File scripts\foundation.ps1 destroy        # dc-nexus + jumpbox (+ dc-nexus-2 if its overlay is wired to destroy)
+#   NOTE (0.M transient M2): enable_dc_nexus_2=false removes the VM but leaves AD metadata
+#   (CN=DC-NEXUS-2 in CN=Servers + OU=Domain Controllers + DNS). On a TOTAL forest destroy this
+#   is moot (the whole forest goes); on a partial re-promote, force-clean it first (handbook §1m).
+
+# 2. (Optional) rebuild the Packer templates ONLY if you suspect template drift (~25-40 min).
+#    cd packer\deb13 && packer init . && packer build .;  cd ..\ws2025-desktop && packer init . && packer build .;  cd ..\vault && packer init . && packer build .;  cd ..\..
+
+# 3. Foundation first (gateway stays; this rebuilds dc-nexus + jumpbox + AD DS + hardening).
+pwsh -File scripts\foundation.ps1 apply
+pwsh -File scripts\foundation.ps1 smoke          # expect ALL GREEN (KDS WARN until E.3 is run)
+
+# 4. RE-PROMOTE dc-nexus-2 (0.M 2nd DC). ~18 min; watch transient M1 (promote source-DC interpolation).
+pwsh -File scripts\foundation.ps1 apply -Vars enable_dc_nexus_2=true
+pwsh -File scripts\smoke-0.M.ps1                 # 24/24 (1 expected WARN if jumpbox graceful-stopped)
+
+# 5. MANUAL (E.3): RDP dc-nexus -> Add-KdsRootKey  (one-time; deferrable until SQL FCI rebuilds).
+
+# 6. Security tier (Vault) — vault-transit first, then HA cluster, PKI, LDAPS, KV seed, all overlays.
+pwsh -File scripts\security.ps1   apply           # no -Vars: defaults are steady-state (transit auto-unseal ON)
+pwsh -File scripts\security.ps1   smoke           # ~80 checks ALL GREEN; vault-transit + cluster auto-unseal green
+
+# 7. Re-sync KV-dependent foundation state (jumpbox must be UP for the member-server agent install).
+pwsh -File scripts\foundation.ps1 apply           # re-applies dc_password_policy, agent installs (reads fresh KV)
+
+# 8. (CLI smoke of the rebuilt trust root, v0.8.1) — prove the adapter against the rebuilt cluster.
+nexus status vault; nexus health vault; nexus recover-ha vault --yes
+```
+
+#### E.5 Option A — Vault-only greenfield re-cluster (recommended; AD stays intact, zero-touch)
+
+The faster, fully-autonomous path when you only need to rebuild the **Vault trust root** (PKI + KV + transit auto-unseal) and AD/forest/KDS can stay as-is. This is §1k.4, updated for the current state:
+
+```pwsh
+# 0. Pre-flight (E.1). Base-only.
+# 1. Destroy + rebuild ONLY the Vault VMs (foundation DCs untouched -> no KDS step, no re-join).
+pwsh -File scripts\security.ps1   destroy
+pwsh -File scripts\security.ps1   apply           # no -Vars; init OVERWRITES ~/.nexus sidecars with the new token
+pwsh -File scripts\security.ps1   smoke           # ~80 checks ALL GREEN
+# 2. Re-sync KV-dependent foundation state. jumpbox (.241) is touched by this step:
+& "C:\Program Files\VMware\VMware Workstation\vmrun.exe" start "H:\VMS\NexusPlatform\01-foundation\nexus-jumpbox\nexus-jumpbox.vmx" nogui   # power on first
+pwsh -File scripts\foundation.ps1 apply           # (or pass -Vars enable_jumpbox=false,enable_jumpbox_join=false,enable_vault_agent_setup=false to skip it)
+# 3. Re-prove the v0.8.1 vault adapter against the rebuilt cluster (status/health/failover/backup/cert-rotate/recover-ha).
+# 4. Graceful-stop jumpbox -> back to base=6.
+```
+
+#### E.6 Bringing the downstream fleet back (after either rebuild)
+
+The Vault-side state is re-established, but each downstream cluster's **nodes** need their own cold-rebuild to receive new secret-ids + certs (+ re-join AD, for the forest rebuild). Order = the build order (foundation → swarm/nomad → data tiers → kafka → analytics → lakehouse → registry → sharded). Each repo's handbook has its own from-zero replay; they are all individually cold-rebuild-proven. There is **no single "rebuild the whole fleet" button** — that is by design (per-tier-repo isolation).
+
+#### E.7 Transients to expect (from the proven rebuilds)
+
+- **VMnet host-adapter `.254` IP reset on host reboot** → fix in Virtual Network Editor (admin) before any apply ([[feedback_vmnet_host_adapter_ip_reset]]).
+- **Stale `vmrun.exe` path** (x86 → non-x64 after the VMware upgrade) in clone_vm state → plan-check first ([[feedback_stale_vmrun_path_in_clone_vm_state]]).
+- **`vmrun` "Unknown error" / fresh-clone no-NIC-IP** → `vmrun connectNamedDevice` + `reset hard`, or re-run apply ([[feedback_vmrun_unknown_error_transient]]).
+- **`VMnetDHCP` service stopped silently** → Packer/clone VMs hang; `Start-Service VMnetDHCP` elevated ([[feedback_vmware_dhcp_service_stopped]]).
+- **vault-transit boot race** after a host reboot → `nexus recover-ha vault --yes` (or `scripts\recover-vault-ha.ps1`) ([[feedback_vault_transit_boot_race_recovery]]).
+- **0.M promote transient M1** (`$source_dc` literal interpolation) — already fixed in `role-overlay-dc-nexus-2-promotion.tf` v2.
+
 ---
 
 ## 0. One-time host prep

@@ -70,7 +70,7 @@ resource "null_resource" "vault_ldaps_cert" {
     int_common_name = var.vault_pki_intermediate_common_name
     leaf_ttl        = var.vault_ldaps_cert_ttl
     role_name       = var.vault_pki_role_name
-    ldaps_overlay_v = "5" # v5: probe also reissues when leaf's validity span (NotAfter - NotBefore) is outside desired_ttl ±10%; previously skipped indefinitely after a TTL change (1y -> 90d at 0.D.5 close-out). v4: install root CA into Cert:\LocalMachine\Root on dc-nexus (THE actual fix for LDAPS handshake reset). v3: openssl PFX on vault-1. v2: leaf+intermediate stores. v1: leaf-only.
+    ldaps_overlay_v = "6" # v6: CA-rotation guard -- the idempotency probe now compares the leaf's chain ROOT THUMBPRINT to the current Vault root (build-host bundle), forcing a re-issue when Vault is greenfield-rebuilt with a same-CN-but-fresh-key CA (the v0.8.1 cold-rebuild fix; a CN-only probe skipped + left dc-nexus serving an old-CA leaf the new Vault couldn't verify). v5: probe also reissues when leaf's validity span (NotAfter - NotBefore) is outside desired_ttl ±10%; previously skipped indefinitely after a TTL change (1y -> 90d at 0.D.5 close-out). v4: install root CA into Cert:\LocalMachine\Root on dc-nexus (THE actual fix for LDAPS handshake reset). v3: openssl PFX on vault-1. v2: leaf+intermediate stores. v1: leaf-only.
   }
 
   depends_on = [null_resource.vault_pki_distribute_root, null_resource.vault_pki_roles]
@@ -99,6 +99,19 @@ resource "null_resource" "vault_ldaps_cert" {
         throw "[ldaps-cert] root CA bundle missing at $caBundlePath -- run vault_pki_distribute_root first"
       }
       $rootToken = (Get-Content $keysFile | ConvertFrom-Json).root_token
+
+      # CA-rotation guard (added 2026-06-18, the v0.8.1 Vault-greenfield
+      # cold-rebuild fix): the leaf's chain must terminate at the CURRENT Vault
+      # root (the build-host bundle). On a Vault greenfield rebuild the new root
+      # + intermediate keep the SAME CN ("NexusPlatform Root CA" / "... Intermediate
+      # CA") but have a fresh KEY -- so a CN-only probe sees dc-nexus's OLD
+      # (still-valid, same-CN) chain as good and SKIPS re-issue, leaving the DC
+      # serving an old-CA leaf the rebuilt Vault can't verify ("tls: failed to
+      # verify ... NexusPlatform Root CA"). Compare by thumbprint to force a
+      # re-issue across a CA rotation. Memory: feedback_vmrun_path_moved_nonx86 sibling.
+      $bundleText = Get-Content $caBundlePath -Raw
+      $rootPem    = [regex]::Match($bundleText, '-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----', 'Singleline').Value
+      $expectedRootThumb = ([System.Security.Cryptography.X509Certificates.X509Certificate2]::CreateFromPem($rootPem)).Thumbprint
 
       # ─── Idempotency probe: dc-nexus has the FULL chain installed? ──
       # All three tiers must be present for Schannel to qualify the leaf
@@ -131,7 +144,14 @@ resource "null_resource" "vault_ldaps_cert" {
           `$chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain;
           `$chain.ChainPolicy.RevocationMode = 'NoCheck';
           if (`$chain.Build(`$leaf)) {
-            Write-Output ('CERT_OK: leaf=' + `$leaf.Subject + ' valid until ' + `$leaf.NotAfter.ToString('o') + '; intermediate=' + `$inter.Subject + '; root=' + `$root.Subject)
+            # CA-rotation guard: the chain must terminate at the CURRENT Vault
+            # root (thumbprint), not merely build to SOME same-CN root.
+            `$chainRoot = `$chain.ChainElements[`$chain.ChainElements.Count - 1].Certificate.Thumbprint;
+            if (`$chainRoot -eq '$expectedRootThumb') {
+              Write-Output ('CERT_OK: leaf=' + `$leaf.Subject + ' valid until ' + `$leaf.NotAfter.ToString('o') + '; root thumbprint matches current Vault CA')
+            } else {
+              Write-Output ('CERT_STALE_CA: chain root ' + `$chainRoot + ' != current Vault root $expectedRootThumb -- forcing re-issue')
+            }
           } else {
             `$status = (`$chain.ChainStatus | ForEach-Object { `$_.Status }) -join ',';
             Write-Output ('CERT_INCOMPLETE_CHAIN_BUILD_FAILED: ' + `$status)

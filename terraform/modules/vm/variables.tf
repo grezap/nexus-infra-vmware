@@ -66,5 +66,10 @@ variable "memory_mb" {
 variable "vmrun_path" {
   description = "Absolute path to vmrun.exe."
   type        = string
-  default     = "C:/Program Files (x86)/VMware/VMware Workstation/vmrun.exe"
+  # Non-x86 path: VMware Workstation's upgrade relocated vmrun.exe out of the
+  # legacy (x86) Program Files dir. The old default broke the foundation/security
+  # clone+power_on on the first cold-rebuild since the relocation (surfaced
+  # 2026-06-18 during the v0.8.1 Vault greenfield re-cluster). See
+  # memory/feedback_vmrun_path_moved_nonx86.md.
+  default = "C:/Program Files/VMware/VMware Workstation/vmrun.exe"
 }
