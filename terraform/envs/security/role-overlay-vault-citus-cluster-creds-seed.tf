@@ -35,8 +35,8 @@ resource "null_resource" "vault_citus_cluster_creds_seed" {
 
   triggers = {
     post_init_id       = null_resource.vault_post_init[0].id
-    kv_paths           = "nexus/citus/{superuser,replication,patroni-restapi,citus-app}-password"
-    citus_creds_seed_v = "1" # v1 (0.P) = 4 sticky-seeded 32-char hex creds (superuser, replication, patroni-restapi, citus-app).
+    kv_paths           = "nexus/citus/{superuser,replication,patroni-restapi,citus-app,operator}-password"
+    citus_creds_seed_v = "2" # v2 (0.7.3) = + operator-password (nexus-cluster-admin, ADR-0011); v1 = 4 sticky creds (superuser, replication, patroni-restapi, citus-app).
   }
 
   depends_on = [null_resource.vault_post_init]
@@ -82,8 +82,9 @@ seed_if_absent 'nexus/citus/superuser-password'       'PostgreSQL superuser pass
 seed_if_absent 'nexus/citus/replication-password'     'streaming-replication user password'
 seed_if_absent 'nexus/citus/patroni-restapi-password' 'Patroni REST API basic-auth password'
 seed_if_absent 'nexus/citus/citus-app-password'       'citus_app distributed-table owner password'
+seed_if_absent 'nexus/citus/operator-password'        'nexus-cluster-admin operator role password (ADR-0011; v0.7.3 CitusAdapter)'
 
-echo "[citus-creds-seed] all 4 cluster creds present in nexus/citus/"
+echo "[citus-creds-seed] all 5 cluster creds present in nexus/citus/"
 "@
 
       $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($bash)

@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — nexus-cli v0.7.3 CitusAdapter — operator-password seed + agent read (`security` env, 2026-06-18)
+
+- **`security` env** — `role-overlay-vault-citus-cluster-creds-seed.tf` **v2** sticky-seeds a 5th cred,
+  `nexus/citus/operator-password` (field `content`, 32-char hex) — the `nexus-cluster-admin` operator role
+  the v0.7.3 `CitusAdapter` authenticates as (ADR-0011 Vault-KV model). `role-overlay-vault-agent-citus-policies.tf`
+  **v2** adds `read` on `nexus/data/citus/operator-password` to the **6 PG-node** agent policies so the
+  citus `role-overlay-citus-operator-user.tf` overlay can read it on-node to create the role. Apply: a
+  targeted `security` apply of the 2 resources (the security env has no VMs → safe).
+
 ### Added — nexus-cli v0.6.6 SqlFci/SqlAg adapters — operator-password seed (`security` env, 2026-06-12)
 
 - **`security` env** — `role-overlay-vault-sqlserver-cluster-creds-seed.tf` adds a sticky-seeded

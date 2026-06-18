@@ -48,7 +48,7 @@ resource "null_resource" "vault_agent_citus_policies" {
     citus_role_id            = length(null_resource.vault_pki_citus_role) > 0 ? null_resource.vault_pki_citus_role[0].id : "disabled"
     citus_role_name          = var.vault_pki_citus_role_name
     creds_seed_id            = length(null_resource.vault_citus_cluster_creds_seed) > 0 ? null_resource.vault_citus_cluster_creds_seed[0].id : "disabled"
-    citus_policies_overlay_v = "1" # v1 (0.P) = 9 narrow policies (3 etcd + 6 pg) with role-differentiated KV grants.
+    citus_policies_overlay_v = "2" # v2 (0.7.3) = + operator-password read on the 6 pg policies (the nexus-cluster-admin operator role, ADR-0011, consumed by the v0.7.3 CitusAdapter); v1 = 9 narrow policies (3 etcd + 6 pg).
   }
 
   depends_on = [
@@ -85,6 +85,9 @@ path "nexus/data/citus/patroni-restapi-password" {
   capabilities = ["read"]
 }
 path "nexus/data/citus/citus-app-password" {
+  capabilities = ["read"]
+}
+path "nexus/data/citus/operator-password" {
   capabilities = ["read"]
 }
 path "auth/token/lookup-self" {
