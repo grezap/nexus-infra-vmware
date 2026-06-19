@@ -56,3 +56,8 @@ desktop.ini
 .idea/
 *.swp
 *.swo
+
+# terraform state + any state backup variants (never commit state)
+terraform.tfstate*
+*.tfstate
+*.tfstate.*
