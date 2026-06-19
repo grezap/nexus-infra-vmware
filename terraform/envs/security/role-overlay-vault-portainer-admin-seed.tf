@@ -4,15 +4,18 @@
  * Sticky-seeds the Portainer CE admin password at
  * `nexus/portainer/admin-bcrypt`. Two fields:
  *
- *   - bcrypt_hash : bcrypt-hashed password, mode `{cost=10}`, used by
- *                   Portainer's `--admin-password-file` flag. Portainer
- *                   reads the file content directly as the bcrypt hash.
- *   - plaintext   : the operator-readable password (lab-only convenience;
- *                   production-shape would NEVER store plaintext, but
- *                   without it the admin would have no way to log in).
- *                   The plaintext is what you type on the Portainer UI
- *                   login form; the bcrypt is what Portainer compares
- *                   against internally.
+ *   - plaintext   : the admin password. **This is the field the swarm env's
+ *                   role-overlay-portainer-admin-render.tf renders to
+ *                   /etc/portainer/admin-password.txt**, because Portainer's
+ *                   `--admin-password-file` reads the file as the PLAINTEXT
+ *                   password and bcrypts it internally. It is also what you
+ *                   type on the Portainer UI login form.
+ *   - bcrypt_hash : bcrypt(plaintext), cost=10. Retained for reference / the
+ *                   `--admin-password <hash>` CLI-flag alternative (which DOES
+ *                   take a pre-computed bcrypt). NOTE: do NOT feed this to
+ *                   `--admin-password-file` -- that flag wants plaintext, so
+ *                   passing the bcrypt makes Portainer bcrypt the bcrypt-string
+ *                   (the v2 render bug, fixed in admin-render v3 2026-06-19).
  *
  * The seed is sticky -- never overwrite a populated value (operator may
  * have rotated by hand; we don't churn). Generated server-side on
