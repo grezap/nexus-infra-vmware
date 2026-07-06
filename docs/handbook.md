@@ -156,6 +156,8 @@ The foundation tier is the **bottom of the entire platform's trust chain**. A fr
 
 **Net effect:** the rebuild re-establishes the **Vault-side** trust state for the whole fleet, but the downstream **nodes** reconnect only when each cluster's **own** `apply` re-delivers its new secret-id + re-issues its certs (and, for AD, re-joins). **This is already the established model** — every downstream cluster is individually cold-rebuild-proven from its own repo. Nothing is lost; bringing any cluster back = its own cold-rebuild against the new trust root.
 
+> **CA state:** the platform CA rollover is **COMPLETE (2026-07-04/05)** — every tier is now on the new Vault root; no old-root leaves remain in service.
+
 **The safest window** to do a foundation rebuild is **base-only** (the 6-VM foundation base running, every downstream cluster destroyed/stopped + rebuild-proven) — there is then **no live downstream dependency** on Vault/AD. Confirm with `& $vmrun list` → only `nexus-gateway` + `dc-nexus` + `vault-1/2/3` + `vault-transit`.
 
 #### E.1 Pre-flight (NON-destructive — do this first, every time)
@@ -445,7 +447,7 @@ terraform apply -auto-approve
 
 ## 1a. Phase 0.B.2 — deb13 generic base template
 
-Full deep-dive: [`docs/deb13.md`](deb13.md). Parent image for most of the lab (~83 of the 88 VMs built through 0.L.4).
+Full deep-dive: [`docs/deb13.md`](deb13.md). Parent image for most of the lab (all but the Windows DCs + the 4 SQL Server nodes) — of the **140 VMs** built through Phase 0.P.
 
 ```powershell
 cd "F:\_CODING_\Repos\Local Development And Test\Portfolio_Project_Ideas\workspace\nexus-infra-vmware"
@@ -2126,6 +2128,18 @@ Remove-Item H:\VMS\NexusPlatform\00-edge\nexus-gateway\*.lck -Recurse -Force
 ### 4.5 `git commit` fails with "hook failed"
 
 Don't use `--no-verify`. Read the hook output, fix the underlying issue (usually a `terraform fmt` or trailing-whitespace miss), re-stage, re-commit.
+
+### 4.6 `nexus scale-up --disk` grows the vmdk but the guest root FS stays the same size
+
+Only affects VMs cloned from a **pre-2026-07-06 deb13 template**, which had a swap partition *after* root. Root is then not the last partition, so `growpart /dev/sda 1` refuses to extend it and `resize2fs` sees no new space. Fix: rebuild the deb13 template with the current growable-root preseed (no swap partition + `/swapfile` — see [`docs/deb13.md`](deb13.md#partitioning-growable-root)) and re-clone, OR recover the affected guest by hand — `swapoff -a`, delete the trailing swap partition, `growpart /dev/sda 1`, `resize2fs /dev/sda1`, re-create swap as `/swapfile`.
+
+### 4.7 `dc-nexus-2` AD replication error 8524 after it's been offline
+
+After `dc-nexus-2` sits powered off for a while it reverts to DHCP-supplied DNS (the gateway, which has no `nexus.lab` records), so it can't resolve its partner's `_msdcs` SRV records → `repadmin` reports error 8524 and the two DCs silently diverge. Fix: pin static DNS on `dc-nexus-2` (preferred `192.168.70.240`, alternate `127.0.0.1`), then `ipconfig /registerdns` and `repadmin /syncall /AdeP`. This is now baked into `role-overlay-dc-nexus-2-promotion.tf` so a fresh apply sets it automatically. See [[feedback_dc_nexus2_dhcp_dns_breaks_ad_replication]].
+
+### 4.8 Gateway iSCSI CHAP auth failure (`0xefff0009`) after a re-apply
+
+A re-apply of the gateway iSCSI overlay used to rotate the CHAP secret, breaking the already-connected SQL FCI initiators (`0xefff0009` = authentication failure). The overlay (`role-overlay-gateway-iscsi-sqlfci.tf`, now v5) is **content-aware idempotent** — it reuses the existing secret instead of regenerating one, so re-applies no longer break live iSCSI sessions. If you hit this on an older overlay, re-set the initiator's CHAP secret to match the target's current value.
 
 ---
 
