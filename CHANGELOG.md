@@ -6,6 +6,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (2026-07-06) — three template/overlay hardenings baking in fixes proven live during the sqlserver CA-rollover
+
+- **deb13 base template — growable root partition** (`packer/deb13/http/preseed.cfg`). The generic
+  `atomic` recipe with a swap partition put root (`sda1`) BEFORE swap (`sda2`/`sda5`), so root was NOT the
+  last partition — `growpart /dev/sda 1` could not extend it, and `nexus scale-up --disk` grew the vmdk but
+  stranded the space behind swap. Switched to **no swap partition + a 2 GB `/swapfile`** (`no_swap true` +
+  a late_command `dd`/`mkswap`/fstab step): root is now the single/last partition and grows cleanly
+  (growpart + resize2fs). Takes effect on the next deb13 (and downstream engine-template) build.
+- **dc-nexus-2 static DNS** (`terraform/envs/foundation/role-overlay-dc-nexus-2-promotion.tf` — new step 6.5
+  `dc_nexus_2_static_dns`). The replica DC booted with **DHCP DNS (the gateway .1, which does not serve
+  nexus.lab)**, so post-promotion it could not resolve the partner's `_msdcs` CNAME → AD replication error
+  **8524** and silent divergence whenever dc-nexus-2 was offline (it is normally OFF, base=6). The new step
+  pins the DNS client to **dc-nexus (.240) preferred + self (127.0.0.1) alternate** after promotion. Canon
+  fix for the 2026-07-04 replication-freeze (proven live that session; verify step now depends on it).
+- **gateway iSCSI CHAP idempotency** (`terraform/envs/foundation/role-overlay-gateway-iscsi-sqlfci.tf` v5).
+  The overlay was **marker-idempotent (v1)** so a KV CHAP-secret rotation did NOT re-render — the gateway tgt
+  kept the stale secret while the FCI rendered the new KV value → `Connect-IscsiTarget` CHAP failure
+  (HRESULT 0xefff0009). Now **content-aware**: a `filesha256` of the CHAP sidecar in the triggers re-runs the
+  resource on rotation, and the idempotency probe compares the live tgt secret to the desired one, re-rendering
+  on drift (proven live 2026-07-04 via a manual reconcile; this bakes it into the overlay).
+
 ### Added — nexus-cli v0.7.3 CitusAdapter — operator-password seed + agent read (`security` env, 2026-06-18)
 
 - **`security` env** — `role-overlay-vault-citus-cluster-creds-seed.tf` **v2** sticky-seeds a 5th cred,

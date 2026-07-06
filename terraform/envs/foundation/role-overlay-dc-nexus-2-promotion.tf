@@ -395,16 +395,58 @@ resource "null_resource" "dc_nexus_2_wait_promoted" {
   }
 }
 
+# ─── 6.5 Pin DNS client to STATIC (dc-nexus + self) ──────────────────────
+#
+# A replica DC MUST use static DNS -- a partner DC as preferred + itself
+# (loopback) as alternate. dc-nexus-2 boots with DHCP DNS (the gateway .1,
+# which does NOT serve nexus.lab), so post-promotion it cannot resolve the
+# partner's `<dsa-guid>._msdcs.nexus.lab` CNAME -> AD replication fails with
+# error 8524 ("DNS lookup failure") and silently diverges whenever dc-nexus-2
+# has been offline (it is normally OFF, base=6). Setting it static here is the
+# canonical fix for the 2026-07-04 replication-freeze finding
+# (memory feedback_dc_nexus2_dhcp_dns_breaks_ad_replication.md). Idempotent:
+# Set-DnsClientServerAddress just re-asserts the values.
+resource "null_resource" "dc_nexus_2_static_dns" {
+  count = var.enable_dc_nexus_2 && var.enable_dc_nexus_2_promotion ? 1 : 0
+
+  triggers = {
+    wait_promoted_id     = null_resource.dc_nexus_2_wait_promoted[0].id
+    dns_servers          = "${local.dc_nexus_ip},127.0.0.1"
+    static_dns_overlay_v = "1"
+  }
+
+  depends_on = [null_resource.dc_nexus_2_wait_promoted]
+
+  provisioner "local-exec" {
+    when        = create
+    interpreter = ["pwsh", "-NoProfile", "-Command"]
+    command     = <<-PWSH
+      $ip  = '${local.dc_nexus_2_ip}'
+      $dc1 = '${local.dc_nexus_ip}'
+      # Resolve the NIC holding .242 (robust across NIC naming), fall back to
+      # Ethernet0 (the WS2025 default). Set preferred = dc-nexus, alternate =
+      # self (127.0.0.1). Then re-register + flush so the _msdcs CNAMEs resolve.
+      $remote = "`$a = (Get-NetIPAddress -IPAddress '$ip' -ErrorAction SilentlyContinue).InterfaceAlias; if (-not `$a) { `$a = 'Ethernet0' }; Set-DnsClientServerAddress -InterfaceAlias `$a -ServerAddresses ('$dc1','127.0.0.1'); Clear-DnsClientCache; ipconfig /registerdns | Out-Null; (Get-DnsClientServerAddress -InterfaceAlias `$a -AddressFamily IPv4).ServerAddresses -join ','"
+      $b64 = [Convert]::ToBase64String([System.Text.UnicodeEncoding]::Unicode.GetBytes($remote))
+      Write-Host "[dc-nexus-2 static-dns] pinning DNS client on $ip -> $dc1 + 127.0.0.1 (fixes AD-replication 8524)"
+      $out = ssh -o ConnectTimeout=20 nexusadmin@$ip "powershell -NoProfile -EncodedCommand $b64" 2>&1 | Out-String
+      Write-Host "[dc-nexus-2 static-dns] DNS now: $($out.Trim())"
+      if ($out -notmatch [regex]::Escape($dc1)) { throw "[dc-nexus-2 static-dns] DNS client did not take the static value on $ip (got: $($out.Trim()))" }
+    PWSH
+  }
+}
+
 # ─── 7. Verify replication health (Get-ADDomainController + repadmin) ────
 resource "null_resource" "dc_nexus_2_verify" {
   count = var.enable_dc_nexus_2 && var.enable_dc_nexus_2_promotion ? 1 : 0
 
   triggers = {
     wait_promoted_id = null_resource.dc_nexus_2_wait_promoted[0].id
-    verify_overlay_v = "1"
+    static_dns_id    = null_resource.dc_nexus_2_static_dns[0].id
+    verify_overlay_v = "2" # v2 = depends on static-dns step (8524 replication fix)
   }
 
-  depends_on = [null_resource.dc_nexus_2_wait_promoted]
+  depends_on = [null_resource.dc_nexus_2_wait_promoted, null_resource.dc_nexus_2_static_dns]
 
   provisioner "local-exec" {
     when        = create

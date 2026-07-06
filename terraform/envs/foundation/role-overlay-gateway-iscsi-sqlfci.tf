@@ -78,7 +78,13 @@ resource "null_resource" "gateway_iscsi_sqlfci" {
     chap_username      = var.iscsi_sqlfci_chap_username
     initiator_ip_fci_1 = "192.168.70.11"
     initiator_ip_fci_2 = "192.168.70.12"
-    iscsi_target_v     = "4" # v4 (0.G.7 ratify 2026-05-20) = simplify tgt verify probe to grep backing-store path (transient #6: PS+bash double-escape mangled awk's $0 reference). v3 = fix nftables anchor (transient #5) + tgt-admin->systemctl restart (transient #4). v2 = remove backticks (transient #3). v1 = initial.
+    # Hash of the CHAP sidecar so a KV secret rotation (which refreshes the
+    # sidecar) re-runs this resource. WITHOUT this, a rotated KV secret left the
+    # gateway tgt on the OLD value while the FCI rendered the NEW one -> CHAP
+    # auth failure (HRESULT 0xefff0009); the 2026-07-04 iSCSI-CHAP-drift finding.
+    # Paired with the content-aware idempotency probe below (re-render on drift).
+    chap_secret_hash = fileexists(pathexpand("~/.nexus/iscsi-sqlfci-chap.json")) ? filesha256(pathexpand("~/.nexus/iscsi-sqlfci-chap.json")) : "absent"
+    iscsi_target_v   = "5" # v5 (2026-07-06) = content-aware CHAP idempotency + secret-hash trigger (re-render on KV rotation). v4 = simplify tgt verify probe. v3 = nftables anchor + tgt-admin->restart. v2 = remove backticks. v1 = initial.
   }
 
   provisioner "local-exec" {
@@ -118,12 +124,23 @@ resource "null_resource" "gateway_iscsi_sqlfci" {
 
       $marker = '# SQL FCI iSCSI target managed by terraform/envs/foundation/role-overlay-gateway-iscsi-sqlfci.tf v1'
 
-      # Idempotent insert: marker matches v1 specifically. Bump on schema
-      # change. Apply re-renders + reloads tgt-admin.
+      # CONTENT-AWARE idempotency: skip ONLY when the target is present AND its
+      # live CHAP secret already matches the desired one. A marker-only check
+      # (the pre-v5 behaviour) skipped a KV secret ROTATION -> the gateway tgt
+      # kept the stale secret while the FCI rendered the new KV value, and
+      # Connect-IscsiTarget failed CHAP (0xefff0009; 2026-07-04 finding). Now a
+      # drifted secret re-renders. (The secret_hash trigger above also re-runs
+      # this resource when the sidecar changes.)
       $existing = ssh nexusadmin@$gw "test -f /etc/tgt/conf.d/sql-fci.conf && cat /etc/tgt/conf.d/sql-fci.conf || true"
-      if ($existing -match [regex]::Escape($marker)) {
-        Write-Host "[gateway iscsi-sqlfci] v1 target already configured, no-op."
+      $liveSecret = ''
+      $incLine = ($existing -split "`n" | Where-Object { $_ -match 'incominguser' } | Select-Object -First 1)
+      if ($incLine) { $p = ($incLine.Trim() -split '\s+'); if ($p.Length -ge 3) { $liveSecret = $p[2] } }
+      if (($existing -match [regex]::Escape($marker)) -and ($liveSecret.Trim() -eq $chapSecret.Trim())) {
+        Write-Host "[gateway iscsi-sqlfci] target present + CHAP secret matches desired; no-op."
         exit 0
+      }
+      if ($existing -match [regex]::Escape($marker)) {
+        Write-Host "[gateway iscsi-sqlfci] CHAP secret drifted from the desired (KV) value -- re-rendering tgt config + reloading."
       }
 
       # Stage 1: install tgt + nftables rule + create the LUN backing file.
