@@ -1131,6 +1131,37 @@ variable "vault_agent_mongo_creds_dir" {
   default     = "$HOME/.nexus"
 }
 
+# ─── Phase 0.N.1 — MongoDB SHARDED cluster mTLS (parity with 0.G.2 mongo RS) ─
+variable "enable_mongo_sharded_pki" {
+  description = "Phase 0.N.1 toggle: create the pki_int/roles/mongo-sharded-server PKI role used by the 11 sharded-mongo-node Vault Agents to issue TLS leaf certs (server+client EKU, 90-day TTL). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_pki_mongo_sharded_role_name" {
+  description = "Name of the PKI role under pki_int/ for the sharded MongoDB leaf certs (Phase 0.N.1 wire mTLS). Default 'mongo-sharded-server'. Separate from the 0.G.2 'mongo-server' role so the two clusters version independently. allowed_domains covers all 11 sharded hostnames (mongo-cfg-{1,2,3}, mongo-shard-{1,2}-{1,2,3}, mongo-mongos-{1,2}) in bare + .nexus.lab + .mongo.nexus.lab forms + localhost. Server+client EKU (every node listens + dials peers)."
+  type        = string
+  default     = "mongo-sharded-server"
+}
+
+variable "enable_mongo_sharded_agent_setup" {
+  description = "Master toggle for the 11 sharded-mongo-node Vault Agent setup primitives (policies + AppRoles). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_mongo_sharded_agent_policies" {
+  description = "Toggle: write the 11 narrow Vault policies (nexus-agent-mongo-sharded-<host>) -- each grants pki_int/issue/<mongo_sharded_role> + KV read on nexus/data/oltp/mongo/keyfile + token self-lookup/renew. Default true (gated under enable_mongo_sharded_agent_setup). Idempotent overwrite."
+  type        = bool
+  default     = true
+}
+
+variable "enable_mongo_sharded_agent_approles" {
+  description = "Toggle: provision the 11 AppRoles + per-host JSON sidecars (vault-agent-oltp-mongo-sharded-<host>.json) on the build host. Default true (gated under enable_mongo_sharded_agent_setup). role-id is stable; secret-id is regenerated per security apply."
+  type        = bool
+  default     = true
+}
+
 # ─── Phase 0.G.3 — Percona XtraDB Cluster + ProxySQL ─────────────────────
 # 5 nodes in the percona tier: 3 PXC (Galera-replicated MySQL data plane) +
 # 2 ProxySQL (connection pooler + load balancer in front of PXC with a

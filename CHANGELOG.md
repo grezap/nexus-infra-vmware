@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (2026-07-10) — Phase 0.N.1: security primitives for sharded-MongoDB wire mTLS
+
+Three new security-env overlays give the 11-VM `oltp-mongo-sharded` cluster its own Vault-PKI stack
+(parity with the 0.G.2 `mongo` RS), applied via a **targeted apply** (3 added, 0 changed, 0 destroyed —
+leaving 9 pre-existing drifted LDAP/PKI-root resources untouched):
+
+- `role-overlay-vault-pki-mongo-sharded.tf` — a new **`mongo-sharded-server`** PKI role at `pki_int/`
+  (`enable_mongo_sharded_pki`), `allowed_domains` covering all 11 sharded hostnames
+  (`mongo-cfg-{1,2,3}`, `mongo-shard-{1,2}-{1,2,3}`, `mongo-mongos-{1,2}`) in bare + `.nexus.lab` +
+  `.mongo.nexus.lab` forms + localhost; server+client EKU, 90-day leaf TTL, rsa-4096. Separate from the
+  0.G.2 `mongo-server` role so the two mongo clusters version independently.
+- `role-overlay-vault-agent-mongo-sharded-policies.tf` — 11 per-host policies (PKI issue on
+  `mongo-sharded-server` + KV read on `nexus/data/oltp/mongo/keyfile` + token self-mgmt).
+- `role-overlay-vault-agent-mongo-sharded-approles.tf` — 11 AppRoles + `vault-agent-oltp-mongo-sharded-
+  <host>.json` sidecars on the build host (consumed by the oltp env's new vault-agents overlay).
+
 ### Fixed (2026-07-06) — three template/overlay hardenings baking in fixes proven live during the sqlserver CA-rollover
 
 - **deb13 base template — growable root partition** (`packer/deb13/http/preseed.cfg`). The generic
