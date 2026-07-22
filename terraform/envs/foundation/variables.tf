@@ -1682,3 +1682,70 @@ variable "obs_grafana_db_vip" {
   type        = string
   default     = "192.168.70.185"
 }
+
+# ---------------------------------------------------------------------------
+# Platform-tools tier -- Marquez / OpenLineage (Phase 0.Q.1, ADR-0043)
+# ---------------------------------------------------------------------------
+# 3 pins in the contiguous :E0-:E2 block, just past citus (:D7-:DF). The VRRP
+# VIP marquez-db.nexus.lab .136 is virtual -- no DHCP pin / MAC; it gets a DNS
+# A-record (role-overlay-gateway-platform-tools-dns.tf). Pre-apply MAC+IP audit
+# ALL CLEAR 2026-07-20 (highest prior MAC :DF citus; .134-.136 unreferenced
+# fleet-wide). Secondary MACs (:01:E0-:E2) live in nexus-infra-platform-tools's
+# TF env.
+#
+# Note the deliberate IP discontinuity: marquez keeps its long-reserved .127
+# slot in the platform-tools .125-.128 band, while the datastore pair takes
+# .134/.135 -- the nearest contiguous free block, since .131-.133 are Swarm
+# workers. MACs are allocated by build order, not by IP, so the block stays
+# contiguous.
+variable "mac_marquez_primary" {
+  description = "marquez primary NIC (VMnet11). Pinned to 192.168.70.127 (Marquez API + web via docker-compose)."
+  type        = string
+  default     = "00:50:56:3F:00:E0"
+}
+variable "mac_marquez_pg_1_primary" {
+  description = "marquez-pg-1 primary NIC (VMnet11). Pinned to 192.168.70.134 (lineage datastore PostgreSQL PRIMARY)."
+  type        = string
+  default     = "00:50:56:3F:00:E1"
+}
+variable "mac_marquez_pg_2_primary" {
+  description = "marquez-pg-2 primary NIC (VMnet11). Pinned to 192.168.70.135 (lineage datastore PostgreSQL REPLICA)."
+  type        = string
+  default     = "00:50:56:3F:00:E2"
+}
+
+variable "enable_platform_tools_dhcp_reservations" {
+  description = "Toggle: write dnsmasq dhcp-host reservations on nexus-gateway for the platform-tools Marquez tier (Phase 0.Q.1) -- 3 pins .127/.134/.135. Default true (steady state once 0.Q.1 starts). Same partial-apply-destruction landmine as the other tiers: a foundation apply WITHOUT this var on a lab that had it enabled would silently destroy the reservations. Opt out with -Vars enable_platform_tools_dhcp_reservations=false ONLY on a pre-0.Q lab."
+  type        = bool
+  default     = true
+}
+
+variable "enable_gateway_platform_tools_dns" {
+  description = "Toggle: write dnsmasq records on nexus-gateway for the Marquez front door (marquez.nexus.lab -> .127) + the lineage datastore VRRP VIP (marquez-db.nexus.lab -> .136). Both are single-A today; the addn-hosts mechanism is used (rather than host-record) to mirror the same-tier registry overlay and to allow the app node to grow to an HA pair without changing mechanism. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "marquez_dns_name" {
+  description = "Marquez app front door DNS name (Phase 0.Q.1). Carried in the marquez node's platform-tools-server leaf SANs."
+  type        = string
+  default     = "marquez.nexus.lab"
+}
+
+variable "marquez_app_ips" {
+  description = "Marquez app node IPs behind marquez_dns_name. A single node today; a list so an HA pair needs no mechanism change."
+  type        = list(string)
+  default     = ["192.168.70.127"]
+}
+
+variable "marquez_db_dns_name" {
+  description = "Marquez lineage-datastore VIP DNS name (Phase 0.Q.1). Carried in both marquez-pg leaf SANs so PG TLS verification succeeds through the VIP."
+  type        = string
+  default     = "marquez-db.nexus.lab"
+}
+
+variable "marquez_db_vip" {
+  description = "Marquez lineage-datastore VRRP VIP (floats to the current marquez-pg primary). DNS marquez-db.nexus.lab."
+  type        = string
+  default     = "192.168.70.136"
+}

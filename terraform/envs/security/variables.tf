@@ -1603,3 +1603,59 @@ variable "enable_observability_creds_seed" {
   type        = bool
   default     = true
 }
+
+# ─── Phase 0.Q.1 — Marquez / OpenLineage platform-tools tier (ADR-0043) ─────
+#
+# Vault-side state for nexus-infra-platform-tools' Phase 0.Q.1 (tier 09-platform:
+# 1 Marquez app node running the API :5000 + web :3000 under docker-compose, and
+# a dedicated PostgreSQL 17 primary/replica pair behind a keepalived VRRP VIP
+# marquez-db.nexus.lab -> .136). Rendering happens platform-tools-side. PKI role
+# for all 3 nodes; 3 policies + AppRoles + sidecars; 3 sticky KV creds.
+#
+# Cert SANs cover the 3 hostnames bare + .nexus.lab + marquez.nexus.lab +
+# marquez-db.nexus.lab + localhost; IP SANs the service + backplane IPs + the
+# VIP .136 on BOTH PG nodes (so a client reconnecting through the VIP after a
+# keepalived failover still validates) + 127.0.0.1. 90-day TTL, same as the
+# registry / observability sibling roles.
+
+variable "enable_platform_tools_pki" {
+  description = "Phase 0.Q.1 toggle: create the pki_int/roles/platform-tools-server PKI role for the 3 platform-tools-node Vault Agents (server+client EKU, 90-day TTL; Marquez HTTPS + PG server TLS). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_pki_platform_tools_role_name" {
+  description = "PKI role under pki_int/ for platform-tools leaf certs. Default 'platform-tools-server'. allowed_domains covers the 3 hostnames bare + .nexus.lab + marquez.nexus.lab (app front door) + marquez-db.nexus.lab (PG VRRP VIP) + localhost. BRAND-NEW role: never patch a shared one, a role write is a FULL REPLACE."
+  type        = string
+  default     = "platform-tools-server"
+}
+
+variable "enable_platform_tools_agent_setup" {
+  description = "Master toggle for the 3 platform-tools-node Vault Agent setup primitives (policies + AppRoles). Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_platform_tools_agent_policies" {
+  description = "Toggle: write the 3 narrow Vault policies (nexus-agent-platform-tools-*) -- PKI issue + KV read on nexus/data/platform-tools/* + token self. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "enable_platform_tools_agent_approles" {
+  description = "Toggle: provision the 3 AppRoles + per-host JSON sidecars on the build host. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "vault_agent_platform_tools_creds_dir" {
+  description = "Directory on the build host where the 3 vault-agent-platform-tools-<host>.json sidecars are written. nexus-infra-platform-tools' vault-agents overlay reads these."
+  type        = string
+  default     = "$HOME/.nexus"
+}
+
+variable "enable_platform_tools_creds_seed" {
+  description = "Phase 0.Q.1 toggle: sticky-seed the 3 Marquez datastore creds at nexus/platform-tools/marquez/{db-password,replication-password,superuser-password} (field `value`, registry-tier convention). Sticky: never overwrites. Default true."
+  type        = bool
+  default     = true
+}
