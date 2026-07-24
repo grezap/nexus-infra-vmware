@@ -89,6 +89,7 @@ echo "AGENT_SECRET_ID=`$SECRET_ID"
         $roleId        = $matches[1].Trim()
         $secretIdMatch = ($output -match '(?m)^AGENT_SECRET_ID=(.+)$')
         $secretId      = $matches[1].Trim()
+        if (-not $roleIdMatch -or -not $secretIdMatch) { throw "[obs-approles] could not parse AGENT_ROLE_ID/AGENT_SECRET_ID from vault output" }
         if (-not $roleId -or -not $secretId) { throw "[obs-approles] $${approleName}: failed to parse role_id/secret_id" }
 
         $sidecar = [PSCustomObject]@{
