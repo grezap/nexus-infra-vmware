@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security (2026-07-24) — guard AppRole `role_id`/`secret_id` across all 19 AppRole overlays
+
+- Hardened the 19 per-host Vault AppRole overlays so the `role_id`/`secret_id` are guarded (not left
+  exposed in plaintext in state/output). Applied as a targeted apply over the live foundation + security
+  envs; no VM-layer changes.
+
 ### Added (2026-07-10) — Phase 0.N.1: security primitives for sharded-MongoDB wire mTLS
 
 Three new security-env overlays give the 11-VM `oltp-mongo-sharded` cluster its own Vault-PKI stack
